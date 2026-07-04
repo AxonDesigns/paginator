@@ -1,0 +1,865 @@
+// Public document-tree node types and builder functions.
+
+export type Margins = { top: number; right: number; bottom: number; left: number }
+
+export type PageSize = 'A4' | 'Letter' | { width: number; height: number }
+
+export type HeaderFooterContext = { pageNumber: number; totalPages: number }
+export type HeaderFooterContent = Node | ((ctx: HeaderFooterContext) => Node)
+
+export type PageDef = {
+  size: PageSize
+  margins: Margins
+  header?: HeaderFooterContent
+  footer?: HeaderFooterContent
+  /** Explicit override in px. If omitted, computed once from the header/footer content
+   *  rendered with a placeholder {pageNumber:1,totalPages:1} context. */
+  headerHeight?: number
+  footerHeight?: number
+  headerGap?: number
+  footerGap?: number
+  body: Node
+}
+
+// Omit<T,K> collapses a union T to the intersection of its members' keys — useless for a
+// discriminated union's builder-config type, where each member needs its own keys omitted while
+// staying a separate union member. This distributes Omit over each member instead.
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
+export type MainAlign = 'start' | 'center' | 'end' | 'space-between' | 'space-around'
+export type CrossAlign = 'start' | 'center' | 'end' | 'stretch'
+export type TextAlign = 'left' | 'center' | 'right'
+
+// Main-axis sizing hint for a ROW group's direct children (row width division only — column
+// children keep intrinsic/content-driven height always, since pagination depends on that). A
+// plain number is a flex-grow-style weight (default 1, so children are equal-width columns by
+// default); a `"Npx"` string is a fixed size that opts out of flexing entirely.
+export type FlexSize = number | `${number}px`
+
+// Off by default — no node responds to hover/click/drag unless explicitly opted in. Not inherited:
+// a group being interactive does not make its children interactive, and vice versa. attachInteractions()
+// (src/interaction/) resolves a hit by walking from the deepest geometric match back up toward the
+// root and returning the first node with `interactive: true`, so marking only an outer group lets a
+// click anywhere inside it (including on its non-interactive children) "bubble up" to that group.
+export type Interactive = {
+  interactive?: boolean
+  /**
+   * Only takes effect when `interactive: true` is ALSO set — a node needs both to become a drag
+   * source; `interactive` alone still gives hover/click but never starts a drag. Off by default.
+   * Text rendered under a draggable node (itself or any descendant, regardless of that
+   * descendant's own flags) gets `user-select: none` so a drag gesture can't also trigger native
+   * text selection.
+   */
+  draggable?: boolean
+  /**
+   * Marks this node as a valid drop landing zone, independent of `interactive`/`draggable` — a
+   * node can be droppable without being interactive itself (e.g. a plain container that exists
+   * only to receive drops). Checked via `dropTarget` in `drop` events, resolved the same
+   * bubble-up way `interactive` is for hover/click: dropping on a non-droppable descendant still
+   * resolves to the nearest droppable ancestor-or-self. Off by default.
+   */
+  droppable?: boolean
+  /**
+   * Only meaningful when `draggable: true`. The type(s) this dragged item carries — checked
+   * against a droppable node's `accepts` list to decide which drop zones are valid for it. A
+   * single string is shorthand for a one-element list. Left unset, the drag is untyped and treated
+   * as a wildcard: it matches every droppable node regardless of that node's `accepts` list
+   * (including one that declares an `accepts` list — an untyped drag never gets filtered out).
+   */
+  dragType?: string | string[]
+  /**
+   * Only meaningful when `droppable: true`. Restricts which drag types this zone accepts — a drag
+   * is valid here if ANY of its `dragType`(s) appear in this list (not "every type must match").
+   * Left unset, this zone accepts anything, including untyped drags — purely additive to
+   * `droppable` alone, so existing droppable nodes are unaffected until you opt in.
+   */
+  accepts?: string[]
+}
+
+type GroupCommon = Interactive & {
+  type: 'group'
+  mainAlign?: MainAlign
+  crossAlign?: CrossAlign
+  gap?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+  children: Node[]
+}
+
+export type RowGroupNode = GroupCommon & {
+  direction: 'row'
+  /**
+   * Opts this row into independent per-column page splitting (newspaper/magazine-style): a
+   * column that doesn't fit continues on the next page while its shorter siblings simply stop,
+   * rather than the whole row moving as one atomic unit. Off by default so an aligned row (e.g. a
+   * label/value line) keeps its atomic guarantee — only turn this on for rows whose columns are
+   * independent, unrelated flows of content.
+   */
+  splitColumns?: boolean
+}
+
+export type ColumnGroupNode = GroupCommon & { direction: 'column' }
+
+export type GroupNode = RowGroupNode | ColumnGroupNode
+
+export type LayoutCursorLike = { segmentIndex: number; graphemeIndex: number }
+
+export type TextNode = Interactive & {
+  type: 'text'
+  content: string
+  fontFamily: string
+  fontSize: number
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+  color?: string
+  align?: TextAlign
+  /** px. Required — pretext takes line-height at layout time, not baked into prepare(). */
+  lineHeight: number
+  letterSpacing?: number
+  whiteSpace?: 'normal' | 'pre-wrap'
+  wordBreak?: 'normal' | 'keep-all'
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+  /** @internal memoized PreparedTextWithSegments, set lazily by the measure layer */
+  __prepared?: unknown
+  /** @internal set on synthetic continuation nodes produced by splitting across a page break */
+  __resumeCursor?: LayoutCursorLike
+}
+
+export type SeparatorNode = Interactive & {
+  type: 'separator'
+  thickness?: number
+  color?: string
+  /** px reserved on each side along the parent's main axis */
+  margin?: number
+}
+
+// A flow-control marker, not visible content: forces the pagination cursor to the top of the next
+// page wherever it's encountered while walking a COLUMN-direction structure. Has no effect inside
+// a row's columns (a row's atomic/independent-column splitting has no notion of "cursor position"
+// to force a break at) — it renders as an inert zero-size box there instead of doing nothing
+// silently-but-unexpectedly, treated the same as any other unsupported context.
+export type PageBreakNode = Interactive & { type: 'page-break' }
+
+export type ObjectFit = 'fill' | 'contain' | 'cover' | 'none' | 'scale-down'
+
+export type ImageNode = Interactive & {
+  type: 'image'
+  src: string
+  alt?: string
+  /**
+   * At least one of {width & height}, {width & aspectRatio}, {height & aspectRatio}, or
+   * {aspectRatio alone} is required — see image(). Dimensions are never auto-detected from the
+   * loaded asset (that would make paginate() asynchronous); `objectFit` reconciles any mismatch
+   * between the resolved box and the actual image's shape, exactly like the CSS property it maps
+   * to on the rendered <img>.
+   */
+  width?: number
+  height?: number
+  /** width / height. Used to derive whichever of width/height is missing. */
+  aspectRatio?: number
+  objectFit?: ObjectFit // default 'fill', matching the CSS initial value
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+}
+
+export type ChartKind = 'bar' | 'line' | 'pie' | 'donut'
+
+export type ChartSeriesFillConfig = {
+  /** Overrides this series' own resolved color as the gradient's opaque end. */
+  color?: string
+  /** Opacity at the line, fading linearly to fully transparent at the baseline. Default 0.25. */
+  opacity?: number
+}
+
+export type ChartSeries = {
+  name?: string
+  data: number[]
+  color?: string
+  /** `line` only. Off by default. Fills the area between this series' line and the baseline (the
+   *  same zero/domain-edge baseline bars grow from) with a linear gradient — opaque at the line,
+   *  fading to fully transparent at the baseline, so anything behind the chart stays visible near
+   *  the bottom. `true` fills with this series' own resolved color at the default opacity; an
+   *  object overrides `color` and/or `opacity`. Purely a per-series toggle — unrelated series in
+   *  the same chart can mix filled and unfilled lines. */
+  fill?: boolean | ChartSeriesFillConfig
+}
+export type ChartSlice = { label: string; value: number; color?: string }
+
+export type ChartAxisConfig = {
+  /** Master toggle for y-axis ticks/labels AND x-axis category labels (bar/line only). Default true. */
+  show?: boolean
+  /** Independent of `show` — lets gridlines be turned off while ticks/labels stay. Default true. */
+  gridlines?: boolean
+  tickCount?: number // default 5
+  formatTick?: (value: number) => string
+  /** Font size (px) of the y-axis numeric tick labels. Independent of `categoryFontSize` since the
+   *  two commonly want different weight (e.g. bigger category names, smaller tick numbers). Default 11. */
+  tickFontSize?: number
+  /** Font size (px) of the x-axis category labels. Default 11. */
+  categoryFontSize?: number
+}
+
+export type ChartViewConfig = {
+  /** Controls the y-axis domain (bar/line only).
+   *  - Omitted, or `'zero'` (default): auto-computed, always spanning `[min(0, dataMin), max(0,
+   *    dataMax)]` (or the stacked-sum equivalent for `barMode: 'stacked'`) — the domain always
+   *    includes zero, same as this library's original behavior.
+   *  - `'auto'`: auto-computed but tight to the data's own `[dataMin, dataMax]` — does NOT force
+   *    zero into the domain — then widened by `padding` on both ends. Lets a tightly-clustered
+   *    series (e.g. a temperature line hovering in the 68-79 range) actually show its shape
+   *    instead of reading as a nearly flat line pinned against a zero-based domain.
+   *  - `{ min?, max? }`: explicit override, wins outright over either auto mode above. Set either
+   *    or both bounds — an unset one stays auto-computed the `'zero'` way. If zero falls outside
+   *    the resulting domain, bars draw from the domain's own edge instead of zero (there's nothing
+   *    else sensible to grow from). */
+  domain?: 'zero' | 'auto' | { min?: number; max?: number }
+  /** `domain: 'auto'` only; ignored otherwise. Fraction of the resolved data range (`dataMax -
+   *  dataMin`) added below the min and above the max — e.g. `0.1` adds 10% of the range to each
+   *  side, so the single lowest/highest bar isn't flush with the plot's own edge (which would
+   *  otherwise draw it at zero height). Default 0.1. **Throws** if negative. */
+  padding?: number
+}
+
+export type ChartLegendConfig = {
+  /** Default: true for pie/donut, and for bar/line when `series.length > 1`; false otherwise. */
+  show?: boolean
+  position?: 'right' | 'bottom' // default 'right'
+  /** Font size (px) of legend entry labels. Default 11. */
+  fontSize?: number
+}
+
+export type ChartTitleConfig = { text: string; fontSize?: number; color?: string }
+
+type ChartCommon = Interactive & {
+  type: 'chart'
+  width?: number
+  height?: number
+  /** width / height. Used to derive whichever of width/height is missing, same as ImageNode. */
+  aspectRatio?: number
+  title?: string | ChartTitleConfig
+  axis?: ChartAxisConfig
+  legend?: ChartLegendConfig
+  /** Categorical palette override, cycled by index — falls back to a built-in default palette. */
+  colors?: string[]
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+}
+
+type CategoricalChartCommon = ChartCommon & {
+  /** x-axis labels, one per data point in every series. */
+  categories: string[]
+  /** One or more series, each with one value per category (grouped bars / multi-line). */
+  series: ChartSeries[]
+  /** `'vertical'` (default) plots categories left-to-right on the x-axis and values bottom-to-top
+   *  on the y-axis — the conventional column/line chart. `'horizontal'` swaps the two axes:
+   *  categories run top-to-bottom and values run left-to-right, so bars grow rightward (or
+   *  leftward, for a value below the domain's baseline) instead of upward. */
+  orientation?: 'vertical' | 'horizontal'
+  /** Groups config for how the underlying data maps to the visible plot — currently just the
+   *  y-domain; see `ChartViewConfig`. Separate from `axis`, which only ever controls chrome
+   *  (ticks/gridlines/labels) drawn on top of whatever domain `view` resolves. */
+  view?: ChartViewConfig
+}
+
+type RadialChartCommon = ChartCommon & {
+  slices: ChartSlice[]
+  /** Angular gap between slices, in degrees. Default 1.5; 0 removes the gap entirely. */
+  sliceGap?: number
+}
+
+export type BarChartNode = CategoricalChartCommon & {
+  chartKind: 'bar'
+  /** `'grouped'` places each category's series side by side; `'stacked'` stacks them into one bar
+   *  per category, positive values above the zero baseline and negative values below it, each in
+   *  series order. Default `'grouped'`. */
+  barMode?: 'grouped' | 'stacked'
+  /** `barMode: 'stacked'` only. Gap (px) left between consecutive stacked segments — the true
+   *  baseline edge and the outermost tip edge are never inset by this. Default 0 (flush segments). */
+  barSegmentGap?: number
+}
+
+export type LineChartNode = CategoricalChartCommon & {
+  chartKind: 'line'
+  /** `'linear'` (default) connects points with straight segments. `'monotone'` draws a
+   *  cubic-Bezier curve through every point using monotone cubic (Fritsch–Carlson) interpolation
+   *  — tangents are clamped so the curve never overshoots past a point's own value between it and
+   *  its neighbors, unlike a naive Catmull-Rom spline. Applies to every series in the chart. */
+  lineCurve?: 'linear' | 'monotone'
+}
+
+export type PieChartNode = RadialChartCommon & { chartKind: 'pie' }
+
+export type DonutChartNode = RadialChartCommon & {
+  chartKind: 'donut'
+  /** Fraction of the outer radius left as a hole. Default 0.6. */
+  donutInnerRadiusRatio?: number
+}
+
+export type ChartNode = BarChartNode | LineChartNode | PieChartNode | DonutChartNode
+export type CategoricalChartNode = BarChartNode | LineChartNode
+export type RadialChartNode = PieChartNode | DonutChartNode
+
+// Report-style row grouping (see the "Column grouping" section of GUIDE.md). A group level is a
+// TABLE-level concept, entirely independent of `columns`/`cells` — it never marks or strips any
+// column. Its bucketing value comes from `TableRow.groupValues` (one entry per level), not from any
+// cell. table()'s builder desugars `groups` away entirely (see applyGroupingRows() below) before the
+// node ever exists at runtime — table-layout.ts, geometry.ts, shadow-dom.ts, and hit-registry.ts
+// never know grouping happened.
+export type TableGroupLevel = {
+  /** rows = the ORIGINAL authored rows in this bucket. Defaults to a plain bold text label showing
+   *  the value. Return a `Node` for a single full-width bar (the default shape), or `TableCell[]`
+   *  for a colSpan-aware, column-grid-aligned header — same implicit-flow tiling as `totals()`
+   *  (one cell per column, `colSpan` allowed, `rowSpan` rejected since a header is always exactly
+   *  one physical row). Unlike the `Node` form, a `TableCell[]` header is NOT indented by nesting
+   *  depth — its cells align with the real column grid, same as a `totals()` row. */
+  header?: (value: string, rows: TableRow[]) => Node | TableCell[]
+  background?: string
+  /** Opt-in totals row appended at the end of this group. `rows` = ALL rows in this group,
+   *  flattened across any nested subgroups beneath it — aggregate over all of them, not just the
+   *  ones directly at this level. Must return exactly one cell per column (same shape as an
+   *  ordinary row — there's no "non-grouped columns" subset anymore). */
+  totals?: (rows: TableRow[]) => TableCell[]
+  /** Whether THIS level's header bar re-appears at the top of a continuation page when the
+   *  group's rows split across a page boundary. Overrides `TableNode.repeatGroupHeaders` for this
+   *  level only; falls back to it when unset (which itself defaults to `true`). */
+  repeat?: boolean
+}
+
+export type TableColumn = {
+  width?: FlexSize
+  background?: string
+  align?: CrossAlign
+  /**
+   * Optional header caption for this column. If ANY column defines this, table() auto-builds a
+   * single header row from every column's `content` (all of them must then define it — partial
+   * adoption is rejected) and sets `headerRows` to 1 automatically. Mutually exclusive with
+   * manually setting `headerRows` yourself (table() throws if both are used) — the manual-row
+   * mechanism remains available unchanged for anyone who wants more control (e.g. a multi-row
+   * header).
+   */
+  content?: Node
+}
+
+// colSpan/rowSpan use implicit HTML-table-like flow: a row's `cells` array lists only the cells
+// that START in that row, left-to-right — table() skips column slots already occupied by an
+// earlier row's rowSpan when resolving each cell's actual column position. See GUIDE.md's "Cell
+// spans" section. Mutually exclusive with manually-authored `kind: 'header'` rows in the same
+// table (table() throws if combined) — freely combinable with column grouping (`TableNode.groups`),
+// since grouping has no interaction with `columns`/`cells` at all; see "rowSpan clusters and
+// grouping" in GUIDE.md for the one narrow restriction that still applies.
+export type TableCell = {
+  content?: Node
+  /** Number of columns this cell spans, starting at its resolved column. Default 1. */
+  colSpan?: number
+  /** Number of rows this cell spans, starting at its own row. Default 1. A rowSpan > 1 makes the
+   *  rows it covers an atomic pagination cluster — see GUIDE.md's "Cell spans" section. */
+  rowSpan?: number
+  background?: string
+  align?: CrossAlign // overrides the cell's column — for a colSpan cell, resolved against its STARTING column only
+  verticalAlign?: 'start' | 'center' | 'end' // overrides the cell's row
+  /**
+   * Plain comparable value, purely a convenience: `totals()` callbacks receive the original
+   * authored rows, so stashing a plain number/string here (alongside `content`) gives them
+   * something to read/sum without parsing it back out of a rendered Node. Never required by
+   * table() itself — unrelated to column grouping, which reads its bucketing value from
+   * `TableRow.groupValues` instead (kept separate from `content` since `content` is an arbitrary
+   * Node, not inspectable for aggregation).
+   */
+  value?: string
+  /** @internal resolved starting column index — set by table() (via resolveCellSpans()) whenever
+   *  any cell in the table uses colSpan/rowSpan; table-layout.ts reads this directly instead of
+   *  assuming array position === column index, which implicit-flow authoring intentionally
+   *  violates. Unset (and unused, falling back to array position) for a table with no spans. */
+  __resolvedCol?: number
+}
+
+export type TableRow =
+  | {
+      kind?: 'cells'
+      cells: TableCell[]
+      /** One entry per level in `TableNode.groups`, same order — the value this row buckets under
+       *  at each grouping level. Required (with the right length) when `TableNode.groups` is set;
+       *  entirely independent of `cells`/`columns` — see "Column grouping" in GUIDE.md. */
+      groupValues?: string[]
+      background?: string
+      verticalAlign?: 'start' | 'center' | 'end'
+      /** @internal true if this row cannot be separated from the NEXT row by a page cut — set by
+       *  table() (via resolveCellSpans()) when a rowSpan cell starting at or before this row still
+       *  has rows left to cover after it. Unset for an ordinary table — every row is its own
+       *  single-row "cluster," exactly like before this feature existed. */
+      __atomicWithNext?: boolean
+    }
+  | {
+      /** Full-width bar, no per-column cells by default — sidesteps needing colSpan for this
+       *  specific case. Directly authorable by hand too, not just via automatic column grouping —
+       *  useful as a manual section-divider banner in any table (but mutually exclusive with
+       *  colSpan/rowSpan elsewhere in the same table — see GUIDE.md). Hand-authored banner rows
+       *  must use `content`; `cells` is only ever produced by `TableGroupLevel.header()` returning
+       *  `TableCell[]` (table() throws if a manually-authored header row sets `cells`). */
+      kind: 'header'
+      /** Nesting depth (0 = outermost group) — drives the default indent for the `content` form
+       *  (irrelevant for `cells`, which aligns to the real column grid instead — see below).
+       *  Irrelevant for a hand-authored banner row; leave at 0. */
+      depth: number
+      /** Exactly one of `content`/`cells` is set. `content` — a single Node spanning the table's
+       *  full width, indented by nesting depth. */
+      content?: Node
+      /** `cells` — colSpan-aware, column-grid-aligned cells instead of one full-width Node; see
+       *  `TableGroupLevel.header()`. Resolved through the same `resolveCellSpans()` implicit-flow
+       *  tiling a `totals()` row gets. */
+      cells?: TableCell[]
+      background?: string
+      /** Already-resolved: whether this specific header instance re-appears at the top of a
+       *  continuation page if the surrounding rows split across a page boundary. table-layout.ts
+       *  reads this directly (`row.repeat ?? true`) — it has no awareness of `TableGroupLevel` or
+       *  which level produced this row, by design (see the "Column grouping" desugaring note). For
+       *  an automatically-grouped level this is baked in by `applyGroupingRows()` from
+       *  `TableGroupLevel.repeat`/`TableNode.repeatGroupHeaders`; for a manually-authored banner
+       *  row, set it directly (defaults to `true`, same as everywhere else). */
+      repeat?: boolean
+    }
+
+export type TableBorderMode = 'none' | 'all' | 'outer' | 'horizontal' | 'vertical'
+
+export type TableNode = Interactive & {
+  type: 'table'
+  columns: TableColumn[]
+  rows: TableRow[]
+  /** Report-style row grouping levels, ordered outermost -> innermost — entirely independent of
+   *  `columns`; see "Column grouping" in GUIDE.md. Each row supplies its bucketing value(s) via
+   *  `TableRow.groupValues`, one entry per level, in this same order. */
+  groups?: TableGroupLevel[]
+  /** Leading row count repeated at the top of every continuation page this table spans. Can be
+   *  freely combined with column grouping (`groups`) — see GUIDE.md's "Column grouping" section —
+   *  but mutually exclusive with per-column `content` captions (table() throws if both are set). */
+  headerRows?: number
+  /** Background for the single auto-generated header row (from per-column `content` captions —
+   *  see `TableColumn.content`). Ignored if no column defines `content`, or if you author your own
+   *  header row(s) manually via `headerRows` instead (give that row its own `background` there). */
+  headerBackground?: string
+  /** Whether the table's own header (the `headerRows` prefix, whether hand-authored or
+   *  auto-generated via `column.content`) repeats at the top of every continuation page, or
+   *  appears only once at the very top of the table. Default `true` — the existing, always-repeat
+   *  behavior. */
+  repeatHeaderRow?: boolean
+  /** Table-wide default for `TableGroupLevel.repeat` on every grouping level that doesn't set its
+   *  own — default `true` (every group level's header bar repeats on a continuation page unless
+   *  that level, or this, opts out). */
+  repeatGroupHeaders?: boolean
+  /** Omitted entirely = no borders (same as `{mode: 'none'}`). `mode` defaults to 'all' when the
+   *  object is present but `mode` isn't specified. */
+  border?: { mode?: TableBorderMode; thickness?: number; color?: string }
+  cellPadding?: number // default 0, reserved on all 4 sides inside every cell box
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+}
+
+export type Node = GroupNode | TextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode
+// Phase 2 (not built here): rich-text Node, CustomNode — added as new union members plus new
+// registry entries in behavior.ts, with no change required to paginate.ts or group-layout.ts.
+
+export function definePage(config: Omit<PageDef, 'body'>, body: Node): PageDef {
+  return { ...config, body }
+}
+
+export function group(config: DistributiveOmit<GroupNode, 'type' | 'children'>, children: Node[]): GroupNode {
+  return { type: 'group', ...config, children }
+}
+
+export function text(config: Omit<TextNode, 'type' | 'lineHeight'> & { lineHeight?: number }): TextNode {
+  const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2)
+  return { type: 'text', ...config, lineHeight }
+}
+
+export function separator(config?: Omit<SeparatorNode, 'type'>): SeparatorNode {
+  return { type: 'separator', ...config }
+}
+
+/**
+ * Forces a page break at this point in the document flow. Redundant/leading breaks (nothing has
+ * been placed on the current page yet) are silently no-ops rather than producing a blank page —
+ * only meaningful inside COLUMN-direction structure; has no effect as a row's column.
+ */
+export function pageBreak(): PageBreakNode {
+  return { type: 'page-break' }
+}
+
+export function image(config: Omit<ImageNode, 'type'>): ImageNode {
+  const hasHeight = config.height !== undefined
+  const hasAspectRatio = config.aspectRatio !== undefined
+  if (!hasHeight && !hasAspectRatio) {
+    throw new Error(
+      '[paginator] image() needs "height" or "aspectRatio" to determine its height — image dimensions are never auto-detected from the loaded asset.',
+    )
+  }
+  return { type: 'image', ...config }
+}
+
+export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
+  const hasHeight = config.height !== undefined
+  const hasAspectRatio = config.aspectRatio !== undefined
+  if (!hasHeight && !hasAspectRatio) {
+    throw new Error(
+      '[paginator] chart() needs "height" or "aspectRatio" to determine its height — chart dimensions are never auto-detected.',
+    )
+  }
+
+  // Cast used only for the cross-branch defensive checks below: a plain-JS caller isn't held to
+  // the bar/line-vs-pie/donut split the types now enforce, so these still need to inspect fields
+  // the narrowed type says shouldn't exist on the other branch.
+  const raw = config as Record<string, unknown>
+
+  if (config.chartKind === 'bar' || config.chartKind === 'line') {
+    if (raw.slices !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" cannot use "slices" — use "categories"/"series" instead.`)
+    }
+    if (config.categories === undefined || config.categories.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "categories" array.`)
+    }
+    if (config.series === undefined || config.series.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "series" array.`)
+    }
+    config.series.forEach((s, i) => {
+      if (s.data.length !== config.categories.length) {
+        throw new Error(
+          `[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`,
+        )
+      }
+      if (typeof s.fill === 'object' && s.fill.opacity !== undefined && (s.fill.opacity < 0 || s.fill.opacity > 1)) {
+        throw new Error(`[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} "fill.opacity" must be in [0, 1], got ${s.fill.opacity}.`)
+      }
+    })
+    if (config.chartKind === 'bar' && config.barSegmentGap !== undefined && config.barSegmentGap < 0) {
+      throw new Error(`[paginator] chart() "barSegmentGap" must be non-negative, got ${config.barSegmentGap}.`)
+    }
+    const domain = config.view?.domain
+    if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
+      throw new Error(`[paginator] chart() "view.domain.min" (${domain.min}) must be less than "view.domain.max" (${domain.max}).`)
+    }
+    if (config.view?.padding !== undefined && config.view.padding < 0) {
+      throw new Error(`[paginator] chart() "view.padding" must be non-negative, got ${config.view.padding}.`)
+    }
+  } else {
+    if (raw.categories !== undefined || raw.series !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" cannot use "categories"/"series" — use "slices" instead.`)
+    }
+    if (config.slices === undefined || config.slices.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "slices" array.`)
+    }
+    config.slices.forEach((s, i) => {
+      if (!Number.isFinite(s.value) || s.value < 0) {
+        throw new Error(`[paginator] chart() slice ${i} ("${s.label}") needs a non-negative finite "value", got ${s.value}.`)
+      }
+    })
+    if (config.chartKind === 'donut' && config.donutInnerRadiusRatio !== undefined && (config.donutInnerRadiusRatio < 0 || config.donutInnerRadiusRatio >= 1)) {
+      throw new Error(`[paginator] chart() "donutInnerRadiusRatio" must be in [0, 1), got ${config.donutInnerRadiusRatio}.`)
+    }
+    if (config.sliceGap !== undefined && config.sliceGap < 0) {
+      throw new Error(`[paginator] chart() "sliceGap" must be non-negative, got ${config.sliceGap}.`)
+    }
+  }
+
+  return { type: 'chart', ...config } as ChartNode
+}
+
+function defaultGroupHeader(value: string): Node {
+  return text({ content: value, fontFamily: 'Arial, sans-serif', fontSize: 12, fontWeight: 700, lineHeight: 15 })
+}
+
+// Stable "global regroup by value": every row appends to its value's bucket regardless of its
+// position in `rows` (not just adjacent runs), while bucket ORDER follows each distinct value's
+// first appearance — see GUIDE.md's "Column grouping" section for why this was chosen over
+// contiguous-run grouping.
+function stableGroupBy(rows: TableRow[], level: number): { value: string; rows: TableRow[] }[] {
+  const order: string[] = []
+  const buckets = new Map<string, TableRow[]>()
+  for (const row of rows) {
+    if (row.kind === 'header') continue // unreachable — applyGroupingRows() rejects header rows upfront when grouping is configured
+    const value = row.groupValues?.[level] ?? ''
+    if (!buckets.has(value)) {
+      buckets.set(value, [])
+      order.push(value)
+    }
+    buckets.get(value)!.push(row)
+  }
+  return order.map(value => ({ value, rows: buckets.get(value)! }))
+}
+
+// A rowSpan cluster's physical rows must agree on every group level's value — otherwise bucketing
+// (which only ever FILTERS rows into buckets, never reorders them) would have no choice but to
+// interleave a synthesized header/totals row into the middle of an atomic cluster, corrupting the
+// contiguous row range resolveRowHeights()/tableMeasurer.split() (table-layout.ts) assume a cluster
+// occupies. Checked once, covering every level, before any bucketing begins — sufficient to
+// guarantee bucketing never splits a cluster apart at any nesting depth, since a cluster's rows
+// (physically contiguous already) can only ever be filtered together into the same bucket if they
+// all share that bucket's value.
+function validateGroupClusterConstancy(rows: TableRow[], levelCount: number): void {
+  let clusterStart = 0
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]!
+    if (row.kind === 'header') throw new Error('[paginator] unreachable: header row found where only data rows were expected')
+    if (!(row.__atomicWithNext ?? false)) {
+      for (let k = clusterStart; k < r; k++) {
+        const first = rows[clusterStart] as Extract<TableRow, { kind?: 'cells' }>
+        const other = rows[k + 1] as Extract<TableRow, { kind?: 'cells' }>
+        for (let level = 0; level < levelCount; level++) {
+          if (other.groupValues![level] !== first.groupValues![level]) {
+            throw new Error(
+              `[paginator] table() rows ${clusterStart}..${r} form a rowSpan cluster but disagree on group values ("${first.groupValues![level]}" vs "${other.groupValues![level]}" at level ${level}) — a rowSpan cluster must share the same group values throughout.`,
+            )
+          }
+        }
+      }
+      clusterStart = r + 1
+    }
+  }
+}
+
+// Desugars `TableNode.groups` into a plain, already-flat array of TableRow: no more `groups` levels,
+// rows already bucketed with synthesized header/totals rows woven in. table-layout.ts, geometry.ts,
+// shadow-dom.ts, and hit-registry.ts operate on the OUTPUT of table() only — none of them need to
+// know grouping happened. Called once at build time, never inside the measurer, so `rest`
+// reconstruction across page splits needs no special handling: by the time a table reaches page 2,
+// it's already desugared. Pure row-array transform — the caller (table()) is responsible for
+// slicing header rows out of `rows` beforehand, validating `groupValues` presence/length and cluster
+// constancy, and rejecting a manually-authored `kind: 'header'` row among `rows`.
+function applyGroupingRows(rows: TableRow[], groups: TableGroupLevel[], repeatGroupHeadersDefault: boolean, columnCount: number): TableRow[] {
+  function recurse(rows: TableRow[], level: number): TableRow[] {
+    // Leaf case: no more levels to bucket by. MUST be a literal pass-through, not a per-row
+    // reconstructed object — rows may carry `__atomicWithNext`, and cells may carry `__resolvedCol`,
+    // both baked in by resolveCellSpans() upstream; reconstructing the row object here would
+    // silently drop whichever of those fields this function doesn't know to copy, with no test that
+    // would catch the regression (no prior coverage of "spans + grouping in the same table").
+    if (level >= groups.length) return rows
+
+    const groupConfig = groups[level]!
+    const out: TableRow[] = []
+    for (const bucket of stableGroupBy(rows, level)) {
+      const headerResult = groupConfig.header?.(bucket.value, bucket.rows) ?? defaultGroupHeader(bucket.value)
+      if (Array.isArray(headerResult)) {
+        // Resolved through the same implicit-flow tiling a totals() row gets (see there) — a
+        // header can use colSpan across its cells too, column-grid-aligned instead of indented by
+        // depth. `rowSpan` has nothing to span into (a header is always exactly one row) and
+        // surfaces as the same "extends past the last row" throw resolveCellSpans() already gives.
+        let resolved: TableRow
+        try {
+          ;[resolved] = resolveCellSpans([{ cells: headerResult }], columnCount)
+        } catch (e) {
+          throw new Error(`[paginator] table() group "${bucket.value}" (level ${level})'s header(): ${(e as Error).message}`)
+        }
+        if (resolved!.kind === 'header') throw new Error('[paginator] unreachable: resolveCellSpans() never returns a header-kind row')
+        out.push({
+          kind: 'header',
+          depth: level,
+          cells: resolved!.cells,
+          background: groupConfig.background,
+          repeat: groupConfig.repeat ?? repeatGroupHeadersDefault,
+        })
+      } else {
+        out.push({
+          kind: 'header',
+          depth: level,
+          content: headerResult,
+          background: groupConfig.background,
+          repeat: groupConfig.repeat ?? repeatGroupHeadersDefault,
+        })
+      }
+      out.push(...recurse(bucket.rows, level + 1))
+      if (groupConfig.totals !== undefined) {
+        const totalsCells = groupConfig.totals(bucket.rows)
+        // Resolved the same way as an ordinary body row — a totals row can use colSpan across its
+        // cells (e.g. a label spanning two columns, then a figure in the last one) via the same
+        // implicit-flow tiling `resolveCellSpans()` already gives body rows; content-presence and
+        // occupancy validation come along for free from that one call. `rowSpan` on a totals cell
+        // has nothing to span into (it's always exactly one row) and falls out as a natural
+        // "extends past the last row of the table" throw from the same call.
+        let totalsRow: TableRow
+        try {
+          ;[totalsRow] = resolveCellSpans([{ cells: totalsCells }], columnCount)
+        } catch (e) {
+          throw new Error(`[paginator] table() group "${bucket.value}" (level ${level})'s totals(): ${(e as Error).message}`)
+        }
+        out.push(totalsRow!)
+      }
+    }
+    return out
+  }
+
+  return recurse(rows, 0)
+}
+
+type SpanOccupant = { remaining: number; originRow: number; originCol: number }
+
+// Resolves implicit HTML-table-like colSpan/rowSpan authoring into explicit grid positions: bakes
+// `__resolvedCol` onto every cell and `__atomicWithNext` onto every row — see GUIDE.md's "Cell
+// spans" section. Pure row-array transform, mirroring applyGroupingRows's shape. The caller
+// (table()) is responsible for slicing any literal header-row prefix out of `rows` beforehand
+// (spanning is never attempted there) and for the mutual-exclusion throws (column grouping,
+// manually-authored `kind: 'header'` rows).
+function resolveCellSpans(rows: TableRow[], columnCount: number): TableRow[] {
+  const occupancy: (SpanOccupant | null)[] = new Array(columnCount).fill(null)
+
+  const result = rows.map((row, r) => {
+    if (row.kind === 'header') throw new Error('[paginator] unreachable: header row found where only data rows were expected')
+
+    let colCursor = 0
+    const resolvedCells = row.cells.map(cell => {
+      const colSpan = cell.colSpan ?? 1
+      const rowSpan = cell.rowSpan ?? 1
+      if (!Number.isInteger(colSpan) || colSpan < 1) {
+        throw new Error(`[paginator] table() row ${r}: colSpan must be a positive integer, got ${colSpan}`)
+      }
+      if (!Number.isInteger(rowSpan) || rowSpan < 1) {
+        throw new Error(`[paginator] table() row ${r}: rowSpan must be a positive integer, got ${rowSpan}`)
+      }
+      if (cell.content === undefined) {
+        throw new Error(`[paginator] table() row ${r}: cell needs "content"`)
+      }
+      // Advance past columns already occupied by an earlier row's rowSpan.
+      while (colCursor < columnCount && occupancy[colCursor] !== null) colCursor++
+      if (colCursor + colSpan > columnCount) {
+        throw new Error(`[paginator] table() row ${r}: cell needs ${colSpan} column(s) starting at column ${colCursor}, but the table only has ${columnCount} columns`)
+      }
+      const resolvedCol = colCursor
+      for (let c = colCursor; c < colCursor + colSpan; c++) {
+        occupancy[c] = { remaining: rowSpan, originRow: r, originCol: resolvedCol }
+      }
+      colCursor += colSpan
+      return { ...cell, __resolvedCol: resolvedCol }
+    })
+
+    // Keep advancing through any remaining TRAILING occupied columns before checking the row fully
+    // tiled the grid — a trailing gap that's occupied by an earlier rowSpan is fine; only a
+    // genuinely unfilled, non-occupied column is a real "too few cells" error.
+    while (colCursor < columnCount && occupancy[colCursor] !== null) colCursor++
+    if (colCursor !== columnCount) {
+      throw new Error(`[paginator] table() row ${r} has too few cells — column ${colCursor} is neither filled by this row nor occupied by an earlier rowSpan`)
+    }
+
+    // This row can't be separated from the next by a page cut if any column's rowSpan still has at
+    // least one more row left to cover after this one.
+    const atomicWithNext = occupancy.some(o => o !== null && o.remaining > 1)
+
+    for (let c = 0; c < columnCount; c++) {
+      const o = occupancy[c]
+      if (o !== null) {
+        o.remaining--
+        if (o.remaining <= 0) occupancy[c] = null
+      }
+    }
+
+    // Spread `row` first (not a hand-picked field list) so any field this function doesn't know
+    // about — `groupValues` in particular, when spans and grouping coexist in the same table —
+    // passes through untouched instead of being silently dropped by a reconstructed literal.
+    return { ...row, kind: 'cells' as const, cells: resolvedCells, __atomicWithNext: atomicWithNext }
+  })
+
+  const dangling = occupancy.find((o): o is SpanOccupant => o !== null)
+  if (dangling !== undefined) {
+    throw new Error(`[paginator] table() cell at row ${dangling.originRow}, column ${dangling.originCol} has a rowSpan that extends past the last row of the table`)
+  }
+
+  return result
+}
+
+/**
+ * Convenience for a rowSpan cluster's physical rows that all belong to the same group bucket: they
+ * must share identical `groupValues` (see "Column grouping" in GUIDE.md's cluster-constancy rule),
+ * so instead of repeating the same array by hand on every row, spread it once here. Purely an
+ * authoring shortcut — it doesn't change what `table()` validates; the cluster-constancy check
+ * still runs on the result exactly as if you'd set `groupValues` on each row yourself.
+ */
+export function rowGroup(groupValues: string[], rows: Extract<TableRow, { kind?: 'cells' }>[]): TableRow[] {
+  return rows.map(row => ({ ...row, groupValues }))
+}
+
+export function table(config: Omit<TableNode, 'type'>): TableNode {
+  const hasGroups = (config.groups?.length ?? 0) > 0
+
+  const hasAnySpan = config.rows.some(row => row.kind !== 'header' && row.cells.some(c => (c.colSpan ?? 1) !== 1 || (c.rowSpan ?? 1) !== 1))
+  if (hasAnySpan && config.rows.some(r => r.kind === 'header')) {
+    throw new Error('[paginator] table() cannot combine colSpan/rowSpan with a manually-authored `kind: "header"` row in the same table.')
+  }
+  // `cells` on a header row is only ever produced by TableGroupLevel.header() returning
+  // TableCell[] (applyGroupingRows() resolves it there) — a hand-authored banner row always uses
+  // `content`, so this can only fire on a row the caller wrote directly.
+  if (config.rows.some(r => r.kind === 'header' && r.cells !== undefined)) {
+    throw new Error('[paginator] table() a manually-authored `kind: "header"` row must use "content", not "cells" — "cells" is only produced by `TableGroupLevel.header()`.')
+  }
+
+  const columnsWithContent = config.columns.filter(c => c.content !== undefined)
+  const useAutoHeader = columnsWithContent.length > 0
+  if (useAutoHeader && columnsWithContent.length !== config.columns.length) {
+    throw new Error('[paginator] table() either every column defines "content" (for the auto-generated header row) or none do — partial adoption is not allowed.')
+  }
+  if (useAutoHeader && config.headerRows !== undefined && config.headerRows > 0) {
+    throw new Error('[paginator] table() cannot combine per-column "content" (auto header row) with an explicit "headerRows" — use one or the other.')
+  }
+
+  const manualHeaderRowCount = useAutoHeader ? 0 : (config.headerRows ?? 0)
+  if (manualHeaderRowCount > config.rows.length) {
+    throw new Error('[paginator] table() headerRows cannot exceed the number of rows')
+  }
+
+  config.rows.forEach((row, i) => {
+    if (row.kind === 'header') return
+    const isLiteralHeaderRow = !useAutoHeader && i < manualHeaderRowCount
+
+    if (!isLiteralHeaderRow && hasGroups) {
+      const groupCount = config.groups!.length
+      if (row.groupValues === undefined || row.groupValues.length !== groupCount) {
+        throw new Error(
+          `[paginator] table() row ${i} needs "groupValues" with ${groupCount} entries (one per TableNode.groups level), got ${row.groupValues?.length ?? 'none'}`,
+        )
+      }
+    }
+
+    // Spanning rows are validated by resolveCellSpans() below instead (array position no longer
+    // equals column index under implicit-flow authoring) — this strict, positional check only
+    // continues to apply to the literal header-row prefix (spanning is never attempted there) and
+    // to ordinary body rows in a non-spanning table (byte-for-byte unchanged from before this
+    // feature existed).
+    if (!isLiteralHeaderRow && hasAnySpan) return
+    if (row.cells.length !== config.columns.length) {
+      throw new Error(`[paginator] table() row ${i} has ${row.cells.length} cells, expected ${config.columns.length}`)
+    }
+    row.cells.forEach((cell, c) => {
+      if (cell.content === undefined) {
+        if (isLiteralHeaderRow) {
+          throw new Error(`[paginator] table() header row ${i}, cell ${c} needs "content"`)
+        }
+        throw new Error(`[paginator] table() cell at column ${c} needs "content"`)
+      }
+    })
+  })
+
+  if (!hasGroups && !useAutoHeader && !hasAnySpan) {
+    return { type: 'table', ...config } // unchanged fast path — zero overhead for ordinary tables
+  }
+
+  const literalHeaderRows: TableRow[] = useAutoHeader
+    ? [{ cells: config.columns.map(c => ({ content: c.content! })), background: config.headerBackground }]
+    : config.rows.slice(0, manualHeaderRowCount)
+  const bodyRows = useAutoHeader ? config.rows : config.rows.slice(manualHeaderRowCount)
+
+  if (hasGroups && bodyRows.some(r => r.kind === 'header')) {
+    throw new Error('[paginator] table() cannot combine manually-authored `kind: "header"` rows with column grouping (`groups`) in the same table.')
+  }
+
+  const spanResolvedBodyRows = hasAnySpan ? resolveCellSpans(bodyRows, config.columns.length) : bodyRows
+
+  if (hasGroups) {
+    validateGroupClusterConstancy(spanResolvedBodyRows, config.groups!.length)
+  }
+
+  const desugaredBodyRows = hasGroups ? applyGroupingRows(spanResolvedBodyRows, config.groups!, config.repeatGroupHeaders ?? true, config.columns.length) : spanResolvedBodyRows
+  const headerRowCount = useAutoHeader ? 1 : manualHeaderRowCount
+
+  return {
+    type: 'table',
+    ...config,
+    rows: headerRowCount > 0 ? [...literalHeaderRows, ...desugaredBodyRows] : desugaredBodyRows,
+    headerRows: headerRowCount,
+  }
+}

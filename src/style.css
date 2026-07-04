@@ -1,0 +1,22 @@
+/* Cosmetic host-page styling only. Never reaches inside the shadow root the paginator mounts
+   into, so it has no bearing on the isolation guarantees documented in src/render/reset.ts. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #e5e5e5;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+#app {
+  display: block;
+}
+
+@media print {
+  .no-print {
+    display: none;
+  }
+}
