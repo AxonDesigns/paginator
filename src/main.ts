@@ -19,6 +19,7 @@ import {
   rowGroup,
   separator,
   showPdfDialog,
+  svg,
   table,
   text,
 } from './index.ts'
@@ -344,6 +345,23 @@ const imageIntro = `Image sizing is deliberately explicit rather than auto-detec
 
 const objectFitIntro = `Below, the same 400x300 source image is forced into a 220x140 box three times, once per objectFit value, to see how each reconciles a box whose aspect ratio does not match the asset — exactly the native CSS property doing exactly its native job on a real <img> element.`
 
+const svgIntro = `Unlike an image() node — which rasterizes any src, SVG included, to a fixed-resolution PNG before embedding it in the PDF — an svg() node takes raw markup and draws it as true vector content: crisp at any zoom, tiny file size. The badge below mixes a linear gradient fill, a <g transform="rotate(...)"> star, and plain shape elements, all redrawn as real pdfkit vector paths in the exported PDF via svg-to-pdfkit rather than rasterized.`
+
+const DEMO_SVG_BADGE = `
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="badgeFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f7cff" />
+      <stop offset="1" stop-color="#1baf7a" />
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="90" fill="url(#badgeFill)" stroke="#ffffff" stroke-width="4" />
+  <g transform="translate(100 100) rotate(0)" fill="#ffffff" fill-opacity="0.9">
+    <polygon points="0,-45 10,-14 42,-14 16,5 26,36 0,17 -26,36 -16,5 -42,-14 -10,-14" />
+  </g>
+</svg>
+`
+
 const containerIntro = `A container node is a single-child decorative wrapper (Flutter's Container is the reference point) — the one thing group deliberately never has: background, border, borderRadius, and padding. Below: a plain card; a row of badges sized via "flex" like any other row child; a chart wrapped in a container to prove background/border/padding "for free" on a node that has none of its own; two containers whose "height" is a MINIMUM rather than an exact size — one shorter than its content (the box grows to fit, content is never clipped or lost) and one taller (the extra space just sits below); a long paragraph wrapped in a container that spans a page break, to prove padding/background repaint correctly on the continuation page; a container nested inside a table cell; and an interactive, draggable container wired into the same interaction demo as everything else below.`
 
 const richTextIntro = `A richText node mixes styled runs inline within a single paragraph — a separate node type from plain text, which stays one uniform run. Below, one paragraph carries a bold run, a colored run, and a real inline link, all wrapping and reflowing together exactly like an ordinary paragraph. The link renders as a genuine anchor element on screen and a real clickable annotation in the exported PDF, both natively clickable with no custom hit-testing involved.`
@@ -370,7 +388,15 @@ const doc = definePage(
     // is heavier on the cover and final page, thin everywhere else.
     background: ({ pageNumber }) => (pageNumber === 1 ? '#f5f8ff' : '#ffffff'),
     border: ({ pageNumber, totalPages }) => ({ thickness: pageNumber === 1 || pageNumber === totalPages ? 3 : 1, color: '#4f7cff' }),
-    watermark: ({ pageNumber }) => ({ kind: 'text', text: pageNumber === 1 ? 'ORIGINAL' : 'COPY', fontSize: 150 }),
+    watermark: ({ pageNumber }) => pageNumber === 1 ?
+      ({
+        kind: 'text',
+        text: 'ORIGINAL',
+        fontSize: 80,
+        tile: true,
+        tileGapX: 0,
+        opacity: 0.05,
+      }) : null,
     header: () =>
       text({
         content: 'Paginator — Declarative Document Pagination Engine',
@@ -452,9 +478,7 @@ const doc = definePage(
     text({ content: tableStylingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     stylingTable,
     pageBreak(),
-    group({ direction: 'column', crossAlign: 'stretch' }, [
-      text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26, align: 'center' }),
-    ]),
+    text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26, align: 'center', alignSelf: 'stretch' }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: imageIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     image({
@@ -496,6 +520,15 @@ const doc = definePage(
         text({ content: 'opacity: 0.4', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
       ]),
     ]),
+    text({ content: 'SVG', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    separator({ thickness: 1, color: '#dddddd' }),
+    text({ content: svgIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    // alignSelf: 'stretch' claims the full column width for this row alone (the outer body column
+    // defaults to crossAlign: 'start', which would otherwise shrink-wrap the row to its content —
+    // here, just the svg's own fixed 160px — leaving mainAlign: 'center' nothing to center within).
+    group({ direction: 'row', mainAlign: 'center', alignSelf: 'stretch' }, [
+      svg({ markup: DEMO_SVG_BADGE, width: 160, aspectRatio: 1 }),
+    ]),
     text({ content: 'Containers', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: containerIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
@@ -514,15 +547,15 @@ const doc = definePage(
     ),
     group({ direction: 'row', gap: 8 }, [
       container(
-        { background: '#eef1f6', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        { background: '#eef1f6', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
         text({ content: 'Draft', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, align: 'center' }),
       ),
       container(
-        { background: '#e8f5e9', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        { background: '#e8f5e9', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
         text({ content: 'Approved', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#2a7a2a', align: 'center' }),
       ),
       container(
-        { background: '#fdecea', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        { background: '#fdecea', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
         text({ content: 'Rejected', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#b3261e', align: 'center' }),
       ),
     ]),

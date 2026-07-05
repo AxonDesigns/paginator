@@ -108,6 +108,7 @@ mount(result, document.getElementById('app')!)
 | `separator` | `(config?: Omit<SeparatorNode,'type'>) => SeparatorNode` | Thin rule, dual orientation (see below) |
 | `pageBreak` | `() => PageBreakNode` | Forces a page break; zero-size marker |
 | `image` | `(config: Omit<ImageNode,'type'>) => ImageNode` | **Throws** if neither `height` nor `aspectRatio` is given |
+| `svg` | `(config: Omit<SvgNode,'type'>) => SvgNode` | Raw SVG markup rendered as true vector content in the PDF (via `svg-to-pdfkit`), not rasterized. **Throws** if `markup` doesn't look like an SVG document, or if neither `height` nor `aspectRatio` is given |
 | `container` | `(config: Omit<ContainerNode,'type'\|'child'>, child: Node) => ContainerNode` | Single-child decorative wrapper (Flutter's `Container`) — `background`/`border`/`borderRadius`/`padding`, plus `width`/`height`(minimum)/`flex` sizing. The one place `background`/`border`/`padding` exist for an otherwise-plain piece of content, since `group` deliberately has none of those |
 | `table` | `(config: Omit<TableNode,'type'>) => TableNode` | Fixed grid, not semantic HTML — see below. **Throws** on a row/column-count mismatch, `headerRows` exceeding the row count, every column marked `group`, a `totals()` callback returning the wrong cell count, partial adoption of `column.content` across the effective columns, or `column.content` combined with an explicit `headerRows` |
 | `chart` | `(config: Omit<ChartNode,'type'>) => ChartNode` | SVG bar/line/pie/donut, discriminated by `chartKind`. **Throws** if neither `height` nor `aspectRatio` is given, if `categories`/`series` are missing (or a series' `data` length doesn't match `categories`) for `bar`/`line`, or if `slices` are missing (or a slice has a negative/non-finite `value`) for `pie`/`donut` |
@@ -155,14 +156,14 @@ default. See the "Interaction system" section for their semantics.
 | `header` / `footer` | `Node \| ((ctx: { pageNumber, totalPages }) => Node)` | See two-pass resolution below |
 | `headerHeight` / `footerHeight` | `number?` | Explicit override; skips auto-measurement |
 | `headerGap` / `footerGap` | `number?` | Default 0 |
-| `background` | `string \| ((ctx: { pageNumber, totalPages }) => string)?` | Solid page background color. Default white. Resolved once per page in `paginate()`, exactly like `header`/`footer`/`watermark` — same callback shape, so e.g. only the cover page can have a colored background. Threaded through `PaginatedPage.background`, drawn by both `mount()` and `generatePdf()` |
-| `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`. No `borderRadius` (a page is never clipped/cropped) |
-| `watermark` | `Watermark \| ((ctx: { pageNumber, totalPages }) => Watermark)?` | Decorative overlay drawn on every page. See below |
+| `background` | `string \| ((ctx: { pageNumber, totalPages }) => string \| undefined \| null)?` | Solid page background color. Default white. Resolved once per page in `paginate()`, exactly like `header`/`footer`/`watermark` — same callback shape, so e.g. only the cover page can have a colored background; the callback may return `undefined`/`null` to opt a page out entirely. Threaded through `PaginatedPage.background`, drawn by both `mount()` and `generatePdf()` |
+| `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder \| undefined \| null)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`, including the opt-out return. No `borderRadius` (a page is never clipped/cropped) |
+| `watermark` | `Watermark \| ((ctx: { pageNumber, totalPages }) => Watermark \| undefined \| null)?` | Decorative overlay drawn on every page. The callback may return `undefined`/`null` to skip the watermark on a given page (e.g. only page 1). See below |
 | `body` | `Node` | Usually a column `group` |
 
 ### `Watermark`
 Not a `Node` — it never participates in pagination/flow (doesn't consume content-box height, isn't
-registered in `behavior.ts`'s measure/layout/split dispatch). It's a page-absolute overlay, resolved
+registered as a node type the way every entry in `src/nodes/` is). It's a page-absolute overlay, resolved
 once per page in `paginate()` exactly like `header`/`footer` content is (same
 `{ pageNumber, totalPages }` callback shape), then painted directly by both renderers **last** — on
 top of the page background, border, and header/body/footer content — so an opaque table stripe,
@@ -181,7 +182,12 @@ node tree).
 Text watermark (`kind: 'text'`) additionally: `text: string`, `fontFamily?` (falls back to a
 built-in bold Helvetica/sans-serif with no `registerFont()` warning when omitted — no family was
 ever requested), `fontWeight?`, `fontStyle?`, `fontSize?` (default `72`), `color?` (default
-`#000000`).
+`#000000`), `selectable?: boolean` (default `false`: `generatePdf()` rasterizes the text to a
+transparent PNG and draws it as an image, so it can't be selected/copied out of the PDF — pdfkit's
+`.text()` otherwise embeds real, selectable/searchable glyphs like any other text in the document,
+rarely wanted for a stamp sitting over real body content. Set `true` to keep it as live vector text.
+Only affects `generatePdf()`; the on-screen preview's watermark is always `pointer-events: none`
+regardless, since it's decorative-only and never a hit-test target).
 
 Image watermark (`kind: 'image'`) additionally: `src: string`, `width: number`, `height: number`.
 
@@ -204,6 +210,7 @@ definePage(
 | `crossAlign` | `'start'\|'center'\|'end'\|'stretch'` | Default `'start'` |
 | `gap` | `number?` | Default 0 |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 | `splitColumns` | `boolean?` | Only meaningful when `direction: 'row'` — independent per-column page splitting, off by default |
 | `children` | `Node[]` | |
 
@@ -218,6 +225,7 @@ definePage(
 | `lineHeight` | `number` | px. Required by the type, but the `text()` builder fills a default |
 | `letterSpacing`, `whiteSpace`, `wordBreak` | optional | Forwarded to pretext's `prepare()` |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 
 ### `SeparatorNode` (`type: 'separator'`)
 | Field | Type | Notes |
@@ -243,7 +251,43 @@ structure; inert (renders nothing, forces nothing) as a row's column.
 | `objectFit` | `'fill'\|'contain'\|'cover'\|'none'\|'scale-down'` | Default `'fill'`, maps directly to the CSS property |
 | `borderRadius` | `number?` | Rounds the image's own painted content (a replaced element clips to `border-radius` natively on screen; PDF uses a clip region) — NOT the same as wrapping the image in a `container`'s `borderRadius`, which would only decorate around a still-rectangular image |
 | `opacity` | `number?` | `0-1` |
-| `flex` | `FlexSize?` | Only meaningful as a ROW child |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
+
+### `SvgNode` (`type: 'svg'`)
+Takes raw SVG **markup** (a string, not a `src`/URL) and renders it as true vector content in the
+exported PDF — crisp at any zoom, small file size — unlike passing an SVG through `ImageNode.src`,
+which only ever rasterizes to a fixed-resolution PNG (pdfkit itself can't decode SVG natively; see
+"Images" below). Sizing mirrors `ImageNode` exactly: same `height`/`aspectRatio` rule, and dimensions
+are never auto-detected from the markup itself (would make `paginate()` asynchronous).
+
+| Field | Type | Notes |
+|---|---|---|
+| `markup` | `string` | A full `<svg>...</svg>` document. Parsed at RENDER time by each renderer, never at `svg()`-construction time (`svg()` only does a cheap `markup.includes('<svg')` sanity check) |
+| `width`, `height` | `number?` | At least one of `{width & height}`, `{width & aspectRatio}`, `{height & aspectRatio}`, or `{aspectRatio alone}` required |
+| `aspectRatio` | `number?` | `width / height` |
+| `opacity` | `number?` | `0-1` |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
+
+**Two different renderers, two different fidelity/strictness tradeoffs:**
+- **On-screen preview** (`mount()`/`renderPreview()`): the markup is parsed with the browser's own
+  `DOMParser` and inserted directly as a real `<svg>` element — the browser renders 100% of valid
+  SVG natively (gradients, filters, `<text>`, everything), with no feature gaps at all. This path is
+  **strict**: malformed markup throws a `[paginator]` error immediately (a browser has zero
+  tolerance for invalid XML).
+- **PDF export** (`generatePdf()`): markup is handed to the `svg-to-pdfkit` package, which parses it
+  with its own hand-rolled, environment-agnostic XML parser (no `DOMParser`/`fs` dependency — it
+  runs identically against this project's browser-based `pdfkit.standalone.js` build) and redraws
+  it using the same `doc.path()`/`.fill()`/`.stroke()` pdfkit vector primitives this codebase's own
+  chart-drawing code already uses. Supported: shapes (`rect`/`circle`/`path`/`ellipse`/`line`/
+  `polyline`/`polygon`), `use`/nested `svg`, `text`/`tspan`/`textPath`, transforms, `viewBox`/
+  `preserveAspectRatio`, clip-paths, masks, gradients, patterns, embedded images, fonts, and links.
+  NOT supported: SVG filters, `foreignObject`, and a few text attributes (`font-variant`/
+  `writing-mode`/`unicode-bidi`). This path is **lenient**: markup too malformed even for its own
+  parser only produces a `console.warn` (prefixed `[paginator] svg node: ...`), never a thrown
+  error — a document that already renders fine on screen shouldn't fail PDF export over one broken
+  decorative element.
 
 ### `ContainerNode` (`type: 'container'`)
 A single-child decorative wrapper — Flutter's `Container` is the reference point — since `group`
@@ -255,9 +299,10 @@ those don't need their own such fields.
 | Field | Type | Notes |
 |---|---|---|
 | `child` | `Node` | Exactly one — not an array. Wrap a `group` for multiple children |
-| `width` | `number?` | Natural/shrink-wrap width in a non-stretch column context — same mechanism as `ImageNode.width` (`childCrossWidthInColumn` in `group-layout.ts`). Overridden by an ancestor's `crossAlign: 'stretch'`, same known limitation image/chart already have |
+| `width` | `number?` | Natural/shrink-wrap width in a non-stretch column context — same mechanism as `ImageNode.width` (`childCrossWidthInColumn` in `src/nodes/group.ts`). Overridden by an ancestor's `crossAlign: 'stretch'` or this node's own `alignSelf: 'stretch'`, same known limitation image/chart already have. Also doubles as the row-slot size when this node is a ROW child and `flex` is left unset — see "Row flex sizing" below |
 | `height` | `number?` | A **MINIMUM**, not exact/clipped: box content height is `Math.max(height ?? 0, childNaturalHeight + padding.top + padding.bottom)` — the same `targetHeight`-as-floor pattern `layoutColumn` already uses. Deliberately not exact/clipping: no clip-region code needed in either renderer, and content is never silently lost. Not re-enforced on a fragment produced by splitting across a page boundary — the ordinary (non-split) layout path re-applies it naturally once nothing more needs splitting |
-| `flex` | `FlexSize?` | Only meaningful as a ROW child |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 | `padding` | `number \| { top, right, bottom, left }?` | Insets `child` from whatever width/height the box resolved to |
 | `background` | `string?` | |
 | `border` | `{ thickness?; color? }?` | A plain rectangle at the container's own edge — no straddle-avoidance needed (unlike table borders), since there's no internal grid to share edges with |
@@ -269,10 +314,11 @@ still split across a page boundary like any other splittable node.
 
 ### `ChartNode` (`type: 'chart'`)
 SVG bar/line/pie/donut charts, discriminated by `chartKind`, built by hand at render time
-(`src/render/chart-render.ts`) with no charting library. Sizing mirrors `ImageNode` exactly: same
-`height`/`aspectRatio` rule, resolved synchronously in `src/core/chart-layout.ts` before anything is
-drawn (so its internal chrome — axis margins, legend band — uses fixed heuristic margins, never
-measured text). Non-splittable, same as image.
+(`src/render/chart-render.ts` for the DOM preview, `src/nodes/chart/pdf.ts` for the PDF) with no
+charting library. Sizing mirrors `ImageNode` exactly: same `height`/`aspectRatio` rule, resolved
+synchronously in `src/nodes/chart/layout.ts` before anything is drawn (so its internal chrome — axis
+margins, legend band — uses fixed heuristic margins, never measured text). Non-splittable, same as
+image.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -280,7 +326,7 @@ measured text). Non-splittable, same as image.
 | `width`, `height`, `aspectRatio` | `number?` | Same rule as `ImageNode`: needs `height` or `aspectRatio` |
 | `categories` | `string[]?` | `bar`/`line` only — x-axis labels, one per data point in every series |
 | `series` | `{ name?: string; data: number[]; color?: string; fill?: boolean \| { color?; opacity? } }[]?` | `bar`/`line` only — one or more series (grouped bars / multi-line); every `data` array must match `categories.length`. Each series' own `color` wins over `colors`/the default palette. `fill` (`line` only, default off) shades the area between that series' line and the baseline with a linear gradient — opaque at the line, fully transparent at the baseline — so whatever sits behind the chart stays partly visible near the bottom; `true` uses the series' own resolved color at the default opacity (0.25), an object overrides `color`/`opacity`. Purely per-series — some lines in a chart can be filled and others not. **Throws** if `fill.opacity` is outside `[0, 1]` |
-| `orientation` | `'vertical' \| 'horizontal'?` | `bar`/`line` only. Default `'vertical'` (categories on the x-axis, values on the y-axis). `'horizontal'` swaps them: categories run top-to-bottom, values run left-to-right, bars grow rightward (or leftward below the baseline) — implemented as its own rendering path (`renderHorizontalCategoricalChart`/`drawHorizontalCategoricalChart`), mirroring the vertical one field-for-field rather than a single axis-agnostic function, same reasoning as `group-layout.ts`'s `layoutRow`/`layoutColumn` split |
+| `orientation` | `'vertical' \| 'horizontal'?` | `bar`/`line` only. Default `'vertical'` (categories on the x-axis, values on the y-axis). `'horizontal'` swaps them: categories run top-to-bottom, values run left-to-right, bars grow rightward (or leftward below the baseline) — implemented as its own rendering path (`renderHorizontalCategoricalChart`/`drawHorizontalCategoricalChart`), mirroring the vertical one field-for-field rather than a single axis-agnostic function, same reasoning as `src/nodes/group.ts`'s `layoutRow`/`layoutColumn` split |
 | `barMode` | `'grouped' \| 'stacked'?` | `bar` only. `'grouped'` (default) places each category's series side by side; `'stacked'` stacks them into one bar per category — positive values above the zero baseline, negative below, each in series order, with the rounded "data-end" only on the outermost segment |
 | `barSegmentGap` | `number?` | `barMode: 'stacked'` only. Gap (px) between consecutive stacked segments — the true baseline and outermost-tip edges are never inset. Default `0` (flush segments). **Throws** if negative |
 | `barCornerRadius` | `number?` | `bar` only. Corner radius (px) of the rounded "data end" of a bar. Default 4 |
@@ -296,7 +342,8 @@ measured text). Non-splittable, same as image.
 | `view` | `{ domain?: 'zero' \| 'auto' \| { min?; max? }; padding?: number }?` | `bar`/`line` only. Controls the y-domain. `domain` omitted or `'zero'` (default): auto-computed, always spans `[min(0, dataMin), max(0, dataMax)]` (or the stacked-sum equivalent). `'auto'`: auto-computed but tight to the data's own `[dataMin, dataMax]` — NOT forced through zero — then widened by `padding` (fraction of that range, default `0.1`) on both ends, e.g. so the single lowest/highest bar isn't flush against the plot's own edge (which would draw it at zero height). An explicit `{ min?, max? }` object overrides either auto mode outright — set either or both bounds; an unset one stays auto-computed the `'zero'` way. If zero ends up outside the resolved domain, bars grow from the domain's own nearer edge instead of zero. **Throws** if the object form has `min >= max`, or if `padding` is negative |
 | `legend` | `{ show?; position?: 'right'\|'bottom'; fontSize?; color? }?` | Default: on for `pie`/`donut` and for `bar`/`line` with `series.length > 1`; off for a single series. `fontSize` (px, default 11) sizes legend entry labels — row height/band size scale with it. `color` overrides the default secondary-ink legend text color |
 | `colors` | `string[]?` | Categorical palette override, cycled by index; falls back to the built-in default palette |
-| `flex` | `FlexSize?` | Only meaningful as a ROW child |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 
 ### `TableNode` (`type: 'table'`)
 A fixed grid, not a semantically "correct" HTML table — no `thead` element, but `colSpan`/`rowSpan`
@@ -314,7 +361,7 @@ cell merging is supported; see "Cell spans" below.
 | `repeatGroupHeaders` | `boolean?` | Default `true`. Table-wide default for `TableGroupLevel.repeat` on every grouping level that doesn't set its own — see "Column grouping" |
 | `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color? }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges. No `borderRadius` — rounding corners across a whole grid of cells with shared edges (without disturbing the inner grid lines) has no existing primitive to build on; not supported |
 | `cellPadding` | `number?` | Default 0. Table-wide default, overridable per column (`column.padding`) or per cell (`cell.padding`) — see precedence below |
-| `stripe` | `{ even?: string; odd?: string }?` | Alternating row background, desugared entirely at `table()` build time into per-row `background` (`table-layout.ts` never knows striping happened, same architecture "Column grouping" already uses). Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a column-grouping header/divider bar — and never overrides a row that already sets its own `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even) |
+| `stripe` | `{ even?: string; odd?: string }?` | Alternating row background, desugared entirely at `table()` build time into per-row `background` (`src/nodes/table/layout.ts` never knows striping happened, same architecture "Column grouping" already uses). Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a column-grouping header/divider bar — and never overrides a row that already sets its own `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even) |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
 
 Alignment precedence, resolved per cell: horizontal `cell.align ?? column.align ?? 'stretch'`;
@@ -324,7 +371,7 @@ itself is still shared across every cell in that row (`Math.max` of each cell's 
 `naturalHeight + 2*padding`), so a column with a smaller padding than its neighbors doesn't shrink
 the row — it just gets more slack inside a box already sized for the taller neighbors, which is why
 `verticalAlign` matters for a tighter-padded column. Background precedence: `cell.background ??
-row.background ?? column.background ?? undefined`, resolved once at layout time (`table-layout.ts`)
+row.background ?? column.background ?? undefined`, resolved once at layout time (`src/nodes/table/layout.ts`)
 and baked into the `RenderedNode`, not re-derived at render time. Rows are atomic (a row's content
 never splits mid-row) — the table itself splits **between** rows across a page boundary, same "walk
 top-to-bottom, defer the rest" shape as a column group's split, just over `rows` instead of
@@ -371,10 +418,10 @@ always exactly one physical row) and surfaces as the same "extends past the last
 This is **entirely desugared at `table()` build time** (`applyGroupingRows()` in `nodes.ts`) — the
 `TableNode` that actually exists at runtime has no `groups` left, and its `rows` are already a plain,
 flat mix of ordinary `cells` rows and synthesized `header` bars, each carrying its own
-already-resolved `repeat` flag baked in at desugar time. `table-layout.ts`, `geometry.ts`,
-`shadow-dom.ts`, and `hit-registry.ts` never know grouping happened — and since grouping never
+already-resolved `repeat` flag baked in at desugar time. `src/nodes/table/layout.ts`, `geometry.ts`,
+`src/nodes/table/dom.ts`, and `hit-registry.ts` never know grouping happened — and since grouping never
 touches columns or cells, this file needs **zero changes for grouping**, unlike the header-repeat
-mechanism below which does live partly in `table-layout.ts`. They only ever handle the two
+mechanism below which does live partly in `src/nodes/table/layout.ts`. They only ever handle the two
 `TableRow` kinds generically, reading `header.repeat` directly with no awareness of
 `TableGroupLevel` or which level produced it.
 
@@ -404,7 +451,7 @@ nesting level — if a group's own rows span a page boundary, its header bar re-
 the continuation page, same as the table's own column-caption header already does. Override per
 level via `TableGroupLevel.repeat`, or set a new table-wide default via `TableNode.repeatGroupHeaders`
 for every level that doesn't specify its own. This is implemented entirely inside
-`tableMeasurer.split()` (`table-layout.ts`) — as it walks rows deciding what fits on the current
+`splitTable()` (`src/nodes/table/layout.ts`) — as it walks rows deciding what fits on the current
 page, it maintains a small depth-indexed stack of "currently active" header rows (`row.depth` closes
 any same-or-shallower entry already on the stack, mirroring the nesting `applyGroupingRows()`
 already produces); whichever of those are still `repeat !== false` **and** still have at least one of
@@ -414,7 +461,7 @@ prepended to the continuation's rows, ahead of whatever comes next. This compose
 the table's own header prefix (governed independently by `repeatHeaderRow`) and any repeated group
 headers can both be present at the top of a continuation page. Inner vertical border lines correctly
 skip past a header bar's full width (same interval-subtraction machinery `renderTableBorders()` in
-`shadow-dom.ts` already uses for colSpan/rowSpan cells — a header row's box is exactly
+`src/nodes/table/dom.ts` (and its PDF counterpart in `src/nodes/table/pdf.ts`) already uses for colSpan/rowSpan cells — a header row's box is exactly
 `[tableLeft, tableRight]`, so it "straddles" every inner vertical line by construction). `kind:
 'header'` rows are also directly authorable by hand, independent of automatic
 column grouping — a plain section-divider banner in any table (with its own `repeat`, default
@@ -466,7 +513,7 @@ rows: [
 This is resolved once at `table()` build time (`resolveCellSpans()` in `nodes.ts`), an occupancy-grid
 walk that bakes each cell's resolved starting column onto it as `__resolvedCol` (`@internal`) and
 marks any row that a `rowSpan` still carries into the next row as `__atomicWithNext` (`@internal`) —
-`table-layout.ts`, `geometry.ts`, `shadow-dom.ts`, and `hit-registry.ts` never see `colSpan`/`rowSpan`
+`src/nodes/table/layout.ts`, `geometry.ts`, `src/nodes/table/dom.ts`, and `hit-registry.ts` never see `colSpan`/`rowSpan`
 themselves, only the already-resolved fields. `table()` throws for a non-positive-integer span, a
 span that would run past the last column, a row that leaves a genuinely unoccupied gap, or a
 `rowSpan` that would run past the table's last row.
@@ -492,7 +539,11 @@ sum to: the entire deficit is added to the **last** row in the span, not distrib
 
 A ROW group's direct children are sized by a two-pass model, same mechanics as CSS `flex-grow`:
 1. Fixed-size children (any child with `flex: 'Npx'`, plus separators, which are always
-   fixed at `thickness + 2*margin`) claim their exact width first.
+   fixed at `thickness + 2*margin`) claim their exact width first. `ImageNode`/`SvgNode`/
+   `ChartNode`/`ContainerNode` also claim a fixed width here from their own `width` field whenever
+   `flex` is left unset — the same value that already governs their size in a column/shrink-wrap
+   context works unchanged as a row child too, so `flex: 'Npx'` is only needed to override `width`
+   or to opt into flex-grow weighting for these four types.
 2. Remaining width is divided among flexible children (`flex: N` or unset, which defaults to
    weight `1`) proportional to their weight.
 
@@ -504,16 +555,38 @@ Column children never use `flex` for width — their cross-axis width comes from
 (`'stretch'` = full column width, otherwise shrink-to-fit via pretext's `measureNaturalWidth`). A
 nested group's *own* `crossAlign: 'stretch'` is honored by its shrink-wrapping ancestor too — a
 column whose `crossAlign` is `'stretch'` is treated the same as a row with a flexible child (see
-`childCrossWidthInColumn` in `group-layout.ts`): it's handed the full width being offered rather
+`childCrossWidthInColumn` in `src/nodes/group.ts`): it's handed the full width being offered rather
 than shrink-wrapped to its content, so its own children can actually fill it. Without that, a
 `crossAlign: 'stretch'` column nested inside a shrink-wrapping ancestor would get boxed to its
-content's natural width one level up, making the inner `stretch` inert — most visibly as a
-single short text child (e.g. a heading) whose `align: 'center'` silently does nothing because
-its box is already exactly as wide as the text.
+content's natural width one level up, making the inner `stretch` inert.
 Column children's **height** is always intrinsic/content-driven, never flex-based — pagination
 depends on that.
 
-## Pagination algorithm (`src/core/paginate.ts`, `src/core/group-layout.ts`)
+## Per-child `alignSelf` override
+
+Every node that has ambiguous shrink-wrap-vs-stretch sizing (`GroupNode`, `TextNode`, `RichTextNode`,
+`ImageNode`, `SvgNode`, `ChartNode`, `ContainerNode`) also carries an optional `alignSelf: CrossAlign`
+— mirrors CSS `align-self`. When set, it overrides the parent group's `crossAlign` for that one child
+alone, without touching how any sibling is sized or positioned.
+
+In a COLUMN parent, `alignSelf: 'stretch'` claims the column's full width for this child even though
+the column itself isn't stretching every child — this is the direct, scoped alternative to wrapping
+just that one child in its own dedicated `group({ direction: 'column', crossAlign: 'stretch' }, [child])`
+ancestor. Two cases this fixes:
+- A single short text child (e.g. a heading) whose `align: 'center'`/`'right'` would otherwise
+  silently do nothing, because its shrink-wrapped box is already exactly as wide as the text —
+  `text({ ..., align: 'center', alignSelf: 'stretch' })` centers it in place.
+- A ROW group whose own `mainAlign` (`'center'`, `'space-between'`, etc.) would otherwise have no
+  free space to distribute, because the row shrink-wraps to the sum of its fixed-size children —
+  `group({ direction: 'row', mainAlign: 'center', alignSelf: 'stretch' }, [...])` centers the row's
+  own children in place.
+
+In a ROW parent, `alignSelf` only affects this child's own vertical position among mismatched-height
+siblings (`'start'`/`'center'`/`'end'`) — `'stretch'` has no effect there (falls back to `'start'`),
+since a row child's height is always intrinsic; there's no reflow mechanism to actually grow a
+shorter child to the row's full height.
+
+## Pagination algorithm (`src/core/paginate.ts`, `src/nodes/group.ts`)
 
 Single recursive function `paginateNode(node, width, ctx)` handles every case uniformly:
 
@@ -532,8 +605,8 @@ Single recursive function `paginateNode(node, width, ctx)` handles every case un
 - **Text splitting** streams through pretext's `layoutNextLine(prepared, cursor, width)` cursor
   mechanism — the exact mechanism pretext's own README describes for cross-boundary text flow.
   `measureHeight`/`layout`/`split` all funnel through one shared `streamLines()` helper
-  (`src/core/measure-text.ts`) so there's exactly one code path walking the cursor.
-- **Column group splitting** (`columnGroupSplit` in `group-layout.ts`) walks children top-to-bottom
+  (`src/nodes/text.ts`) so there's exactly one code path walking the cursor.
+- **Column group splitting** (`columnGroupSplit` in `src/nodes/group.ts`) walks children top-to-bottom
   via the same `layoutColumn()` used for full layout (single source of truth); the first child that
   doesn't fully fit is recursively split if splittable, else deferred whole to `rest`.
 - **Row group splitting** (`splitColumns: true` only) is **independent per column**: each column
@@ -610,7 +683,7 @@ the OS UI:
   with the physical page edge, matching the on-screen layout exactly — verified against a real
   `page.pdf()` render, not just print-media emulation.
 
-## PDF export (`src/render/pdf-render.ts`, `src/render/font-registry.ts`, `src/render/pdf-view.ts`)
+## PDF export (`src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`, `src/render/pdf-view.ts`)
 
 A second, independent paint step over the same `PaginatedResult`/`RenderedNode` data `mount()` already
 consumes — same relationship `renderPreview()` has to `mount()`. Produces a real vector PDF via
@@ -628,13 +701,16 @@ scope (not pre-bundled the way `pdfkit.standalone.js` is) — Vite can only exte
 
 **Why fonts need a registry.** Text layout (line breaks, `line.width`) was decided once by pretext
 measuring against whatever font FILE the browser's canvas resolved for a `fontFamily` string (see
-invariant #7 and `measure-text.ts`). For the PDF's embedded vector glyphs to reproduce identical line
+invariant #7 and `src/nodes/text.ts`). For the PDF's embedded vector glyphs to reproduce identical line
 breaks, the PDF must embed that literal file — not just a font that "looks like" the CSS family name.
 `registerFont({ family, url, weight?, style? })` fetches a font file once and serves both consumers
 from the one byte array: it registers a `FontFace` via `document.fonts.add()` + `.load()` (so canvas
 measurement AND on-screen DOM rendering use this exact file, same guarantee `ready()` already
 documents for `document.fonts.ready`), and retains the raw bytes for `generatePdf()` to embed
-identically later via pdfkit's bundled fontkit v2. Must resolve before `paginate()` is called with text
+identically later via pdfkit's bundled fontkit v2 (the actual font-name resolution each PDF-drawing
+node type calls into — `resolveTextFont()`/`resolveRunFont()`/`resolveChartFontName()` — lives in
+`src/render/pdf-fonts.ts`, shared by `src/nodes/text.ts`, `src/nodes/rich-text.ts`, and
+`src/nodes/chart/pdf.ts`). Must resolve before `paginate()` is called with text
 using that family/weight/style. `.ttf`/`.otf`/`.woff`/`.woff2` are all accepted — fontkit v2 decodes all
 four to real sfnt glyph data before embedding (verified: registering a `.woff2` file produces a valid,
 correctly-rendering PDF, checked against poppler's strict parser as well as Chromium's own viewer).
@@ -658,13 +734,13 @@ straight port of that file's, swapping `container.appendChild(styledDiv(...))` f
 A4 794×1123px × 0.75 ≈ 595.5×842.25pt, matching the standard PDF A4 size — confirms the scale factor is
 exact, not approximate.
 
-**Text baseline.** pretext's `line.y = i * lineHeight` (`positionLines()`, `measure-text.ts`) is the
+**Text baseline.** pretext's `line.y = i * lineHeight` (`positionLines()`, `src/nodes/text.ts`) is the
 TOP of each line's box, not a baseline. The actual PDF baseline is derived from the font's own ascent/
 descent, approximating the CSS half-leading algorithm browsers use to lay a line box out around a
 font's own metrics: `halfLeading = (lineHeight - (ascent+descent)) / 2`, `baselineFromTop = halfLeading
 + ascent`. Ascent/descent come from the BROWSER's own canvas (`measureFontMetricsPx()` in
-`pdf-render.ts`, via `CanvasRenderingContext2D.measureText().fontBoundingBoxAscent/Descent` on the
-exact same font CSS string `measure-text.ts` uses) rather than the embedded font object's own metrics,
+`src/render/pdf-fonts.ts`, via `CanvasRenderingContext2D.measureText().fontBoundingBoxAscent/Descent` on the
+exact same font CSS string `src/nodes/text.ts` uses) rather than the embedded font object's own metrics,
 tying baseline positioning to the same measurement engine pretext itself already trusts for width.
 Still best-effort, not a formal guarantee (browsers and canvas's own metrics can disagree by a fraction
 of a pixel), same tier as `chart-render.ts`'s `estimateTextWidth` approximation. Every `.text()` call
@@ -719,7 +795,9 @@ count drives both file size and viewer performance directly; 2x quarters the pix
 3x baseline (confirmed via `pdfimages -list`: a 2112×1584 banner shrank from 625KB to a 1408×1056/355KB
 image) for a meaningfully lighter, more responsive PDF, at the cost of print-grade sharpness. Runs
 entirely at generation time via a detached canvas, never inside `paginate()`, so it doesn't touch
-invariant #1.
+invariant #1. Note this rasterization applies even when `src` is itself an SVG — `ImageNode` has no
+way to preserve vector fidelity; use `SvgNode` (`svg()`, raw markup instead of a `src`) when that
+matters, which draws true vector output via `svg-to-pdfkit` instead (see its own doc section above).
 
 **Charts** are redrawn using `chart-render.ts`'s own pure geometry/color helpers (`barPath`,
 `pieSlicePath`, `donutSlicePath`, `resolveColor`, `niceTickValues`, `estimateTextWidth`, etc. — all
@@ -820,50 +898,106 @@ see invariant #4 for why a raw DOM element reference wouldn't work here.
 
 ## Architecture / file map
 
+Every node type — measurement, splitting, DOM rendering, and PDF drawing — lives together in
+`src/nodes/`, one module (or, for the two largest types, one folder) per type, each registering
+itself with `src/core/behavior.ts`'s registry as an import side effect. See "Extension seam" below
+for the full contract; this section is just the map of where everything lives.
+
 ```
 src/
   core/
     nodes.ts             — Node union, Interactive shared fields, PageDef, builder functions
     geometry.ts           — Box, RenderedNode union, translateRendered()
-    behavior.ts            — NodeMeasurer interface, registry (the extension seam), isSplittable(),
-                              type-safe dispatch wrappers (measureNodeHeight/layoutNodeFull/splitNode)
-    measure-text.ts         — pretext adapter: streamLines(), textMeasurer, measureTextNaturalWidth
-    group-layout.ts          — layoutColumn(), layoutRow(), columnGroupSplit(), rowGroupSplit(),
-                                subtreeHasPageBreak(), groupMeasurer
-    separator-layout.ts       — separatorMeasurer, separatorMainSize()
-    page-break-layout.ts       — pageBreakMeasurer (trivial: zero size)
-    image-layout.ts             — imageMeasurer, imageNaturalWidth(), height-resolution rules
-    table-layout.ts               — tableMeasurer: column flex-width resolution, cell alignment,
-                                     header-row-repeat split; cycles with group-layout.ts (see its
-                                     header comment and the "Common pitfalls" entry about it)
-    chart-layout.ts                — chartMeasurer, chartNaturalWidth(), same height-resolution
-                                      shape as image-layout.ts
-    container-layout.ts            — containerMeasurer, containerNaturalWidth(); height is a
-                                      MINIMUM (targetHeight-as-floor, same pattern layoutColumn
-                                      uses); a third participant in the group-layout.ts <->
-                                      table-layout.ts cycle (imports groupMeasurer/tableMeasurer,
-                                      is imported back by both)
-    page-sizes.ts                — PAGE_SIZE_PRESETS, resolvePageSize()
-    paginate.ts                   — paginateNode(), two-pass header/footer, paginate()
+    behavior.ts            — the registry itself: NodeTypeDefinition interface, registerNode(), and
+                              the generic dispatchers every node type is reached through
+                              (measureNodeHeight/layoutNodeFull/splitNode/isSplittable/naturalWidth/
+                              renderNodeDom/drawPdfNode) — see "Extension seam" below. Deliberately
+                              never imports a concrete node module (only types), which is what lets
+                              every node module import ITS generic dispatchers with no ESM cycle
+    flex-widths.ts          — resolveFlexWidths()/RowChildSizing: the shared two-pass flex-grow math
+                              behind both a ROW group's child widths (src/nodes/group.ts) and a
+                              table's column widths (src/nodes/table/layout.ts)
+    page-sizes.ts           — PAGE_SIZE_PRESETS, resolvePageSize()
+    paginate.ts              — paginateNode(), two-pass header/footer, paginate() — dispatches
+                               purely through behavior.ts's generic functions, never switches on
+                               node.type itself except the one bare-top-level-page-break special case
+    watermark-layout.ts       — resolveWatermarkInstances() (tiling math for Watermark, not a Node)
+  nodes/                      — one node type per module/folder; importing src/nodes/index.ts (once,
+                                 done for you by src/index.ts) registers all of them
+    index.ts                   — side-effect barrel: one `import './<type>.ts'` line per type
+    text.ts                     — pretext adapter (streamLines(), measureTextNaturalWidth), DOM
+                                   rendering, PDF drawing (drawTextNode, baseline math)
+    rich-text.ts                  — @chenglou/pretext/rich-inline adapter, mirrors text.ts's shape
+                                     for mixed-style runs; also the PDF `.link()` annotation for
+                                     RichTextRun.href
+    separator.ts                   — separatorMainSize(); a separator's ROW-context box is actually
+                                      resolved by group.ts's own layoutRow/layoutColumn, not here —
+                                      see "Common pitfalls"
+    page-break.ts                   — trivial: zero size, no-op render/draw
+    image.ts                         — imageNaturalWidth(), height-resolution rules, PDF
+                                       rasterize-and-embed (embedImage, shared with the page
+                                       watermark's own image path in pdf-render.ts)
+    svg.ts                             — svgNaturalWidth(); DOM path parses+inserts real markup
+                                         (strict), PDF path goes through svg-to-pdfkit (lenient)
+    container.ts                        — containerNaturalWidth(); height is a MINIMUM
+                                          (targetHeight-as-floor, same pattern layoutColumn uses);
+                                          isSplittable delegates to its child via behavior.ts's own
+                                          generic isSplittable() — safe now, no cycle to avoid
+    group.ts                              — layoutColumn(), layoutRow(), columnGroupSplit(),
+                                            rowGroupSplit(), subtreeHasPageBreak(),
+                                            childCrossWidthInColumn() (exported — table/layout.ts
+                                            needs it too)
+    table/
+      layout.ts                            — column flex-width resolution, cell alignment,
+                                             header-row-repeat split (resolveColumnWidths, exported
+                                             for table/dom.ts + table/pdf.ts)
+      dom.ts                                 — renderTableNode()/renderTableBorders() (background/
+                                               border line segments via interval-subtraction)
+      pdf.ts                                  — drawTableNode()/drawTableBorders(), same math as
+                                               dom.ts, pdfkit draw calls instead of styled divs
+      index.ts                                 — wires layout.ts/dom.ts/pdf.ts into one
+                                                registerNode('table', {...}) call
+    chart/
+      layout.ts                                 — chartNaturalWidth(), same height-resolution shape
+                                                  as image.ts
+      dom.ts                                      — thin wrapper around chart-render.ts's
+                                                    renderChartSvg()
+      pdf.ts                                        — full port of chart-render.ts's drawing logic
+                                                      to pdfkit calls (bars/lines/pie/donut/legend/
+                                                      axis), reusing its pure geometry/color helpers
+                                                      unchanged
+      index.ts                                       — wires layout.ts/dom.ts/pdf.ts into one
+                                                       registerNode('chart', {...}) call
   render/
-    shadow-dom.ts                  — mount(), printDocument(), renderPreview(), renderNode() (flat
-                                      rendering, draggableAncestor/user-select threading),
-                                      renderTableNode() (background/border line segments),
-                                      renderContainerNode() (background/border/borderRadius via
-                                      plain CSS — no straddle math needed, unlike table borders)
+    shadow-dom.ts                  — mount(), printDocument(), renderPreview(), styledDiv(), page
+                                      watermark painting. No longer contains any per-node-type
+                                      rendering or a renderNode() dispatcher — every node type's
+                                      renderDom() is reached through behavior.ts's renderNodeDom()
     chart-render.ts                 — renderChartSvg(): hand-built inline SVG for bar/line/pie/donut,
                                        fixed heuristic margins (no text measurement — see its header
                                        comment), default categorical palette from the dataviz skill;
-                                       also exports its pure geometry/color helpers for pdf-render.ts
+                                       also exports its pure geometry/color helpers, reused unchanged
+                                       by src/nodes/chart/pdf.ts
     reset.ts                        — BASE_ELEMENT_STYLE
-    interval-utils.ts                — subtractIntervals()/BORDER_EPSILON, shared by shadow-dom.ts's
-                                        and pdf-render.ts's table border-segment math
+    interval-utils.ts                — subtractIntervals()/BORDER_EPSILON, shared by
+                                        src/nodes/table/dom.ts's and .../pdf.ts's border-segment math
     font-registry.ts                  — registerFont(): fetches a font file once, registers it for
                                          on-screen use (FontFace) AND retains its bytes for later PDF
                                          embedding — the single-source-of-truth this whole feature
                                          depends on, see "PDF export" above
-    pdf-render.ts                      — generatePdf(): vector PDF via pdfkit, a second paint step
-                                          over PaginatedResult mirroring shadow-dom.ts's renderNode()
+    pdf-fonts.ts                       — PDF font-name resolution shared by every text-drawing node
+                                         type (resolveTextFont/resolveRunFont/resolveChartFontName,
+                                         ensureRegisteredFont, pickFallbackFont, measureFontMetricsPx)
+                                         — split out of pdf-render.ts so a node module doesn't need
+                                         to depend on the whole generatePdf() orchestrator
+    pdf-render.ts                      — generatePdf(): vector PDF via pdfkit. Owns the doc-level
+                                          orchestration, PdfContext (exported), generic unit/color
+                                          plumbing (pxToPt/resolvePdfColor/toPdfRect), image embedding
+                                          (embedImage, shared with src/nodes/image.ts), and the page
+                                          watermark (not a Node, so it has nowhere else to live). No
+                                          longer contains any per-node-type drawing or a drawNode()
+                                          dispatcher — every node type's drawPdf() is reached through
+                                          behavior.ts's drawPdfNode()
     pdf-view.ts                         — openPdfInNewTab(), showPdfDialog(): PDF-bytes-in, browser-
                                            chrome-out, decoupled from generatePdf() itself
   interaction/
@@ -872,7 +1006,9 @@ src/
     attach-interactions.ts             — attachInteractions(): pointer event state machine (hover/
                                           click/drag/drop, threshold, dragTypes, overDropTarget)
   ready.ts                             — ready() (awaits document.fonts.ready)
-  index.ts                              — public API surface (only file most consumers should import from)
+  index.ts                              — public API surface (only file most consumers should import
+                                           from) — its first line imports src/nodes/index.ts so every
+                                           built-in node type is registered before anything else runs
   main.ts                               — demo app exercising every feature (see below)
 ```
 
@@ -899,44 +1035,51 @@ Reading it top to bottom is a good way to see every API in realistic use.
 
 ## Extension seam — adding a new node type
 
-`TableNode` (`src/core/table-layout.ts`) and `ChartNode` (`src/core/chart-layout.ts`,
-`src/render/chart-render.ts`) are worked examples of a node that holds MULTIPLE pieces of nested
-content (cells, series). `ContainerNode` (`src/core/container-layout.ts`) is a worked example of the
-other shape — exactly ONE child, no array — closer to what a `CustomNode` wrapping/decorating a
-single piece of content would look like. `RichTextNode` (`src/core/measure-rich-text.ts`) is a
-worked example of a splittable leaf whose internal content is itself an array requiring a dedicated
-measurement library adapter (`@chenglou/pretext/rich-inline`), closer to what a multi-style/rich
-content type would look like — read whichever is closest to what you're adding, alongside the steps
-below. Still not implemented: a generic `CustomNode` escape hatch. To add one:
+Every built-in node type — `text`/`richText`/`separator`/`page-break`/`image`/`svg`/`table`/`chart`/
+`container`/`group` — plugs into pagination, DOM rendering, and PDF drawing purely by calling
+`registerNode()` once (`src/core/behavior.ts`). `paginate.ts`, `shadow-dom.ts`, and `pdf-render.ts`
+never switch on `node.type` themselves; they only ever dispatch through behavior.ts's generic
+functions (`measureNodeHeight`/`layoutNodeFull`/`splitNode`/`isSplittable`/`naturalWidth`/
+`renderNodeDom`/`drawPdfNode`), which do a plain registry lookup. Nothing in any of those three files
+needs to change when you add a new type.
+
+`src/nodes/table/` and `src/nodes/chart/` are worked examples of a node that holds MULTIPLE pieces of
+nested content (cells, series) big enough to warrant splitting `layout.ts`/`dom.ts`/`pdf.ts` into
+their own folder. `src/nodes/container.ts` is a worked example of the other shape — exactly ONE
+child, no array. `src/nodes/rich-text.ts` is a worked example of a splittable leaf whose internal
+content is itself an array requiring a dedicated measurement library adapter
+(`@chenglou/pretext/rich-inline`). Read whichever is closest to what you're adding, alongside the
+steps below. Still not implemented: a generic `CustomNode` escape hatch for registering a type at
+runtime without extending the `Node` union at all (the union stays closed/type-safe by design — see
+`behavior.ts`'s own header comment). To add a new built-in type:
 
 1. Add the new variant to the `Node` union in `nodes.ts` (extend `Interactive` like the others if
-   it should support hover/click/drag).
-2. Add a matching variant to `RenderedNode` in `geometry.ts`.
-3. Implement a `NodeMeasurer<YourNode>` (`measureHeight`, `layout`, optionally `split` +
-   `splittable`) in a new `your-type-layout.ts`, following the pattern in
-   `separator-layout.ts`/`image-layout.ts` (simple, non-splittable) or `measure-text.ts` (splittable).
-4. Register it in `behavior.ts`'s `registry` object and its three dispatch-switch functions
-   (`measureNodeHeight`, `layoutNodeFull`, `splitNode`).
-5. If it should participate in row `flex` sizing or column shrink-wrap sizing, add a branch to
-   `group-layout.ts`'s local `measureNodeHeight`/`layoutNode`/`resolveRowChildSizing`/
-   `childCrossWidthInColumn` (these are intentionally duplicated from `behavior.ts`, not imported,
-   to avoid a runtime ESM circular dependency — see the comment at the top of `group-layout.ts`).
-   If your new type is itself a **container** that can hold arbitrary nested content (as `table`
-   is), its own layout file will need the same kind of local dispatch to handle a nested `group`
-   — importing `groupMeasurer` from `group-layout.ts` while `group-layout.ts` imports your
-   measurer back forms a two-file cycle. This is safe (see `table-layout.ts`'s header comment for
-   the full argument) only as long as **both** sides reference the other exclusively inside
-   function bodies, never at either module's top level to eagerly build an object — that's exactly
-   how `behavior.ts`'s cycle-avoidance works too, just between two peer files instead of
-   behavior.ts and one file.
-6. Add a render case to `shadow-dom.ts`'s `renderNode()`.
-7. If cells/children of your new type should support `interactive`/`draggable`/`droppable`, add a
+   it should support hover/click/drag), plus a matching variant to `RenderedNode` in `geometry.ts`.
+2. Create `src/nodes/<type>.ts` (or a folder, `layout.ts`/`dom.ts`/`pdf.ts`/`index.ts`, if it's big
+   enough to want the split) implementing `NodeTypeDefinition<YourNode, YourRenderedNode>`
+   (`behavior.ts`): `measureHeight`, `isSplittable`, optionally `split`, `layout`, optionally
+   `naturalWidth` (shrink-wrap width for column/cell placement — omit it to mean "wants the full
+   width offered," the default separator/page-break/table already rely on), `renderDom`, `drawPdf`.
+   Follow the pattern in `src/nodes/separator.ts`/`image.ts` (simple, non-splittable, no nested
+   content) or `text.ts` (splittable). If your type recurses into arbitrary child content (like
+   `container`/`group`/`table`), call the generic `measureNodeHeight`/`layoutNodeFull`/
+   `isSplittable`/`splitNode`/`renderNodeDom`/`drawPdfNode` from `behavior.ts` for those
+   children — there's no cycle to avoid; `behavior.ts` never imports concrete node modules, so any
+   node module can safely import its dispatchers.
+3. Call `registerNode('<type>', {...})` once at the bottom of your new module.
+4. Add one `import './<type>.ts'` line to `src/nodes/index.ts`.
+5. If cells/children of your new type should support `interactive`/`draggable`/`droppable`, add a
    traversal branch to `hit-registry.ts`'s `flatten()` (see `table`'s branch there) — this alone is
    the entire "interaction delegation" mechanism, no new predicate or event type needed.
-8. Export the builder + types from `index.ts`.
+6. If your `RenderedNode` variant nests other `RenderedNode`s (a wrapper/container shape), add one
+   branch to `geometry.ts`'s `translateRendered()` — the one place that's still a small,
+   deliberately manual if-chain rather than part of the registry, since it's keyed on "does this
+   shape nest other rendered children" (true for `group`/`table`/`container` today), not on type
+   identity, and most new leaf types need zero change here.
+7. Export the builder + types from `index.ts`.
 
-**No changes to `paginate.ts` are needed** for a new atomic (non-splittable) leaf type — this is
-the entire point of the registry pattern.
+**No changes to `paginate.ts`, `shadow-dom.ts`, or `pdf-render.ts` are needed** for a new node
+type, splittable or not — this is the entire point of the registry pattern.
 
 ## Known limitations (documented, not bugs)
 
@@ -1018,10 +1161,10 @@ the entire point of the registry pattern.
 ## Common pitfalls (bugs caught during development — don't reintroduce)
 
 - **Separator orientation**: a separator's box means different things in row vs. column context
-  (horizontal-bar vs. vertical-bar). `group-layout.ts`'s `layoutResolvedChild()` must use the
+  (horizontal-bar vs. vertical-bar). `src/nodes/group.ts`'s `layoutResolvedChild()` must use the
   already-resolved box from `layoutRow`/`layoutColumn` directly for separators, never recompute via
-  `separatorMeasurer.layout()` generically — that function only knows the column orientation and
-  would silently discard a row separator's stretched height.
+  the registered separator `layout()` generically — that function only knows the column orientation
+  and would silently discard a row separator's stretched height.
 - **Row-group continuation placeholders**: when `splitColumns` finishes a column early but a
   sibling column keeps going, the finished column's slot needs an `emptyContinuationFor()`
   placeholder (same width, zero height) on the continuation page — otherwise the grid redistributes
@@ -1036,7 +1179,7 @@ the entire point of the registry pattern.
   just `{ type: 'page-break' }` (e.g. a degenerate `doc.body`), it needs its own early-return branch
   rather than falling into the generic atomic-node overflow path, which would log a spurious
   "exceeds page height" warning for a genuinely zero-height node.
-- **Nested `crossAlign: 'stretch'` silently inert**: `childCrossWidthInColumn()` (`group-layout.ts`)
+- **Nested `crossAlign: 'stretch'` silently inert**: `childCrossWidthInColumn()` (`src/nodes/group.ts`)
   computes the shrink-wrapped width a column hands to a nested group child. It already special-cased
   a nested *row* with a flexible child (`rowHasFlexChild`) as wanting full width, but originally had
   no equivalent check for a nested *column* — so `group({ direction: 'column', crossAlign: 'stretch'
@@ -1044,37 +1187,43 @@ the entire point of the registry pattern.
   and the inner `stretch` had nothing left to stretch into. Fixed by checking `node.crossAlign ===
   'stretch'` alongside the row case. Symptom to watch for: a single short text child with `align:
   'center'`/`'right'` that visually stays flush-left no matter what — the giveaway is that its box
-  width already equals the text's own width.
-- **`group-layout.ts` ↔ `table-layout.ts` cycle is load-bearing, don't "clean it up"**: these two
-  files import each other's exported measurer (`groupMeasurer`/`tableMeasurer`) to lay out a group
-  nested in a table cell and a table nested in a row/column, respectively. It only works because
-  both sides reference the other exclusively **inside function bodies** — never at module top
-  level, the way `behavior.ts`'s `registry` object eagerly dereferences `groupMeasurer`/
-  `tableMeasurer` to build itself (which is exactly the pattern `group-layout.ts`'s header comment
-  says to avoid, and why `behavior.ts` can't be imported by either file). Hoisting either
-  cross-reference to top level — e.g. a top-level `const` computed from the other module's export —
-  reintroduces a real "Cannot access '...' before initialization" TDZ crash, not a style nit.
-- **`table-layout.ts`'s split "rendered" node now matches group/text's convention — don't
-  re-introduce the old slice**: an earlier version deliberately SLICED `tableMeasurer.split()`'s
-  `rendered.node` to just the rows placed on that page (unlike `columnGroupSplit`/text's `split()`,
-  which keep the FULL original node always), because `shadow-dom.ts` used to resolve per-cell
-  background by indexing `node.rows[r]`/`node.columns[c]` positionally against `rendered.rows[r]`
-  — which only worked if the two stayed index-aligned. Column grouping's synthesized header rows
-  (no corresponding `node.rows[r]` entry at all) broke that invariant, so background/border
-  resolution moved to *layout time* instead (baked directly into `RenderedTableCell`/
-  `RenderedTableRow` — see "Column grouping" above), and the slice was reverted to the full,
-  unsliced node. This also fixed a real inconsistency: hit-testing a whole `interactive: true`
-  table (not a per-cell delegate) used to expose the sliced, current-page-only node via
-  `InteractionTarget.node`, unlike every other splittable node type. If you ever touch
-  `tableMeasurer.split()`, keep `rendered.node` as the full original — reintroducing the slice
-  would silently break `InteractionTarget.node` again.
+  width already equals the text's own width. A per-child `alignSelf: 'stretch'` (see "Per-child
+  `alignSelf` override" above) is now the direct fix for this same symptom — set it on the one child
+  that needs full width instead of reaching for an ancestor `crossAlign: 'stretch'` wrapper, which
+  affects every sibling too.
+- **The old `group-layout.ts` ↔ `table-layout.ts` cycle is gone — don't reintroduce a peer-file
+  cycle "for convenience"**: an earlier version of this codebase had `group-layout.ts` and
+  `table-layout.ts` import each other's exported measurer to lay out a group nested in a table cell
+  and a table nested in a row/column, respectively, safe only because both sides referenced the
+  other exclusively inside function bodies, never at module top level. That whole class of problem
+  was eliminated by having `behavior.ts` never import any concrete node module (only types) — every
+  node module (`src/nodes/group.ts`, `src/nodes/table/layout.ts`, `src/nodes/container.ts`, ...) now
+  imports the GENERIC dispatchers (`measureNodeHeight`/`layoutNodeFull`/`isSplittable`/`splitNode`/
+  `renderNodeDom`/`drawPdfNode`) from `behavior.ts` directly, with nothing to cycle against. Don't
+  reach for a direct peer-to-peer import between two node modules to "avoid the indirection" —
+  that's exactly the pattern this refactor removed, and reintroducing it reopens the same
+  TDZ-crash risk the old comment warned about.
+- **`table/layout.ts`'s split "rendered" node matches group/text's convention — don't slice it**:
+  an earlier version deliberately SLICED the table split's `rendered.node` to just the rows placed
+  on that page (unlike `columnGroupSplit`/text's `split()`, which keep the FULL original node
+  always), because the DOM renderer used to resolve per-cell background by indexing
+  `node.rows[r]`/`node.columns[c]` positionally against `rendered.rows[r]` — which only worked if
+  the two stayed index-aligned. Column grouping's synthesized header rows (no corresponding
+  `node.rows[r]` entry at all) broke that invariant, so background/border resolution moved to
+  *layout time* instead (baked directly into `RenderedTableCell`/`RenderedTableRow` — see "Column
+  grouping" above), and the slice was reverted to the full, unsliced node. This also fixed a real
+  inconsistency: hit-testing a whole `interactive: true` table (not a per-cell delegate) used to
+  expose the sliced, current-page-only node via `InteractionTarget.node`, unlike every other
+  splittable node type. If you ever touch `splitTable()` (`src/nodes/table/layout.ts`), keep
+  `rendered.node` as the full original — reintroducing the slice would silently break
+  `InteractionTarget.node` again.
 - **pdfkit's own `underline`/`strike` `.text()` options throw `"unsupported number: NaN"` under
-  this codebase's positioning model** — `drawTextNode()` (`pdf-render.ts`) already calls `.text()`
+  this codebase's positioning model** — `drawPdf()` (`src/nodes/text.ts`) already calls `.text()`
   with `lineBreak: false` and a hand-computed `baseline: 0` position per line (needed to reproduce
   pretext's already-decided line breaks exactly, see "PDF export" above), and pdfkit's internal
   underline/strike line-extent computation depends on state that path never populates — reproduces
   regardless of font (registered or fallback), confirmed by isolating the exact same `.text()` call
   with only `underline: true` added. Fixed by drawing the decoration line by hand instead, using
-  each line's own already-known `line.width` — the same manual-line approach `drawChartLine`
-  already uses elsewhere in this file. Don't reach for pdfkit's built-in options here again without
+  each line's own already-known `line.width` — the same manual-line approach `src/nodes/chart/pdf.ts`'s
+  `drawChartLine` already uses. Don't reach for pdfkit's built-in options here again without
   re-verifying against this failure mode first.

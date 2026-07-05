@@ -4,121 +4,73 @@
 // its main axis (sum of children heights); for a row it's the cross axis (max of children
 // heights). Forcing both through one generic path would obscure that asymmetry.
 //
-// This module intentionally does NOT import behavior.ts's `registry`/`isSplittable` at runtime
-// (only their *types*, which TypeScript erases) — behavior.ts imports `groupMeasurer` from here,
-// so a runtime import in the other direction would create an actual ESM circular dependency.
-// Instead, child dispatch for the MVP node types is handled locally.
-//
-// table-layout.ts imports `groupMeasurer`/`childCrossWidthInColumn` from this file (to lay out a
-// group nested inside a table cell), and this file imports `tableMeasurer` from table-layout.ts
-// (to lay out a table nested inside a row/column) — a two-file cycle, unlike the one avoided
-// above. It's safe ONLY because both sides reference the other exclusively inside function bodies
-// (never at module top-level to eagerly build an object, the way behavior.ts's `registry` would).
-// Do not hoist either reference out of a function body, or this reintroduces a TDZ crash.
+// Unlike the old group-layout.ts, this module dispatches into arbitrary children via the fully
+// generic measureNodeHeight/layoutNodeFull/isSplittable/splitNode/naturalWidth/renderNodeDom/
+// drawPdfNode functions from behavior.ts — safe now that behavior.ts never imports concrete node
+// modules (see its header comment), so there's no cycle left to avoid by hand-rolling a local copy
+// of that dispatch the way this file used to.
 
-import type { FlexSize, GroupNode, Node } from './nodes.ts'
-import type { Box, RenderedNode } from './geometry.ts'
-import { translateRendered } from './geometry.ts'
-import type { NodeMeasurer, SplitOutcome } from './behavior.ts'
-import { measureTextNaturalWidth, textMeasurer } from './measure-text.ts'
-import { richTextMeasurer, richTextNaturalWidth } from './measure-rich-text.ts'
-import { separatorMainSize, separatorMeasurer } from './separator-layout.ts'
-import { imageMeasurer, imageNaturalWidth } from './image-layout.ts'
-import { tableMeasurer } from './table-layout.ts'
-import { chartMeasurer, chartNaturalWidth } from './chart-layout.ts'
-import { containerMeasurer, containerNaturalWidth } from './container-layout.ts'
+import type { CrossAlign, FlexSize, GroupNode, Node } from '../core/nodes.ts'
+import type { Box, RenderedNode } from '../core/geometry.ts'
+import { translateRendered } from '../core/geometry.ts'
+import {
+  drawPdfNode,
+  isSplittable,
+  layoutNodeFull,
+  measureNodeHeight,
+  naturalWidth,
+  registerNode,
+  renderNodeDom,
+  splitNode,
+} from '../core/behavior.ts'
+import type { DomRenderCtx, PdfRenderCtx, SplitOutcome } from '../core/behavior.ts'
+import { resolveFlexWidths } from '../core/flex-widths.ts'
+import type { RowChildSizing } from '../core/flex-widths.ts'
+import { separatorMainSize } from './separator.ts'
+import { styledDiv } from '../render/shadow-dom.ts'
 
 const EPSILON = 0.01
 
+type Rendered = Extract<RenderedNode, { type: 'group' }>
 type LaidOutChild = { node: Node; box: Box }
 type DirectionLayoutResult = { children: LaidOutChild[]; contentWidth: number; contentHeight: number }
 
-// --- Local node dispatch (duplicated, not imported from behavior.ts — see header comment) ---
-
-function measureNodeHeight(node: Node, width: number): number {
-  if (node.type === 'text') return textMeasurer.measureHeight(node, width)
-  if (node.type === 'richText') return richTextMeasurer.measureHeight(node, width)
-  if (node.type === 'separator') return separatorMainSize(node)
-  if (node.type === 'page-break') return 0
-  if (node.type === 'image') return imageMeasurer.measureHeight(node, width)
-  if (node.type === 'table') return tableMeasurer.measureHeight(node, width)
-  if (node.type === 'chart') return chartMeasurer.measureHeight(node, width)
-  if (node.type === 'container') return containerMeasurer.measureHeight(node, width)
-  return node.direction === 'row' ? layoutRow(node, width).contentHeight : layoutColumn(node, width).contentHeight
-}
-
-function layoutNode(node: Node, width: number): RenderedNode {
-  if (node.type === 'text') return textMeasurer.layout(node, width)
-  if (node.type === 'richText') return richTextMeasurer.layout(node, width)
-  if (node.type === 'separator') return separatorMeasurer.layout(node, width)
-  if (node.type === 'page-break') return { type: 'page-break', box: { x: 0, y: 0, width, height: 0 }, node }
-  if (node.type === 'image') return imageMeasurer.layout(node, width)
-  if (node.type === 'table') return tableMeasurer.layout(node, width)
-  if (node.type === 'chart') return chartMeasurer.layout(node, width)
-  if (node.type === 'container') return containerMeasurer.layout(node, width)
-  return layoutGroupNode(node, width)
-}
-
 // Separator children already carry their final, orientation-correct box (full cross length in one
 // dimension, thickness+2*margin in the other) computed by layoutRow/layoutColumn's own alignment
-// math — layoutNode()/separatorMeasurer.layout() only knows the column/horizontal-bar orientation,
+// math — layoutNodeFull()/separator's own layout() only knows the column/horizontal-bar orientation,
 // so calling it here for a ROW separator would silently discard the row's stretched height. Use
 // the already-resolved box directly instead; there's no further "internal content" to compute for
 // a separator the way there is for text lines or nested group children.
 function layoutResolvedChild(node: Node, box: Box): RenderedNode {
   if (node.type === 'separator') return { type: 'separator', box, node }
-  return translateRendered(layoutNode(node, box.width), box.x, box.y)
+  return translateRendered(layoutNodeFull(node, box.width), box.x, box.y)
 }
 
-function layoutGroupNode(node: GroupNode, width: number): RenderedNode {
+function layoutGroupNode(node: GroupNode, width: number): Rendered {
   const result = node.direction === 'row' ? layoutRow(node, width) : layoutColumn(node, width)
   const children = result.children.map(c => layoutResolvedChild(c.node, c.box))
   return { type: 'group', box: { x: 0, y: 0, width, height: result.contentHeight }, node, children }
 }
 
-function isSplittableNode(node: Node): boolean {
-  if (node.type === 'text') return true
-  if (node.type === 'richText') return true
-  if (node.type === 'table') return true
-  if (node.type === 'container') return isSplittableNode(node.child)
-  if (node.type !== 'group') return false
-  return node.direction === 'column' || node.splitColumns === true
-}
-
-type AnySplitOutcome = { rendered: RenderedNode; consumedHeight: number; rest: Node | null } | null
-
-function splitNode(node: Node, width: number, availableHeight: number): AnySplitOutcome {
-  if (node.type === 'text') return textMeasurer.split!(node, width, availableHeight)
-  if (node.type === 'richText') return richTextMeasurer.split!(node, width, availableHeight)
-  if (node.type === 'table') return tableMeasurer.split!(node, width, availableHeight)
-  if (node.type === 'container') return containerMeasurer.split!(node, width, availableHeight)
-  if (node.type === 'group' && node.direction === 'column') return columnGroupSplit(node, width, availableHeight)
-  if (node.type === 'group' && node.direction === 'row' && node.splitColumns === true) return rowGroupSplit(node, width, availableHeight)
-  return null
-}
-
 // --- Row main-axis sizing: fixed (px flex) vs flexible (numeric weight, default 1) ---
-
-export type RowChildSizing = { kind: 'fixed'; size: number } | { kind: 'flex'; weight: number }
-
-// Two-pass flex-grow-style width resolution, shared between row-child width division (layoutRow,
-// below) and table-column width division (table-layout.ts) — same math, different callers. Plain
-// arithmetic with no Node-type dispatch, so sharing it carries none of the circular-import risk
-// documented in this file's header comment. `availableWidth` should already have any gap total
-// subtracted by the caller.
-export function resolveFlexWidths(sizing: RowChildSizing[], availableWidth: number): number[] {
-  const totalFixed = sizing.reduce((acc, s) => acc + (s.kind === 'fixed' ? s.size : 0), 0)
-  const totalFlexWeight = sizing.reduce((acc, s) => acc + (s.kind === 'flex' ? s.weight : 0), 0)
-  const remainingForFlex = Math.max(0, availableWidth - totalFixed)
-  return sizing.map(s => (s.kind === 'fixed' ? s.size : totalFlexWeight > 0 ? (s.weight / totalFlexWeight) * remainingForFlex : 0))
-}
 
 function resolveRowChildSizing(node: Node): RowChildSizing {
   if (node.type === 'separator') return { kind: 'fixed', size: separatorMainSize(node) }
   if (node.type === 'page-break') return { kind: 'fixed', size: 0 } // inert as a row column — see nodes.ts
   const flex = node.flex
+  // `width` doubles as this node's row-slot size when `flex` is left unset — the same value that
+  // already governs its size in a column/shrink-wrap context now works unchanged as a row child too,
+  // so `flex: 'Npx'` is only needed to override `width` or to opt into flex-grow weighting.
+  if (flex === undefined && 'width' in node && node.width !== undefined) return { kind: 'fixed', size: node.width }
   if (typeof flex === 'string') return { kind: 'fixed', size: Number.parseFloat(flex) }
   return { kind: 'flex', weight: flex ?? 1 }
+}
+
+// Reads the per-child `alignSelf` override (see SelfAlignable in nodes.ts) — Node is a discriminated
+// union, so `'alignSelf' in node` both narrows and covers the types that don't carry the field
+// (Separator/PageBreak/Table) without a type error.
+function childAlignSelf(node: Node): CrossAlign | undefined {
+  return 'alignSelf' in node ? node.alignSelf : undefined
 }
 
 // A column that finished on an earlier page but whose row siblings still have content left needs
@@ -152,30 +104,28 @@ function sumFixedRowWidth(node: GroupNode, width: number): number {
 // --- Cross/main width contribution helpers (shrink-wrap sizing for NESTED subtrees only — the
 // direct children of an actual row's own layout are sized by the flex algorithm in layoutRow) ---
 
-// Exported (unlike the other local dispatch helpers above) because table-layout.ts also needs it,
-// for shrink-wrap cell content width when a cell's horizontal alignment isn't 'stretch' — this is
-// the one direction of the group-layout.ts/table-layout.ts cycle documented in the header comment.
+// Exported because table/layout.ts also needs it, for shrink-wrap cell content width when a cell's
+// horizontal alignment isn't 'stretch'.
 export function childCrossWidthInColumn(node: Node, width: number): number {
-  if (node.type === 'text') return Math.min(measureTextNaturalWidth(node), width)
-  if (node.type === 'richText') return Math.min(richTextNaturalWidth(node), width)
-  if (node.type === 'separator') return width
-  if (node.type === 'page-break') return width
-  if (node.type === 'image') return Math.min(imageNaturalWidth(node, width), width)
-  if (node.type === 'chart') return Math.min(chartNaturalWidth(node, width), width)
-  if (node.type === 'container') return Math.min(containerNaturalWidth(node, width), width)
-  // A table shrink-wrapped as a whole (not per-cell alignment, a separate concern handled entirely
-  // within table-layout.ts) always wants the full width offered to it, same as separator/page-break.
-  if (node.type === 'table') return width
-  if (node.direction === 'row') {
-    return rowHasFlexChild(node) ? width : sumFixedRowWidth(node, width)
+  // An explicit per-child override (see SelfAlignable in nodes.ts) always wins over every type's own
+  // shrink-wrap logic below — the same short-circuit an ancestor's `crossAlign: 'stretch'` already
+  // gets one level up, just scoped to this one child instead of every sibling.
+  if (childAlignSelf(node) === 'stretch') return width
+  if (node.type === 'group') {
+    if (node.direction === 'row') {
+      return rowHasFlexChild(node) ? width : sumFixedRowWidth(node, width)
+    }
+    // A nested column that itself stretches its own children also wants the full width offered to
+    // it — otherwise its `crossAlign: 'stretch'` would be silently inert whenever a shrink-wrapping
+    // ancestor hands it a content-sized box in the first place, mirroring the rowHasFlexChild check
+    // above for nested rows.
+    if (node.crossAlign === 'stretch') return width
+    const max = node.children.reduce((acc, c) => Math.max(acc, childCrossWidthInColumn(c, width)), 0)
+    return Math.min(max, width)
   }
-  // A nested column that itself stretches its own children also wants the full width offered to
-  // it — otherwise its `crossAlign: 'stretch'` would be silently inert whenever a shrink-wrapping
-  // ancestor hands it a content-sized box in the first place, mirroring the rowHasFlexChild check
-  // above for nested rows.
-  if (node.crossAlign === 'stretch') return width
-  const max = node.children.reduce((acc, c) => Math.max(acc, childCrossWidthInColumn(c, width)), 0)
-  return Math.min(max, width)
+  // Every other type's shrink-wrap width (or "wants the full width", the default when a type
+  // registers no `naturalWidth`) — see behavior.ts's naturalWidth() dispatcher.
+  return naturalWidth(node, width)
 }
 
 // --- Main-axis free-space distribution (shared shape between row and column) ---
@@ -216,9 +166,12 @@ export function layoutColumn(node: GroupNode, width: number, targetHeight?: numb
   const n = node.children.length
 
   const resolved = node.children.map(child => {
-    const resolvedWidth = crossAlign === 'stretch' || child.type === 'separator' ? width : childCrossWidthInColumn(child, width)
+    // A child's own `alignSelf` (see SelfAlignable in nodes.ts) overrides this column's `crossAlign`
+    // for that child alone — every other sibling still uses the column's own setting.
+    const effectiveCrossAlign = childAlignSelf(child) ?? crossAlign
+    const resolvedWidth = effectiveCrossAlign === 'stretch' || child.type === 'separator' ? width : childCrossWidthInColumn(child, width)
     const height = measureNodeHeight(child, resolvedWidth)
-    return { node: child, width: resolvedWidth, height }
+    return { node: child, width: resolvedWidth, height, crossAlign: effectiveCrossAlign }
   })
 
   const naturalMainSize = resolved.reduce((acc, r) => acc + r.height, 0) + gap * Math.max(0, n - 1)
@@ -229,7 +182,7 @@ export function layoutColumn(node: GroupNode, width: number, targetHeight?: numb
   let y = leading
   const children: LaidOutChild[] = []
   for (const r of resolved) {
-    const x = crossAlign === 'stretch' ? 0 : crossAlign === 'center' ? (width - r.width) / 2 : crossAlign === 'end' ? width - r.width : 0
+    const x = r.crossAlign === 'stretch' ? 0 : r.crossAlign === 'center' ? (width - r.width) / 2 : r.crossAlign === 'end' ? width - r.width : 0
     children.push({ node: r.node, box: { x, y, width: r.width, height: r.height } })
     y += r.height + between
   }
@@ -278,7 +231,11 @@ export function layoutRow(node: GroupNode, width: number): DirectionLayoutResult
     if (r.node.type === 'separator') {
       children.push({ node: r.node, box: { x, y: 0, width: r.width, height: rowHeight } })
     } else {
-      const y = crossAlign === 'center' ? (rowHeight - r.height) / 2 : crossAlign === 'end' ? rowHeight - r.height : 0
+      // A child's own `alignSelf` overrides this row's `crossAlign` for its vertical position alone.
+      // 'stretch' has no vertical-stretch effect here (row-child height is always intrinsic — see
+      // SelfAlignable in nodes.ts) and falls back to 'start' (y = 0), same as the default.
+      const effectiveCrossAlign = childAlignSelf(r.node) ?? crossAlign
+      const y = effectiveCrossAlign === 'center' ? (rowHeight - r.height) / 2 : effectiveCrossAlign === 'end' ? rowHeight - r.height : 0
       children.push({ node: r.node, box: { x, y, width: r.width, height: r.height } })
     }
     x += r.width + between
@@ -328,7 +285,7 @@ function columnGroupSplit(node: GroupNode, width: number, availableHeight: numbe
 
     if (!cutMade) {
       const localAvailable = availableHeight - childTop
-      if (localAvailable > 0 && isSplittableNode(child.node)) {
+      if (localAvailable > 0 && isSplittable(child.node)) {
         const childSplit = splitNode(child.node, child.box.width, localAvailable)
         if (childSplit !== null) {
           fitted.push(translateRendered(childSplit.rendered, child.box.x, childTop))
@@ -385,7 +342,7 @@ function rowGroupSplit(node: GroupNode, width: number, availableHeight: number):
       continue
     }
 
-    if (isSplittableNode(child.node)) {
+    if (isSplittable(child.node)) {
       const childSplit = splitNode(child.node, box.width, availableHeight)
       if (childSplit !== null) {
         fitted.push(translateRendered(childSplit.rendered, box.x, 0))
@@ -416,22 +373,32 @@ function rowGroupSplit(node: GroupNode, width: number, availableHeight: number):
   }
 }
 
-export const groupMeasurer: NodeMeasurer<GroupNode> = {
-  // Static per-registry-entry field; the real, direction/splitColumns-aware check is behavior.ts's
-  // isSplittable(node), which is what paginate.ts actually calls before invoking split().
-  splittable: false,
+// Group: inert positioned box purely for devtools/debugging parity with the authored tree. Children
+// boxes are already resolved relative to this SAME (originX, originY), not to the group's own box,
+// so recursion reuses the unchanged origin — see geometry.ts's translateRendered invariant.
+function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
+  const groupEl = styledDiv({ left: `${x}px`, top: `${y}px`, width: `${rendered.box.width}px`, height: `${rendered.box.height}px` })
+  ctx.container.appendChild(groupEl)
+  for (const child of rendered.children) renderNodeDom(child, ctx.originX, ctx.originY, ctx)
+}
 
-  measureHeight(node, width) {
-    return node.direction === 'row' ? layoutRow(node, width).contentHeight : layoutColumn(node, width).contentHeight
-  },
+// No PDF equivalent beyond recursing — a group's wrapper box is DOM-devtools-only paint, nothing to
+// draw in the PDF.
+async function drawPdf(rendered: Rendered, _x: number, _y: number, ctx: PdfRenderCtx): Promise<void> {
+  for (const child of rendered.children) await drawPdfNode(child, ctx.originX, ctx.originY, ctx.pdf)
+}
 
-  layout(node, width) {
-    return layoutGroupNode(node, width)
-  },
-
-  split(node, width, availableHeight) {
+registerNode('group', {
+  measureHeight: (node, width) => (node.direction === 'row' ? layoutRow(node, width).contentHeight : layoutColumn(node, width).contentHeight),
+  // The real, direction/splitColumns-aware check — this is what behavior.ts's generic isSplittable()
+  // dispatches to for a group node.
+  isSplittable: node => node.direction === 'column' || node.splitColumns === true,
+  split: (node, width, availableHeight) => {
     if (node.direction === 'column') return columnGroupSplit(node, width, availableHeight)
     if (node.direction === 'row' && node.splitColumns === true) return rowGroupSplit(node, width, availableHeight)
     return null
   },
-}
+  layout: layoutGroupNode,
+  renderDom,
+  drawPdf,
+})

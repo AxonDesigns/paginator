@@ -1,4 +1,6 @@
-export { definePage, group, text, richText, separator, pageBreak, image, container, table, chart, rowGroup } from './core/nodes.ts'
+import './nodes/index.ts'
+
+export { definePage, group, text, richText, separator, pageBreak, image, svg, container, table, chart, rowGroup } from './core/nodes.ts'
 export { paginate } from './core/paginate.ts'
 export { mount, renderPreview, printDocument } from './render/shadow-dom.ts'
 export { ready } from './ready.ts'
@@ -30,6 +32,7 @@ export type {
   SeparatorNode,
   PageBreakNode,
   ImageNode,
+  SvgNode,
   ContainerNode,
   ContainerBorder,
   TableNode,

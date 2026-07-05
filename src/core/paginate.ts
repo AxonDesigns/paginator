@@ -8,7 +8,7 @@ import type { ContainerBorder, HeaderFooterContent, HeaderFooterContext, Margins
 import type { RenderedNode } from './geometry.ts'
 import { translateRendered } from './geometry.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from './behavior.ts'
-import { layoutColumn, subtreeHasPageBreak } from './group-layout.ts'
+import { layoutColumn, subtreeHasPageBreak } from '../nodes/group.ts'
 import { resolvePageSize } from './page-sizes.ts'
 
 export type PaginatedPage = {
@@ -132,10 +132,13 @@ function renderHeaderFooterForPage(content: HeaderFooterContent | undefined, wid
 
 // Shared by watermark/background/border — all three are page-varying-aware the same way header/
 // footer content is (a plain value, or a `{pageNumber, totalPages}` callback producing one), just
-// without header/footer's extra Node-layout step.
-function resolvePerPageValue<T>(content: T | ((ctx: HeaderFooterContext) => T) | undefined, pageNumber: number, totalPages: number): T | null {
+// without header/footer's extra Node-layout step. The callback form may also return undefined/null
+// to opt a specific page out entirely (e.g. a watermark only on page 1) — `?? null` normalizes that
+// alongside the "no content configured at all" case, so callers only ever check a single `=== null`.
+function resolvePerPageValue<T>(content: T | ((ctx: HeaderFooterContext) => T | undefined | null) | undefined, pageNumber: number, totalPages: number): T | null {
   if (content === undefined) return null
-  return typeof content === 'function' ? (content as (ctx: HeaderFooterContext) => T)({ pageNumber, totalPages }) : content
+  const resolved = typeof content === 'function' ? (content as (ctx: HeaderFooterContext) => T | undefined | null)({ pageNumber, totalPages }) : content
+  return resolved ?? null
 }
 
 // Single-page body `mainAlign` centering: applied as an isolated post-processing pass so the

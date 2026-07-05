@@ -1,38 +1,28 @@
-// Table layout: a fixed grid of TableColumn × TableRow, each cell holding arbitrary nested
-// content. Rows are atomic (a row's content never splits mid-row) — and, when colSpan/rowSpan are
-// in play, a rowSpan cluster of physical rows is atomic as a whole (see "Cell spans" in GUIDE.md).
-// The table itself splits between rows/clusters, with `headerRows` leading rows repeating at the
-// top of every continuation page.
+// Table layout: a fixed grid of TableColumn × TableRow, each cell holding arbitrary nested content.
+// Rows are atomic (a row's content never splits mid-row) — and, when colSpan/rowSpan are in play, a
+// rowSpan cluster of physical rows is atomic as a whole (see "Cell spans" in GUIDE.md). The table
+// itself splits between rows/clusters, with `headerRows` leading rows repeating at the top of every
+// continuation page.
 //
 // Column grouping (report-style row grouping + subtotals, see GUIDE.md) is desugared entirely at
 // `table()` build time (nodes.ts) — by the time a TableNode reaches this file, `column.group` is
-// already gone and any grouped rows are already synthesized `kind: 'header'` rows woven into a
-// plain flat `rows` array. Cell spans are ALSO resolved entirely at `table()` build time
-// (`resolveCellSpans()`), baking `__resolvedCol`/`__atomicWithNext` onto cells/rows — this file
-// never re-derives implicit-flow column positions or span-cluster boundaries, it just reads them.
+// already gone and any grouped rows are already synthesized `kind: 'header'` rows woven into a plain
+// flat `rows` array. Cell spans are ALSO resolved entirely at `table()` build time
+// (`resolveCellSpans()`), baking `__resolvedCol`/`__atomicWithNext` onto cells/rows — this file never
+// re-derives implicit-flow column positions or span-cluster boundaries, it just reads them.
 //
-// This module cannot import the generic measureNodeHeight/layoutNodeFull/splitNode dispatchers
-// from behavior.ts — behavior.ts must import `tableMeasurer` from here to register it, so the
-// reverse import would be circular (same reasoning group-layout.ts's header comment gives for
-// itself). It duplicates a small local dispatch instead, delegating `group`-typed cell content to
-// group-layout.ts's exported `groupMeasurer`, and importing `childCrossWidthInColumn` for
-// non-stretch cell alignment's shrink-wrap width. Combined with group-layout.ts importing
-// `tableMeasurer` from here (to lay out a table nested inside a row/column), this forms a
-// two-file cycle — safe ONLY because both sides reference each other exclusively inside function
-// bodies, never at module top level. See group-layout.ts's header comment for the full argument.
-// Do not hoist either cross-reference out of a function body.
+// Unlike the old table-layout.ts, cell content dispatches into the fully generic
+// measureNodeHeight/layoutNodeFull dispatchers from behavior.ts — safe now that behavior.ts never
+// imports concrete node modules, so there's no cycle left to avoid by hand-rolling a local copy.
 
-import type { ContainerBorder, Node, TableCell, TableColumn, TableNode, TableRow } from './nodes.ts'
-import type { Box, RenderedNode, RenderedTableCell, RenderedTableRow } from './geometry.ts'
-import { translateRendered } from './geometry.ts'
-import type { NodeMeasurer, SplitOutcome } from './behavior.ts'
-import { textMeasurer } from './measure-text.ts'
-import { richTextMeasurer } from './measure-rich-text.ts'
-import { separatorMainSize, separatorMeasurer } from './separator-layout.ts'
-import { imageMeasurer } from './image-layout.ts'
-import { childCrossWidthInColumn, groupMeasurer, resolveFlexWidths, type RowChildSizing } from './group-layout.ts'
-import { chartMeasurer } from './chart-layout.ts'
-import { containerMeasurer } from './container-layout.ts'
+import type { ContainerBorder, Node, TableCell, TableColumn, TableNode, TableRow } from '../../core/nodes.ts'
+import type { Box, RenderedNode, RenderedTableCell, RenderedTableRow } from '../../core/geometry.ts'
+import { translateRendered } from '../../core/geometry.ts'
+import { layoutNodeFull, measureNodeHeight } from '../../core/behavior.ts'
+import type { SplitOutcome } from '../../core/behavior.ts'
+import { resolveFlexWidths } from '../../core/flex-widths.ts'
+import type { RowChildSizing } from '../../core/flex-widths.ts'
+import { childCrossWidthInColumn } from '../group.ts'
 
 const EPSILON = 0.01
 
@@ -41,36 +31,10 @@ const EPSILON = 0.01
 // from the column grid). Fixed, not configurable this pass — see GUIDE.md.
 const GROUP_INDENT = 16
 
-// --- Local node dispatch (duplicated from group-layout.ts's own copy — see header comment) ---
-
-function measureNodeHeight(node: Node, width: number): number {
-  if (node.type === 'text') return textMeasurer.measureHeight(node, width)
-  if (node.type === 'richText') return richTextMeasurer.measureHeight(node, width)
-  if (node.type === 'separator') return separatorMainSize(node)
-  if (node.type === 'page-break') return 0
-  if (node.type === 'image') return imageMeasurer.measureHeight(node, width)
-  if (node.type === 'group') return groupMeasurer.measureHeight(node, width)
-  if (node.type === 'chart') return chartMeasurer.measureHeight(node, width)
-  if (node.type === 'container') return containerMeasurer.measureHeight(node, width)
-  return tableMeasurer.measureHeight(node, width)
-}
-
-function layoutNode(node: Node, width: number): RenderedNode {
-  if (node.type === 'text') return textMeasurer.layout(node, width)
-  if (node.type === 'richText') return richTextMeasurer.layout(node, width)
-  if (node.type === 'separator') return separatorMeasurer.layout(node, width)
-  if (node.type === 'page-break') return { type: 'page-break', box: { x: 0, y: 0, width, height: 0 }, node }
-  if (node.type === 'image') return imageMeasurer.layout(node, width)
-  if (node.type === 'group') return groupMeasurer.layout(node, width)
-  if (node.type === 'chart') return chartMeasurer.layout(node, width)
-  if (node.type === 'container') return containerMeasurer.layout(node, width)
-  return tableMeasurer.layout(node, width)
-}
-
 // `content` is optional on TableCell (unset for a grouped column's cell, which never reaches this
 // file post-desugaring). table()'s own validation already guarantees it's present on every cell
 // that DOES reach here — this makes a future desugaring bug fail loudly at one obvious spot
-// instead of a confusing `undefined.type` crash deeper inside measureNodeHeight/layoutNode.
+// instead of a confusing `undefined.type` crash deeper inside measureNodeHeight/layoutNodeFull.
 function requireContent(cell: TableCell): Node {
   if (cell.content === undefined) {
     throw new Error('[paginator] table cell is missing "content" — this indicates a table() validation bug, not a normal runtime condition.')
@@ -86,7 +50,7 @@ function resolveColumnSizing(column: TableColumn): RowChildSizing {
   return { kind: 'flex', weight: flex ?? 1 }
 }
 
-// Exported for shadow-dom.ts's border-line positions.
+// Exported for table/dom.ts's and table/pdf.ts's border-line positions.
 export function resolveColumnWidths(columns: TableColumn[], width: number): number[] {
   return resolveFlexWidths(columns.map(resolveColumnSizing), width)
 }
@@ -114,7 +78,7 @@ function layoutCell(cell: TableCell, column: TableColumn, colWidth: number, tabl
   const contentWidth = hAlign === 'stretch' ? availableWidth : Math.min(childCrossWidthInColumn(content, availableWidth), availableWidth)
   const contentHeight = measureNodeHeight(content, contentWidth)
   const x = padding + (hAlign === 'center' ? (availableWidth - contentWidth) / 2 : hAlign === 'end' ? availableWidth - contentWidth : 0)
-  const rendered = translateRendered(layoutNode(content, contentWidth), x, padding)
+  const rendered = translateRendered(layoutNodeFull(content, contentWidth), x, padding)
   return { contentBox: { x, y: padding, width: contentWidth, height: contentHeight }, rendered, padding }
 }
 
@@ -174,7 +138,7 @@ function prepareRowCells(row: CellsRow, columns: TableColumn[], colWidths: numbe
 //    CSS-table-style proportional redistribution; see GUIDE.md's Known Limitations for the visual
 //    trade-off this creates (extra space lands entirely in whatever ordinary cells share that last
 //    row, not spread evenly across the whole span).
-function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: number[], cellPadding: number): number[] {
+export function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: number[], cellPadding: number): number[] {
   const fullWidth = colWidths.reduce((a, b) => a + b, 0)
   const preparedPerRow: (PreparedCell[] | null)[] = []
   const heights: number[] = []
@@ -220,7 +184,7 @@ function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: 
   return heights
 }
 
-function layoutRows(rows: TableRow[], columns: TableColumn[], colWidths: number[], cellPadding: number): RenderedTableRow[] {
+export function layoutRows(rows: TableRow[], columns: TableColumn[], colWidths: number[], cellPadding: number): RenderedTableRow[] {
   const fullWidth = colWidths.reduce((a, b) => a + b, 0)
   const heights = resolveRowHeights(rows, columns, colWidths, cellPadding)
 
@@ -258,7 +222,7 @@ function layoutRows(rows: TableRow[], columns: TableColumn[], colWidths: number[
         return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, cells: renderCells(prepared, r) }
       }
       const availableWidth = Math.max(0, fullWidth - 2 * cellPadding - row.depth * GROUP_INDENT)
-      const content = translateRendered(layoutNode(row.content!, availableWidth), cellPadding + row.depth * GROUP_INDENT, rowY[r]! + cellPadding)
+      const content = translateRendered(layoutNodeFull(row.content!, availableWidth), cellPadding + row.depth * GROUP_INDENT, rowY[r]! + cellPadding)
       return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, background: row.background, content }
     }
 
@@ -292,95 +256,89 @@ function isAtomicWithNext(row: TableRow): boolean {
   return row.kind !== 'header' && (row.__atomicWithNext ?? false)
 }
 
-export const tableMeasurer: NodeMeasurer<TableNode> = {
-  splittable: true,
+export function measureTableHeight(node: TableNode, width: number): number {
+  const colWidths = resolveColumnWidths(node.columns, width)
+  const cellPadding = node.cellPadding ?? 0
+  return resolveRowHeights(node.rows, node.columns, colWidths, cellPadding).reduce((a, b) => a + b, 0)
+}
 
-  measureHeight(node, width) {
-    const colWidths = resolveColumnWidths(node.columns, width)
-    const cellPadding = node.cellPadding ?? 0
-    return resolveRowHeights(node.rows, node.columns, colWidths, cellPadding).reduce((a, b) => a + b, 0)
-  },
+export function layoutTable(node: TableNode, width: number): Extract<RenderedNode, { type: 'table' }> {
+  const colWidths = resolveColumnWidths(node.columns, width)
+  const cellPadding = node.cellPadding ?? 0
+  const rows = layoutRows(node.rows, node.columns, colWidths, cellPadding)
+  const height = rows.reduce((acc, r) => acc + r.box.height, 0)
+  return { type: 'table', box: { x: 0, y: 0, width, height }, node, rows }
+}
 
-  layout(node, width): RenderedNode {
-    const colWidths = resolveColumnWidths(node.columns, width)
-    const cellPadding = node.cellPadding ?? 0
-    const rows = layoutRows(node.rows, node.columns, colWidths, cellPadding)
-    const height = rows.reduce((acc, r) => acc + r.box.height, 0)
-    return { type: 'table', box: { x: 0, y: 0, width, height }, node, rows }
-  },
+export function splitTable(node: TableNode, width: number, availableHeight: number): SplitOutcome<TableNode> {
+  const colWidths = resolveColumnWidths(node.columns, width)
+  const cellPadding = node.cellPadding ?? 0
+  const headerRows = node.headerRows ?? 0
+  const headerBlock = node.rows.slice(0, headerRows)
+  const dataRows = node.rows.slice(headerRows)
 
-  split(node, width, availableHeight): SplitOutcome<TableNode> {
-    const colWidths = resolveColumnWidths(node.columns, width)
-    const cellPadding = node.cellPadding ?? 0
-    const headerRows = node.headerRows ?? 0
-    const headerBlock = node.rows.slice(0, headerRows)
-    const dataRows = node.rows.slice(headerRows)
+  const allHeights = resolveRowHeights(node.rows, node.columns, colWidths, cellPadding)
+  const headerBlockHeight = sumRange(allHeights, 0, headerRows)
+  const dataHeights = allHeights.slice(headerRows)
+  const remainderForData = availableHeight - headerBlockHeight
 
-    const allHeights = resolveRowHeights(node.rows, node.columns, colWidths, cellPadding)
-    const headerBlockHeight = sumRange(allHeights, 0, headerRows)
-    const dataHeights = allHeights.slice(headerRows)
-    const remainderForData = availableHeight - headerBlockHeight
+  // Tracks which group header(s) are "in scope" as we walk — index d holds the most recently
+  // placed depth-d header still open (not yet closed by a shallower-or-equal header). Rebuilt
+  // fresh on every split() call by walking `dataRows` from its own start.
+  const activeHeaders: HeaderRow[] = []
+  const fittedData: TableRow[] = []
+  let dataHeight = 0
+  let i = 0
+  while (i < dataRows.length) {
+    // Extend the cluster past `i` while each row so far is atomically bound to the next one —
+    // for an ordinary (non-spanning) table this loop never advances, so every cluster is exactly
+    // one row, byte-for-byte the pre-spans behavior.
+    let clusterEnd = i
+    while (clusterEnd + 1 < dataRows.length && isAtomicWithNext(dataRows[clusterEnd]!)) clusterEnd++
 
-    // Tracks which group header(s) are "in scope" as we walk — index d holds the most recently
-    // placed depth-d header still open (not yet closed by a shallower-or-equal header). Rebuilt
-    // fresh on every split() call by walking `dataRows` from its own start — see the comment this
-    // carried before cell-span clustering was added, which still applies unchanged.
-    const activeHeaders: HeaderRow[] = []
-    const fittedData: TableRow[] = []
-    let dataHeight = 0
-    let i = 0
-    while (i < dataRows.length) {
-      // Extend the cluster past `i` while each row so far is atomically bound to the next one —
-      // for an ordinary (non-spanning) table this loop never advances, so every cluster is exactly
-      // one row, byte-for-byte the pre-spans behavior.
-      let clusterEnd = i
-      while (clusterEnd + 1 < dataRows.length && isAtomicWithNext(dataRows[clusterEnd]!)) clusterEnd++
+    const clusterHeight = sumRange(dataHeights, i, clusterEnd + 1)
+    if (dataHeight + clusterHeight > remainderForData + EPSILON) break
 
-      const clusterHeight = sumRange(dataHeights, i, clusterEnd + 1)
-      if (dataHeight + clusterHeight > remainderForData + EPSILON) break
-
-      for (let j = i; j <= clusterEnd; j++) {
-        const row = dataRows[j]!
-        fittedData.push(row)
-        if (row.kind === 'header') {
-          activeHeaders.length = row.depth
-          activeHeaders.push(row)
-        }
-      }
-      dataHeight += clusterHeight
-      i = clusterEnd + 1
-    }
-
-    if (fittedData.length === 0) return null // orphan: not even one cluster fit (header rows alone don't count as progress)
-
-    const consumedHeight = headerBlockHeight + dataHeight
-    const restDataRows = dataRows.slice(fittedData.length)
-    const renderedRows = layoutRows([...headerBlock, ...fittedData], node.columns, colWidths, cellPadding)
-
-    // `node` here is the FULL original node (unsliced), matching columnGroupSplit's own pattern
-    // (group-layout.ts:309) — safe now that background/border resolution happens at layout time
-    // above rather than by re-indexing node.rows/node.columns positionally against rendered.rows
-    // at render time (which column grouping's synthesized rows would break).
-    const rendered: RenderedNode = {
-      type: 'table',
-      box: { x: 0, y: 0, width, height: consumedHeight },
-      node,
-      rows: renderedRows,
-    }
-
-    let rest: TableNode | null = null
-    if (restDataRows.length > 0) {
-      // Independent of each other: `repeatHeaderRow` governs the table's own literal caption
-      // prefix; each active group header's own (already-resolved) `.repeat` governs itself.
-      const repeatHeaderRow = node.repeatHeaderRow ?? true
-      const repeatedGroupHeaders = activeHeaders.filter(h => h.repeat !== false && hasRemainingContentAtDepth(restDataRows, h.depth))
-      rest = {
-        ...node,
-        rows: [...(repeatHeaderRow ? headerBlock : []), ...repeatedGroupHeaders, ...restDataRows],
-        headerRows: repeatHeaderRow ? headerRows : 0,
+    for (let j = i; j <= clusterEnd; j++) {
+      const row = dataRows[j]!
+      fittedData.push(row)
+      if (row.kind === 'header') {
+        activeHeaders.length = row.depth
+        activeHeaders.push(row)
       }
     }
+    dataHeight += clusterHeight
+    i = clusterEnd + 1
+  }
 
-    return { rendered, consumedHeight, rest }
-  },
+  if (fittedData.length === 0) return null // orphan: not even one cluster fit (header rows alone don't count as progress)
+
+  const consumedHeight = headerBlockHeight + dataHeight
+  const restDataRows = dataRows.slice(fittedData.length)
+  const renderedRows = layoutRows([...headerBlock, ...fittedData], node.columns, colWidths, cellPadding)
+
+  // `node` here is the FULL original node (unsliced) — background/border resolution happens at
+  // layout time above rather than by re-indexing node.rows/node.columns positionally against
+  // rendered.rows at render time (which column grouping's synthesized rows would break).
+  const rendered: RenderedNode = {
+    type: 'table',
+    box: { x: 0, y: 0, width, height: consumedHeight },
+    node,
+    rows: renderedRows,
+  }
+
+  let rest: TableNode | null = null
+  if (restDataRows.length > 0) {
+    // Independent of each other: `repeatHeaderRow` governs the table's own literal caption
+    // prefix; each active group header's own (already-resolved) `.repeat` governs itself.
+    const repeatHeaderRow = node.repeatHeaderRow ?? true
+    const repeatedGroupHeaders = activeHeaders.filter(h => h.repeat !== false && hasRemainingContentAtDepth(restDataRows, h.depth))
+    rest = {
+      ...node,
+      rows: [...(repeatHeaderRow ? headerBlock : []), ...repeatedGroupHeaders, ...restDataRows],
+      headerRows: repeatHeaderRow ? headerRows : 0,
+    }
+  }
+
+  return { rendered, consumedHeight, rest }
 }

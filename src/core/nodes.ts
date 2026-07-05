@@ -38,6 +38,14 @@ export type TextWatermark = WatermarkBase & {
   fontSize?: number
   /** Default '#000000'. */
   color?: string
+  /** Default false: generatePdf() rasterizes the text to a transparent PNG and draws it as an image,
+   *  so it can't be selected/copied out of the PDF (pdfkit's `.text()` otherwise embeds real,
+   *  selectable/searchable glyphs like any other text in the document — rarely desired for a
+   *  decorative stamp like "CONFIDENTIAL" sitting over real body content). Set `true` to keep it as
+   *  live vector text instead. Only affects generatePdf() — the on-screen preview's watermark is
+   *  always `pointer-events: none` regardless of this flag, since it's decorative-only and never a
+   *  hit-test/interaction target. */
+  selectable?: boolean
 }
 
 export type ImageWatermark = WatermarkBase & {
@@ -48,13 +56,17 @@ export type ImageWatermark = WatermarkBase & {
 }
 
 export type Watermark = TextWatermark | ImageWatermark
-export type WatermarkContent = Watermark | ((ctx: HeaderFooterContext) => Watermark)
+// The callback form may return undefined/null to skip the watermark entirely on a given page (e.g.
+// only page 1 gets one) — the non-callback form has no such escape hatch since omitting `watermark`
+// outright already means "none," so there'd be nothing for a static null/undefined to add.
+export type WatermarkContent = Watermark | ((ctx: HeaderFooterContext) => Watermark | undefined | null)
 
 // Same per-page-aware shape as HeaderFooterContent/WatermarkContent: a plain value, resolved once
 // per page in paginate() with a `{pageNumber, totalPages}` callback when a page-varying decoration
 // is needed (e.g. a colored background only on the cover page, or a heavier border on the last page).
-export type PageBackgroundContent = string | ((ctx: HeaderFooterContext) => string)
-export type PageBorderContent = ContainerBorder | ((ctx: HeaderFooterContext) => ContainerBorder)
+// Like WatermarkContent, the callback may return undefined/null to opt a specific page out entirely.
+export type PageBackgroundContent = string | ((ctx: HeaderFooterContext) => string | undefined | null)
+export type PageBorderContent = ContainerBorder | ((ctx: HeaderFooterContext) => ContainerBorder | undefined | null)
 
 export type PageDef = {
   size: PageSize
@@ -84,6 +96,16 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 export type MainAlign = 'start' | 'center' | 'end' | 'space-between' | 'space-around'
 export type CrossAlign = 'start' | 'center' | 'end' | 'stretch'
 export type TextAlign = 'left' | 'center' | 'right'
+
+// Overrides the parent group's `crossAlign` for this child alone, without affecting siblings —
+// mirrors CSS `align-self`. In a COLUMN parent: `'stretch'` claims the column's full width for this
+// child (bypassing its own shrink-wrap sizing — e.g. a Group's mainAlign-driven layout, or
+// Container/Image/Svg/Chart's own `width`) even though the column itself isn't stretching every
+// child. In a ROW parent: only affects this child's vertical position among mismatched-height
+// siblings (start/center/end) — `'stretch'` has no effect there (falls back to `'start'`), since a
+// row child's height is always intrinsic. Not given to Separator/PageBreak/Table: those already
+// always claim full width unconditionally in childCrossWidthInColumn, so there's nothing to override.
+export type SelfAlignable = { alignSelf?: CrossAlign }
 
 // Main-axis sizing hint for a ROW group's direct children (row width division only — column
 // children keep intrinsic/content-driven height always, since pagination depends on that). A
@@ -131,7 +153,7 @@ export type Interactive = {
   accepts?: string[]
 }
 
-type GroupCommon = Interactive & {
+type GroupCommon = Interactive & SelfAlignable & {
   type: 'group'
   mainAlign?: MainAlign
   crossAlign?: CrossAlign
@@ -159,7 +181,7 @@ export type GroupNode = RowGroupNode | ColumnGroupNode
 
 export type LayoutCursorLike = { segmentIndex: number; graphemeIndex: number }
 
-export type TextNode = Interactive & {
+export type TextNode = Interactive & SelfAlignable & {
   type: 'text'
   content: string
   fontFamily: string
@@ -206,7 +228,7 @@ export type RichInlineCursorLike = { itemIndex: number; segmentIndex: number; gr
 // Node union's own "Phase 2" comment below. No `whiteSpace`/`wordBreak` fields: pretext's
 // rich-inline module (@chenglou/pretext/rich-inline) is documented as inline-only and
 // `white-space: normal`-only on purpose, so those TextNode options don't apply here.
-export type RichTextNode = Interactive & {
+export type RichTextNode = Interactive & SelfAlignable & {
   type: 'richText'
   runs: RichTextRun[]
   /** Paragraph-level defaults — any run above that omits a field falls back to this. */
@@ -245,7 +267,7 @@ export type PageBreakNode = Interactive & { type: 'page-break' }
 
 export type ObjectFit = 'fill' | 'contain' | 'cover' | 'none' | 'scale-down'
 
-export type ImageNode = Interactive & {
+export type ImageNode = Interactive & SelfAlignable & {
   type: 'image'
   src: string
   alt?: string
@@ -267,7 +289,32 @@ export type ImageNode = Interactive & {
   borderRadius?: number
   /** 0-1. */
   opacity?: number
-  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
+  flex?: FlexSize
+}
+
+export type SvgNode = Interactive & SelfAlignable & {
+  type: 'svg'
+  /** Raw SVG markup (a full <svg>...</svg> string) — parsed at RENDER time (once per renderer: the
+   *  DOM preview inserts it directly, generatePdf() feeds it through svg-to-pdfkit), never at
+   *  construction, same "never auto-detected/parsed eagerly" contract ImageNode/ChartNode already
+   *  have (see image()). */
+  markup: string
+  /**
+   * At least one of {width & height}, {width & aspectRatio}, {height & aspectRatio}, or
+   * {aspectRatio alone} is required — see svg(), same rule as ImageNode.
+   */
+  width?: number
+  height?: number
+  /** width / height. Used to derive whichever of width/height is missing. */
+  aspectRatio?: number
+  /** 0-1. */
+  opacity?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
   flex?: FlexSize
 }
 
@@ -277,18 +324,21 @@ export type ContainerBorder = { thickness?: number; color?: string }
 // has: background/border/borderRadius/padding. Unlike group, it never lays out multiple children;
 // it exists purely to decorate one child, plus width/flex/height sizing whose mechanism is
 // identical to ImageNode's (see container-layout.ts's header comment for the full sizing contract).
-export type ContainerNode = Interactive & {
+export type ContainerNode = Interactive & SelfAlignable & {
   type: 'container'
   child: Node
   /** Natural/shrink-wrap width in a non-stretch context — same mechanism as ImageNode.width (see
-   *  childCrossWidthInColumn in group-layout.ts). Overridden by an ancestor's crossAlign: 'stretch',
-   *  same known limitation image/chart already have. */
+   *  childCrossWidthInColumn in group-layout.ts). Overridden by an ancestor's crossAlign: 'stretch'
+   *  or this node's own `alignSelf: 'stretch'`, same known limitation image/chart already have. Also
+   *  doubles as the row-slot size when this node is a ROW child and `flex` is left unset. */
   width?: number
   /** MINIMUM content-box height, NOT exact/clipped — box height is
    *  Math.max(height ?? 0, childNaturalHeight + padding.top + padding.bottom). Not enforced on a
    *  fragment produced by splitting across a page boundary (see container-layout.ts). */
   height?: number
-  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
   flex?: FlexSize
   padding?: number | Margins
   background?: string
@@ -372,7 +422,7 @@ export type ChartLegendConfig = {
 
 export type ChartTitleConfig = { text: string; fontSize?: number; color?: string }
 
-type ChartCommon = Interactive & {
+type ChartCommon = Interactive & SelfAlignable & {
   type: 'chart'
   width?: number
   height?: number
@@ -388,7 +438,9 @@ type ChartCommon = Interactive & {
    *  (`registerFont()`) — an unregistered family falls back to Helvetica, same warn-once behavior
    *  as a TextNode with a missing font. */
   fontFamily?: string
-  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
   flex?: FlexSize
 }
 
@@ -630,7 +682,7 @@ export type TableNode = Interactive & {
   flex?: FlexSize
 }
 
-export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode
+export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode | SvgNode
 // Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
 // new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 
@@ -674,6 +726,20 @@ export function image(config: Omit<ImageNode, 'type'>): ImageNode {
     )
   }
   return { type: 'image', ...config }
+}
+
+export function svg(config: Omit<SvgNode, 'type'>): SvgNode {
+  if (!config.markup.includes('<svg')) {
+    throw new Error('[paginator] svg() "markup" does not look like an SVG document — expected a string containing an "<svg" root element.')
+  }
+  const hasHeight = config.height !== undefined
+  const hasAspectRatio = config.aspectRatio !== undefined
+  if (!hasHeight && !hasAspectRatio) {
+    throw new Error(
+      '[paginator] svg() needs "height" or "aspectRatio" to determine its height — dimensions are never auto-detected from the markup.',
+    )
+  }
+  return { type: 'svg', ...config }
 }
 
 export function container(config: Omit<ContainerNode, 'type' | 'child'>, child: Node): ContainerNode {

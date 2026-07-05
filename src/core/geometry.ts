@@ -1,6 +1,6 @@
 // Resolved layout geometry — always page-content-box-relative by the time pagination finishes.
 
-import type { ChartNode, ContainerBorder, ContainerNode, GroupNode, ImageNode, PageBreakNode, RichTextNode, SeparatorNode, TableNode, TextNode } from './nodes.ts'
+import type { ChartNode, ContainerBorder, ContainerNode, GroupNode, ImageNode, PageBreakNode, RichTextNode, SeparatorNode, SvgNode, TableNode, TextNode } from './nodes.ts'
 
 export type Box = { x: number; y: number; width: number; height: number }
 
@@ -29,6 +29,7 @@ export type RenderedNode =
   | { type: 'group'; box: Box; node: GroupNode; children: RenderedNode[] }
   | { type: 'page-break'; box: Box; node: PageBreakNode }
   | { type: 'image'; box: Box; node: ImageNode }
+  | { type: 'svg'; box: Box; node: SvgNode }
   | { type: 'table'; box: Box; node: TableNode; rows: RenderedTableRow[] }
   | { type: 'chart'; box: Box; node: ChartNode }
   | { type: 'container'; box: Box; node: ContainerNode; child: RenderedNode }
