@@ -34,20 +34,22 @@
 import PDFDocument from 'pdfkit/js/pdfkit.standalone.js'
 import type { PaginatedResult } from '../core/paginate.ts'
 import type { RenderedNode, RenderedTableCell, RenderedTableRow } from '../core/geometry.ts'
-import type { CategoricalChartNode, ChartSeries, ImageNode, ObjectFit, RadialChartNode, SeparatorNode, TableNode, TextNode } from '../core/nodes.ts'
+import type { CategoricalChartNode, ChartSeries, ImageNode, ObjectFit, RadialChartNode, RichTextNode, RichTextRun, SeparatorNode, TableNode, TextNode, Watermark } from '../core/nodes.ts'
 import { resolveColumnWidths } from '../core/table-layout.ts'
+import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
+import { measureTextWidthPx } from './text-measure.ts'
 import { BORDER_EPSILON, subtractIntervals } from './interval-utils.ts'
 import { lookupFont, normalizeFontWeight } from './font-registry.ts'
 import type { FontStyle, RegisteredFont } from './font-registry.ts'
 import {
   AXIS_COLOR,
+  BAR_CORNER_RADIUS,
   BAR_MAX_THICKNESS,
+  CHART_FONT_FAMILY,
   GRIDLINE_COLOR,
   INK_MUTED,
   INK_SECONDARY,
   LINE_STROKE_WIDTH,
-  MARKER_RADIUS,
-  MARKER_RING_RADIUS,
   MARK_SURFACE_GAP,
   SURFACE_COLOR,
   areaFillGradientVector,
@@ -62,6 +64,7 @@ import {
   resolveChartDomain,
   resolveColor,
   resolveLineFill,
+  resolveMarkerRadii,
   resolveShowLegend,
   resolveTitle,
   stackedBarSegments,
@@ -90,22 +93,55 @@ function toPdfRect(xPx: number, yPx: number, wPx: number, hPx: number): { x: num
   return { x: pxToPt(xPx), y: pxToPt(yPx), width: pxToPt(wPx), height: pxToPt(hPx) }
 }
 
-// Every color in this codebase's node types is a plain CSS `string` with no enforced format; every
-// actual usage (including the whole main.ts demo) is hex. Documented v1 scope limit — falls back to
-// black + a warning for anything else, same tier as chart-render.ts's own approximations. pdfkit's own
-// color normalizer only understands 3/6-digit hex (no alpha channel), same as what this codebase's
-// colors have ever actually carried through to the PDF (pdf-lib's rgb() dropped any 8-digit alpha
-// byte too) — so this validates/normalizes to a plain `#rrggbb` string and hands it to pdfkit as-is,
-// rather than building a separate color-object type the way pdf-lib's rgb() required.
+// Every color in this codebase's node types is a plain CSS `string` with no enforced format.
+// pdfkit's own color normalizer only understands 3/6-digit hex (no alpha channel) — so this
+// validates/normalizes to a plain `#rrggbb` string and hands it to pdfkit as-is, rather than
+// building a separate color-object type the way pdf-lib's rgb() required. Anything past hex
+// (rgb()/rgba()/hsl()/hsla()/named colors/etc.) is resolved via `normalizeCssColor` below, dropping
+// any alpha channel same as an 8-digit hex already does — pdf-lib's rgb() dropped alpha too, so
+// this isn't a new limitation for anything that previously worked.
 function resolvePdfColor(css: string): string {
-  const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.exec(css.trim())
-  if (match === null) {
-    console.warn(`[paginator] generatePdf(): color "${css}" is not a recognized hex color — falling back to black.`)
-    return '#000000'
+  const trimmed = css.trim()
+  const hexMatch = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.exec(trimmed)
+  if (hexMatch !== null) {
+    let hex = hexMatch[1]!
+    if (hex.length === 3) hex = [...hex].map(c => c + c).join('')
+    return `#${hex.slice(0, 6)}`
   }
-  let hex = match[1]!
-  if (hex.length === 3) hex = [...hex].map(c => c + c).join('')
-  return `#${hex.slice(0, 6)}`
+
+  const normalized = normalizeCssColor(trimmed)
+  if (normalized !== null) return normalized
+
+  console.warn(`[paginator] generatePdf(): color "${css}" is not a recognized CSS color — falling back to black.`)
+  return '#000000'
+}
+
+// Resolves anything CSS accepts as a color (rgb()/rgba()/hsl()/hsla()/named keywords/etc.) to a
+// plain `#rrggbb` string by delegating to the browser's own CSS color parser — via canvas 2D's
+// `fillStyle` setter/getter, which silently ignores an unparseable value (leaving the property at
+// its previous value) and otherwise normalizes to `#rrggbb` (opaque) or `rgba(r, g, b, a)` (has
+// alpha). This is the same "trust the browser's own engine instead of hand-rolling one" approach
+// measureFontMetricsPx already uses for font metrics — complete and spec-correct for free, rather
+// than maintaining a hand-written named-color table or an hsl->rgb converter. `null` = `css` didn't
+// parse as any valid CSS color at all.
+let colorCanvasCtx: OffscreenCanvasRenderingContext2D | null = null
+const COLOR_PARSE_SENTINEL = '#123456'
+
+function normalizeCssColor(css: string): string | null {
+  if (colorCanvasCtx === null) {
+    const ctx2d = new OffscreenCanvas(1, 1).getContext('2d')
+    if (ctx2d === null) return null
+    colorCanvasCtx = ctx2d
+  }
+  colorCanvasCtx.fillStyle = COLOR_PARSE_SENTINEL
+  colorCanvasCtx.fillStyle = css
+  const result = colorCanvasCtx.fillStyle
+  if (result === COLOR_PARSE_SENTINEL && css.toLowerCase() !== COLOR_PARSE_SENTINEL) return null
+  if (result.startsWith('#')) return result
+  const rgbaMatch = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*[\d.]+\s*)?\)$/.exec(result)
+  if (rgbaMatch === null) return null // unreachable in practice — fillStyle only ever normalizes to #rrggbb or rgba(...)
+  const toHex = (n: string): string => Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0')
+  return `#${toHex(rgbaMatch[1]!)}${toHex(rgbaMatch[2]!)}${toHex(rgbaMatch[3]!)}`
 }
 
 function warnMissingFontOnce(ctx: PdfContext, family: string, weight: number, style: FontStyle): void {
@@ -152,6 +188,19 @@ function resolveTextFont(ctx: PdfContext, node: TextNode): string {
   return pickFallbackFont(ctx, weight, style)
 }
 
+// Chart text (title/axis/legend) goes through the SAME font registry a TextNode does — an
+// unregistered family falls back to Helvetica with a one-time console.warn, same as resolveTextFont
+// above. Chart weight is binary (bold for the title/emphasis cases, regular otherwise), unlike a
+// TextNode's arbitrary numeric weight, so this maps that straight to 700/400 rather than plumbing a
+// numeric weight through every chart draw call.
+function resolveChartFontName(ctx: PdfContext, fontFamily: string, bold: boolean): string {
+  const weight = bold ? 700 : 400
+  const registered = lookupFont(fontFamily, weight, 'normal')
+  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
+  warnMissingFontOnce(ctx, fontFamily, weight, 'normal')
+  return pickFallbackFont(ctx, weight, 'normal')
+}
+
 function textNodeFontString(node: TextNode): string {
   const style = node.fontStyle === 'italic' ? 'italic ' : ''
   const weight = node.fontWeight ?? 400
@@ -161,6 +210,15 @@ function textNodeFontString(node: TextNode): string {
 const fontMetricsCache = new Map<string, { ascentPx: number; descentPx: number }>()
 let metricsCanvasCtx: OffscreenCanvasRenderingContext2D | null = null
 
+function getMetricsCanvasCtx(): OffscreenCanvasRenderingContext2D {
+  if (metricsCanvasCtx === null) {
+    const ctx2d = new OffscreenCanvas(1, 1).getContext('2d')
+    if (ctx2d === null) throw new Error('[paginator] generatePdf(): could not acquire a 2D context for text measurement.')
+    metricsCanvasCtx = ctx2d
+  }
+  return metricsCanvasCtx
+}
+
 // Measuring ascent/descent via the browser's own canvas (rather than trusting the embedded font
 // object's own metrics) ties baseline positioning to the identical source of truth pretext itself
 // already trusts for width, rather than a second, independently computed one. Cached per distinct
@@ -168,13 +226,9 @@ let metricsCanvasCtx: OffscreenCanvasRenderingContext2D | null = null
 function measureFontMetricsPx(fontCss: string): { ascentPx: number; descentPx: number } {
   const cached = fontMetricsCache.get(fontCss)
   if (cached !== undefined) return cached
-  if (metricsCanvasCtx === null) {
-    const ctx2d = new OffscreenCanvas(1, 1).getContext('2d')
-    if (ctx2d === null) throw new Error('[paginator] generatePdf(): could not acquire a 2D context for font metrics.')
-    metricsCanvasCtx = ctx2d
-  }
-  metricsCanvasCtx.font = fontCss
-  const metrics = metricsCanvasCtx.measureText('Hg')
+  const ctx2d = getMetricsCanvasCtx()
+  ctx2d.font = fontCss
+  const metrics = ctx2d.measureText('Hg')
   const result = { ascentPx: metrics.fontBoundingBoxAscent, descentPx: metrics.fontBoundingBoxDescent }
   fontMetricsCache.set(fontCss, result)
   return result
@@ -206,12 +260,98 @@ function drawTextNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: '
   const color = resolvePdfColor(node.color ?? '#000000')
   const characterSpacing = node.letterSpacing !== undefined ? pxToPt(node.letterSpacing) : 0
 
+  // NOT pdfkit's own `underline`/`strike` .text() options — those compute their line extent from
+  // pdfkit's internal line-breaking state, which this file never populates (`lineBreak: false` plus
+  // manual per-line positioning, needed to reproduce pretext's already-computed breaks exactly) —
+  // confirmed empirically to throw "unsupported number: NaN" inside pdfkit's own fragment/lineTo
+  // regardless of font. Drawing the decoration line by hand instead — using `line.width`, which is
+  // already known exactly — is the same manual-line approach `drawChartLine` already uses elsewhere
+  // in this file, and sidesteps pdfkit's internal state entirely.
+  const decoration = node.textDecoration
+  const decorationThicknessPt = Math.max(0.5, fontSizePt * 0.05)
+
   ctx.doc.font(fontName).fontSize(fontSizePt).fillColor(color)
   for (const line of rendered.lines) {
     const lineTopPt = pxToPt(y + line.y)
     const baselinePt = lineTopPt + baselineFromTopPt
     const startXPt = pxToPt(x + line.x)
     ctx.doc.text(line.text, startXPt, baselinePt, { lineBreak: false, baseline: 0, characterSpacing })
+    if (decoration === 'underline' || decoration === 'line-through') {
+      const widthPt = pxToPt(line.width)
+      const decorationYPt = decoration === 'underline' ? baselinePt + fontSizePt * 0.08 : baselinePt - fontSizePt * 0.3
+      ctx.doc
+        .moveTo(startXPt, decorationYPt)
+        .lineTo(startXPt + widthPt, decorationYPt)
+        .lineWidth(decorationThicknessPt)
+        .stroke(color)
+    }
+  }
+}
+
+function richTextNodeFontString(node: RichTextNode): string {
+  const style = node.fontStyle === 'italic' ? 'italic ' : ''
+  const weight = node.fontWeight ?? 400
+  return `${style}${weight} ${node.fontSize}px ${node.fontFamily}`
+}
+
+// Same registry lookup as resolveTextFont, but resolved per-run: family/weight/style each fall back
+// from the run to the node's own paragraph-level default.
+function resolveRunFont(ctx: PdfContext, run: RichTextRun, node: RichTextNode): string {
+  const weight = normalizeFontWeight(run.fontWeight ?? node.fontWeight)
+  const style: FontStyle = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic' : 'normal'
+  const family = run.fontFamily ?? node.fontFamily
+  const registered = lookupFont(family, weight, style)
+  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
+  warnMissingFontOnce(ctx, family, weight, style)
+  return pickFallbackFont(ctx, weight, style)
+}
+
+// Mirrors drawTextNode, but loops per line -> per RUN/fragment instead of per line only, since
+// style (font/size/color/decoration) can vary within one line. Baseline vertical metrics are
+// computed ONCE from the node's own default font — not per run — matching pretext's own model
+// (lineHeight is a single caller-supplied layout input, not derived per-fragment), so mixing run
+// font SIZES on one line shares one baseline rather than doing CSS-style per-inline-box vertical
+// alignment (see GUIDE.md's known-limitations note on richText). A run with `href` additionally
+// gets a real pdfkit link annotation over its exact fragment box — the PDF-side counterpart to
+// shadow-dom.ts's `<a href>` for the same run, entirely independent of the interactive/hit-registry
+// system (see RichTextRun.href's doc comment in nodes.ts).
+function drawRichTextNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: 'richText' }>, x: number, y: number): void {
+  const node = rendered.node
+  const { ascentPx, descentPx } = measureFontMetricsPx(richTextNodeFontString(node))
+  const lineHeightPt = pxToPt(node.lineHeight)
+  const ascentPt = pxToPt(ascentPx)
+  const fullHeightPt = pxToPt(ascentPx + descentPx)
+  const halfLeadingPt = (lineHeightPt - fullHeightPt) / 2
+  const baselineFromTopPt = halfLeadingPt + ascentPt
+
+  for (const line of rendered.lines) {
+    const lineTopPt = pxToPt(y + line.y)
+    const baselinePt = lineTopPt + baselineFromTopPt
+
+    for (const run of line.runs) {
+      const source = node.runs[run.runIndex]!
+      const fontName = resolveRunFont(ctx, source, node)
+      const fontSizePt = pxToPt(source.fontSize ?? node.fontSize)
+      const color = resolvePdfColor(source.color ?? node.color ?? '#000000')
+      const letterSpacing = source.letterSpacing ?? node.letterSpacing
+      const characterSpacing = letterSpacing !== undefined ? pxToPt(letterSpacing) : 0
+      const startXPt = pxToPt(x + run.x)
+      const widthPt = pxToPt(run.width)
+
+      ctx.doc.font(fontName).fontSize(fontSizePt).fillColor(color)
+      ctx.doc.text(run.text, startXPt, baselinePt, { lineBreak: false, baseline: 0, characterSpacing })
+
+      const decoration = source.textDecoration ?? node.textDecoration
+      if (decoration === 'underline' || decoration === 'line-through') {
+        const decorationThicknessPt = Math.max(0.5, fontSizePt * 0.05)
+        const decorationYPt = decoration === 'underline' ? baselinePt + fontSizePt * 0.08 : baselinePt - fontSizePt * 0.3
+        ctx.doc.moveTo(startXPt, decorationYPt).lineTo(startXPt + widthPt, decorationYPt).lineWidth(decorationThicknessPt).stroke(color)
+      }
+
+      if (source.href !== undefined) {
+        ctx.doc.link(startXPt, lineTopPt, widthPt, lineHeightPt, source.href)
+      }
+    }
   }
 }
 
@@ -323,9 +463,93 @@ async function embedImage(ctx: PdfContext, node: ImageNode, boxWidthPx: number, 
 }
 
 async function drawImageNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: 'image' }>, x: number, y: number): Promise<void> {
-  const dataUri = await embedImage(ctx, rendered.node, rendered.box.width, rendered.box.height)
+  const node = rendered.node
+  const dataUri = await embedImage(ctx, node, rendered.box.width, rendered.box.height)
   const rect = toPdfRect(x, y, rendered.box.width, rendered.box.height)
+
+  const needsClip = node.borderRadius !== undefined
+  const needsOpacity = node.opacity !== undefined
+  if (needsClip || needsOpacity) ctx.doc.save()
+  if (needsClip) ctx.doc.roundedRect(rect.x, rect.y, rect.width, rect.height, pxToPt(node.borderRadius!)).clip()
+  if (needsOpacity) ctx.doc.opacity(node.opacity!)
   ctx.doc.image(dataUri, rect.x, rect.y, { width: rect.width, height: rect.height })
+  if (needsClip || needsOpacity) ctx.doc.restore()
+}
+
+// ---- Watermark: a page-absolute decorative overlay, not a Node — resolved once per page by
+// paginate() and painted directly here. Drawn LAST, after header/body/footer (see the per-page loop
+// in generatePdf() below) so it sits on top of everything — an opaque table stripe, container
+// background, or chart's white surface elsewhere on the page can otherwise fully hide a watermark
+// drawn underneath it. No line-wrapping/pagination involved: a single measured line (text) or
+// explicit box (image), repeated per resolveWatermarkInstances() when tiled. ----
+
+function watermarkFontCss(watermark: Extract<Watermark, { kind: 'text' }>): string {
+  const style = watermark.fontStyle === 'italic' ? 'italic ' : ''
+  const weight = watermark.fontWeight ?? 700
+  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'Helvetica'}`
+}
+
+// Falls back straight to a Helvetica standard font with no warning when `fontFamily` is omitted —
+// unlike resolveTextFont()/resolveChartFontName() above, there was never a registered family this
+// omission could be missing relative to, so warnMissingFontOnce() would be pure noise here.
+function resolveWatermarkFontName(ctx: PdfContext, watermark: Extract<Watermark, { kind: 'text' }>): string {
+  const weight = normalizeFontWeight(watermark.fontWeight ?? 700)
+  const style: FontStyle = watermark.fontStyle === 'italic' ? 'italic' : 'normal'
+  if (watermark.fontFamily === undefined) return pickFallbackFont(ctx, weight, style)
+  const registered = lookupFont(watermark.fontFamily, weight, style)
+  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
+  warnMissingFontOnce(ctx, watermark.fontFamily, weight, style)
+  return pickFallbackFont(ctx, weight, style)
+}
+
+async function drawWatermark(ctx: PdfContext, watermark: Watermark, pageWidthPx: number, pageHeightPx: number): Promise<void> {
+  const opacity = watermark.opacity ?? 0.15
+  const rotation = watermark.rotation ?? -45
+
+  if (watermark.kind === 'image') {
+    const dataUri = await embedImage(ctx, { type: 'image', src: watermark.src }, watermark.width, watermark.height)
+    const rect = toPdfRect(0, 0, watermark.width, watermark.height)
+    const instances = resolveWatermarkInstances(watermark, pageWidthPx, pageHeightPx, watermark.width, watermark.height)
+    for (const { x, y } of instances) {
+      const centerXPt = pxToPt(x)
+      const centerYPt = pxToPt(y)
+      ctx.doc.save()
+      ctx.doc.rotate(rotation, { origin: [centerXPt, centerYPt] })
+      ctx.doc.opacity(opacity)
+      ctx.doc.image(dataUri, centerXPt - rect.width / 2, centerYPt - rect.height / 2, { width: rect.width, height: rect.height })
+      ctx.doc.restore()
+    }
+    return
+  }
+
+  const fontCss = watermarkFontCss(watermark)
+  const fontName = resolveWatermarkFontName(ctx, watermark)
+  const fontSizePt = pxToPt(watermark.fontSize ?? 72)
+  const widthPx = measureTextWidthPx(watermark.text, fontCss)
+  const heightPx = (watermark.fontSize ?? 72) * 1.2
+  const color = resolvePdfColor(watermark.color ?? '#000000')
+  const instances = resolveWatermarkInstances(watermark, pageWidthPx, pageHeightPx, widthPx, heightPx)
+  const { ascentPx, descentPx } = measureFontMetricsPx(fontCss)
+  const halfGlyphHeightPt = pxToPt(ascentPx - descentPx) / 2
+
+  ctx.doc.font(fontName).fontSize(fontSizePt).fillColor(color)
+  for (const { x, y } of instances) {
+    const centerXPt = pxToPt(x)
+    const centerYPt = pxToPt(y)
+    const widthPt = pxToPt(widthPx)
+    ctx.doc.save()
+    ctx.doc.rotate(rotation, { origin: [centerXPt, centerYPt] })
+    ctx.doc.opacity(opacity)
+    // No `width`/`align` here: pdfkit's `.text()` runs its LineWrapper whenever `options.width` is
+    // truthy REGARDLESS of `lineBreak: false` (see `_text()` in pdfkit's source — `lineBreak` only
+    // skips the auto-width default, never bypasses the wrapper once a width is explicitly given).
+    // Passing our own approximate canvas-measured width there let the wrapper decide the final
+    // glyph didn't fit and push it onto a second line. Centering by hand via the x-coordinate (as
+    // done here) needs neither `width` nor `align`, and sidesteps the wrapper entirely — same
+    // reasoning as drawTextNode's own `lineBreak: false` comment above, just carried one step further.
+    ctx.doc.text(watermark.text, centerXPt - widthPt / 2, centerYPt + halfGlyphHeightPt, { lineBreak: false, baseline: 0 })
+    ctx.doc.restore()
+  }
 }
 
 // ---- Table (port of shadow-dom.ts's renderTableNode/renderTableBorders — see that file's comments
@@ -425,6 +649,14 @@ async function drawTableNode(ctx: PdfContext, rendered: Extract<RenderedNode, { 
       ctx.doc.rect(rect.x, rect.y, rect.width, rect.height).fill(resolvePdfColor(cell.background))
     }
     for (const cell of cells) await drawNode(ctx, cell.rendered, originX, originY)
+    // Per-cell border, drawn last (on top of background/content) — a plain stroked rect on the
+    // cell's own full box, independent of the table-wide border modes (see TableCell.border's doc
+    // comment in nodes.ts: two adjacent bordered cells double up, by design).
+    for (const cell of cells) {
+      if (cell.border === undefined) continue
+      const rect = toPdfRect(originX + cell.box.x, originY + cell.box.y, cell.box.width, cell.box.height)
+      ctx.doc.rect(rect.x, rect.y, rect.width, rect.height).lineWidth(pxToPt(cell.border.thickness ?? 1)).stroke(resolvePdfColor(cell.border.color ?? '#000000'))
+    }
   }
 
   for (const row of rendered.rows) {
@@ -444,6 +676,25 @@ async function drawTableNode(ctx: PdfContext, rendered: Extract<RenderedNode, { 
   }
 
   drawTableBorders(ctx, node, rendered, colWidths, colX, originX, originY, x, y)
+}
+
+async function drawContainerNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: 'container' }>, originX: number, originY: number): Promise<void> {
+  const node = rendered.node
+  const x = originX + rendered.box.x
+  const y = originY + rendered.box.y
+  const rect = toPdfRect(x, y, rendered.box.width, rendered.box.height)
+  const radiusPt = node.borderRadius !== undefined ? pxToPt(node.borderRadius) : 0
+
+  if (node.background !== undefined) {
+    ctx.doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).fill(resolvePdfColor(node.background))
+  }
+  if (node.border !== undefined) {
+    const thicknessPt = pxToPt(node.border.thickness ?? 1)
+    ctx.doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).lineWidth(thicknessPt).stroke(resolvePdfColor(node.border.color ?? '#000000'))
+  }
+  // Same origin convention as group/table (NOT the chart branch's own-origin exception) — see
+  // shadow-dom.ts's renderContainerNode for the full rationale.
+  await drawNode(ctx, rendered.child, originX, originY)
 }
 
 // ---- Chart (port of chart-render.ts — reuses its pure geometry/color/text-estimate helpers
@@ -532,11 +783,11 @@ function drawChartText(
   text: string,
   localX: number,
   localY: number,
-  opts: { fontSize: number; color: string; anchor: 'start' | 'middle' | 'end'; bold: boolean },
+  opts: { fontSize: number; color: string; anchor: 'start' | 'middle' | 'end'; bold: boolean; fontFamily: string },
   originX: number,
   originY: number,
 ): void {
-  const fontName = opts.bold ? ctx.fallbackFonts.bold : ctx.fallbackFonts.regular
+  const fontName = resolveChartFontName(ctx, opts.fontFamily, opts.bold)
   const fontSizePt = pxToPt(opts.fontSize)
   ctx.doc.font(fontName).fontSize(fontSizePt)
   const widthPt = ctx.doc.widthOfString(text)
@@ -551,6 +802,8 @@ function drawChartLegend(
   box: ChartBox,
   orientation: 'vertical' | 'horizontal',
   fontSize: number,
+  fontFamily: string,
+  color: string,
   originX: number,
   originY: number,
 ): void {
@@ -565,7 +818,7 @@ function drawChartLegend(
       const rect = toPdfRect(originX + box.x, originY + rowCenterY - swatch / 2, swatch, swatch)
       ctx.doc.rect(rect.x, rect.y, rect.width, rect.height).fill(resolvePdfColor(entry.color))
       const label = truncateToWidth(entry.label, box.width - swatch - 6, fontSize)
-      drawChartText(ctx, label, box.x + swatch + 6, rowCenterY + baselineOffset, { fontSize, color: resolvePdfColor(INK_SECONDARY), anchor: 'start', bold: false }, originX, originY)
+      drawChartText(ctx, label, box.x + swatch + 6, rowCenterY + baselineOffset, { fontSize, fontFamily, color, anchor: 'start', bold: false }, originX, originY)
     })
     return
   }
@@ -580,7 +833,7 @@ function drawChartLegend(
     if (x + entryWidth > box.x + box.width) break
     const rect = toPdfRect(originX + x, originY + centerY - swatch / 2, swatch, swatch)
     ctx.doc.rect(rect.x, rect.y, rect.width, rect.height).fill(resolvePdfColor(entry.color))
-    drawChartText(ctx, label, x + swatch + 6, centerY + baselineOffset, { fontSize, color: resolvePdfColor(INK_SECONDARY), anchor: 'start', bold: false }, originX, originY)
+    drawChartText(ctx, label, x + swatch + 6, centerY + baselineOffset, { fontSize, fontFamily, color, anchor: 'start', bold: false }, originX, originY)
     x += entryWidth + 14
   }
 }
@@ -605,6 +858,10 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
   const tickFontSize = axis.tickFontSize ?? 11
   const categoryFontSize = axis.categoryFontSize ?? 11
   const tickBaselineOffset = textBaselineOffset(tickFontSize)
+  const fontFamily = node.fontFamily ?? CHART_FONT_FAMILY
+  const axisColor = resolvePdfColor(axis.color ?? AXIS_COLOR)
+  const gridlineColor = resolvePdfColor(axis.gridlineColor ?? GRIDLINE_COLOR)
+  const tickColor = resolvePdfColor(axis.tickColor ?? INK_MUTED)
 
   if ((node.orientation ?? 'vertical') === 'horizontal') {
     drawHorizontalCategoricalChart(ctx, node, plot, originX, originY, {
@@ -622,6 +879,10 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
       tickFontSize,
       categoryFontSize,
       tickBaselineOffset,
+      fontFamily,
+      axisColor,
+      gridlineColor,
+      tickColor,
     })
     return
   }
@@ -643,15 +904,15 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
   if (gridlinesShow) {
     for (const tick of ticks) {
       const gy = yScale(tick)
-      drawChartLine(ctx, plotLeft, gy, plotRight, gy, resolvePdfColor(GRIDLINE_COLOR), 1, originX, originY)
+      drawChartLine(ctx, plotLeft, gy, plotRight, gy, gridlineColor, 1, originX, originY)
     }
   }
   if (axisShow) {
     for (const tick of ticks) {
       const ty = yScale(tick)
-      drawChartText(ctx, formatTick(tick), plotLeft - 8, ty + tickBaselineOffset, { fontSize: tickFontSize, color: resolvePdfColor(INK_MUTED), anchor: 'end', bold: false }, originX, originY)
+      drawChartText(ctx, formatTick(tick), plotLeft - 8, ty + tickBaselineOffset, { fontSize: tickFontSize, fontFamily, color: tickColor, anchor: 'end', bold: false }, originX, originY)
     }
-    drawChartLine(ctx, plotLeft, plotBottom, plotRight, plotBottom, resolvePdfColor(AXIS_COLOR), 1, originX, originY)
+    drawChartLine(ctx, plotLeft, plotBottom, plotRight, plotBottom, axisColor, 1, originX, originY)
   }
 
   const bandWidth = categories.length > 0 ? plotWidth / categories.length : plotWidth
@@ -662,13 +923,14 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
     categories.forEach((category, ci) => {
       if (ci % labelStep !== 0) return
       const cx = plotLeft + bandWidth * (ci + 0.5)
-      drawChartText(ctx, category, cx, plotBottom + categoryLabelOffset, { fontSize: categoryFontSize, color: resolvePdfColor(INK_MUTED), anchor: 'middle', bold: false }, originX, originY)
+      drawChartText(ctx, category, cx, plotBottom + categoryLabelOffset, { fontSize: categoryFontSize, fontFamily, color: tickColor, anchor: 'middle', bold: false }, originX, originY)
     })
   }
 
   if (node.chartKind === 'bar' && stacked) {
     const segmentGap = node.barSegmentGap ?? 0
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, bandWidth - MARK_SURFACE_GAP * 2))
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandX = plotLeft + bandWidth * ci
@@ -677,7 +939,7 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
       for (const seg of stackedBarSegments(values)) {
         const range = stackedSegmentPixelRange(seg, yScale, segmentGap)
         if (range === null) continue
-        drawChartPath(ctx, barPath(barX, range.coordStart, barThickness, range.length, seg.round), colors[seg.seriesIndex]!, originX, originY)
+        drawChartPath(ctx, barPath(barX, range.coordStart, barThickness, range.length, seg.round, cornerRadius), colors[seg.seriesIndex]!, originX, originY)
       }
     })
     return
@@ -688,6 +950,7 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, rawThickness))
     const groupWidth = barThickness * series.length + MARK_SURFACE_GAP * Math.max(series.length - 1, 0)
     const zeroY = yScale(barBaselineValue)
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandX = plotLeft + bandWidth * ci
@@ -699,7 +962,7 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
         const barY = Math.min(zeroY, valueY)
         const barH = Math.abs(valueY - zeroY)
         if (barH <= 0) return
-        drawChartPath(ctx, barPath(barX, barY, barThickness, barH, value >= barBaselineValue ? 'top' : 'bottom'), colors[si]!, originX, originY)
+        drawChartPath(ctx, barPath(barX, barY, barThickness, barH, value >= barBaselineValue ? 'top' : 'bottom', cornerRadius), colors[si]!, originX, originY)
       })
     })
     return
@@ -707,6 +970,8 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
 
   // Line chart.
   const curve = node.lineCurve ?? 'linear'
+  const lineStrokeWidth = node.lineStrokeWidth ?? LINE_STROKE_WIDTH
+  const { radius: markerRadius, ringRadius: markerRingRadius } = resolveMarkerRadii(node)
   series.forEach((s, si) => {
     const points = categories.map((_, ci) => [plotLeft + bandWidth * (ci + 0.5), yScale(s.data[ci]!)] as const)
     const fill = resolveLineFill(s, colors[si]!)
@@ -715,10 +980,10 @@ function drawCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot:
       const { from, to } = areaFillGradientVector(points, 'x', baselineY)
       drawChartAreaFill(ctx, areaPath(points, curve, 'x', baselineY), 0, from, 0, to, resolvePdfColor(fill.color), fill.opacity, originX, originY)
     }
-    drawChartPathStroke(ctx, linePath(points, curve, 'x'), colors[si]!, LINE_STROKE_WIDTH, originX, originY)
+    drawChartPathStroke(ctx, linePath(points, curve, 'x'), colors[si]!, lineStrokeWidth, originX, originY)
     for (const [px, py] of points) {
-      drawChartCircle(ctx, px, py, MARKER_RING_RADIUS, resolvePdfColor(SURFACE_COLOR), originX, originY)
-      drawChartCircle(ctx, px, py, MARKER_RADIUS, colors[si]!, originX, originY)
+      drawChartCircle(ctx, px, py, markerRingRadius, resolvePdfColor(SURFACE_COLOR), originX, originY)
+      drawChartCircle(ctx, px, py, markerRadius, colors[si]!, originX, originY)
     }
   })
 }
@@ -738,12 +1003,17 @@ type CategoricalChartContext = {
   tickFontSize: number
   categoryFontSize: number
   tickBaselineOffset: number
+  fontFamily: string
+  axisColor: string
+  gridlineColor: string
+  tickColor: string
 }
 
 // Mirrors chart-render.ts's renderHorizontalCategoricalChart field-for-field — categories run
 // top-to-bottom, values run left-to-right, bars grow rightward (or leftward below the baseline).
 function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartNode, plot: ChartBox, originX: number, originY: number, chartCtx: CategoricalChartContext): void {
-  const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset } = chartCtx
+  const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset, fontFamily, axisColor, gridlineColor, tickColor } =
+    chartCtx
 
   const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize))) + 16) : 4
   const bottomMargin = axisShow ? tickFontSize + 20 : 4
@@ -760,15 +1030,15 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
   if (gridlinesShow) {
     for (const tick of ticks) {
       const x = xScale(tick)
-      drawChartLine(ctx, x, plotTop, x, plotBottom, resolvePdfColor(GRIDLINE_COLOR), 1, originX, originY)
+      drawChartLine(ctx, x, plotTop, x, plotBottom, gridlineColor, 1, originX, originY)
     }
   }
   if (axisShow) {
     for (const tick of ticks) {
       const x = xScale(tick)
-      drawChartText(ctx, formatTick(tick), x, plotBottom + tickFontSize + 4, { fontSize: tickFontSize, color: resolvePdfColor(INK_MUTED), anchor: 'middle', bold: false }, originX, originY)
+      drawChartText(ctx, formatTick(tick), x, plotBottom + tickFontSize + 4, { fontSize: tickFontSize, fontFamily, color: tickColor, anchor: 'middle', bold: false }, originX, originY)
     }
-    drawChartLine(ctx, plotLeft, plotTop, plotLeft, plotBottom, resolvePdfColor(AXIS_COLOR), 1, originX, originY)
+    drawChartLine(ctx, plotLeft, plotTop, plotLeft, plotBottom, axisColor, 1, originX, originY)
   }
 
   const bandHeight = categories.length > 0 ? plotHeight / categories.length : plotHeight
@@ -779,13 +1049,14 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
     categories.forEach((category, ci) => {
       if (ci % labelStep !== 0) return
       const y = plotTop + bandHeight * (ci + 0.5)
-      drawChartText(ctx, category, plotLeft - 8, y + tickBaselineOffset, { fontSize: categoryFontSize, color: resolvePdfColor(INK_MUTED), anchor: 'end', bold: false }, originX, originY)
+      drawChartText(ctx, category, plotLeft - 8, y + tickBaselineOffset, { fontSize: categoryFontSize, fontFamily, color: tickColor, anchor: 'end', bold: false }, originX, originY)
     })
   }
 
   if (node.chartKind === 'bar' && stacked) {
     const segmentGap = node.barSegmentGap ?? 0
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, bandHeight - MARK_SURFACE_GAP * 2))
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandY = plotTop + bandHeight * ci
@@ -795,7 +1066,7 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
         const range = stackedSegmentPixelRange(seg, xScale, segmentGap)
         if (range === null) continue
         const round = seg.round === 'top' ? 'right' : seg.round === 'bottom' ? 'left' : 'none'
-        drawChartPath(ctx, barPath(range.coordStart, barY, range.length, barThickness, round), colors[seg.seriesIndex]!, originX, originY)
+        drawChartPath(ctx, barPath(range.coordStart, barY, range.length, barThickness, round, cornerRadius), colors[seg.seriesIndex]!, originX, originY)
       }
     })
     return
@@ -806,6 +1077,7 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, rawThickness))
     const groupHeight = barThickness * series.length + MARK_SURFACE_GAP * Math.max(series.length - 1, 0)
     const zeroX = xScale(barBaselineValue)
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandY = plotTop + bandHeight * ci
@@ -817,7 +1089,7 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
         const barX = Math.min(zeroX, valueX)
         const barW = Math.abs(valueX - zeroX)
         if (barW <= 0) return
-        drawChartPath(ctx, barPath(barX, barY, barW, barThickness, value >= barBaselineValue ? 'right' : 'left'), colors[si]!, originX, originY)
+        drawChartPath(ctx, barPath(barX, barY, barW, barThickness, value >= barBaselineValue ? 'right' : 'left', cornerRadius), colors[si]!, originX, originY)
       })
     })
     return
@@ -825,6 +1097,8 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
 
   // Line chart.
   const curve = node.lineCurve ?? 'linear'
+  const lineStrokeWidth = node.lineStrokeWidth ?? LINE_STROKE_WIDTH
+  const { radius: markerRadius, ringRadius: markerRingRadius } = resolveMarkerRadii(node)
   series.forEach((s, si) => {
     const points = categories.map((_, ci) => [xScale(s.data[ci]!), plotTop + bandHeight * (ci + 0.5)] as const)
     const fill = resolveLineFill(s, colors[si]!)
@@ -833,10 +1107,10 @@ function drawHorizontalCategoricalChart(ctx: PdfContext, node: CategoricalChartN
       const { from, to } = areaFillGradientVector(points, 'y', baselineX)
       drawChartAreaFill(ctx, areaPath(points, curve, 'y', baselineX), from, 0, to, 0, resolvePdfColor(fill.color), fill.opacity, originX, originY)
     }
-    drawChartPathStroke(ctx, linePath(points, curve, 'y'), colors[si]!, LINE_STROKE_WIDTH, originX, originY)
+    drawChartPathStroke(ctx, linePath(points, curve, 'y'), colors[si]!, lineStrokeWidth, originX, originY)
     for (const [px, py] of points) {
-      drawChartCircle(ctx, px, py, MARKER_RING_RADIUS, resolvePdfColor(SURFACE_COLOR), originX, originY)
-      drawChartCircle(ctx, px, py, MARKER_RADIUS, colors[si]!, originX, originY)
+      drawChartCircle(ctx, px, py, markerRingRadius, resolvePdfColor(SURFACE_COLOR), originX, originY)
+      drawChartCircle(ctx, px, py, markerRadius, colors[si]!, originX, originY)
     }
   })
 }
@@ -875,6 +1149,7 @@ function drawChartNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: 
   const node = rendered.node
   const width = rendered.box.width
   const height = rendered.box.height
+  const fontFamily = node.fontFamily ?? CHART_FONT_FAMILY
 
   let top = 0
   let bottom = height
@@ -884,22 +1159,23 @@ function drawChartNode(ctx: PdfContext, rendered: Extract<RenderedNode, { type: 
   const title = resolveTitle(node)
   if (title !== null) {
     const band = title.fontSize + 16
-    drawChartText(ctx, title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, color: resolvePdfColor(title.color), anchor: 'middle', bold: false }, originX, originY)
+    drawChartText(ctx, title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, fontFamily, color: resolvePdfColor(title.color), anchor: 'middle', bold: false }, originX, originY)
     top += band
   }
 
   const entries = legendEntriesFor(node)
   if (resolveShowLegend(node, entries.length) && entries.length > 0) {
     const legendFontSize = node.legend?.fontSize ?? 11
+    const legendColor = resolvePdfColor(node.legend?.color ?? INK_SECONDARY)
     const position = node.legend?.position ?? 'right'
     if (position === 'right') {
       const legendWidth = Math.min(140, width * 0.28)
       right -= legendWidth
-      drawChartLegend(ctx, entries, { x: right + 12, y: top, width: legendWidth - 12, height: bottom - top }, 'vertical', legendFontSize, originX, originY)
+      drawChartLegend(ctx, entries, { x: right + 12, y: top, width: legendWidth - 12, height: bottom - top }, 'vertical', legendFontSize, fontFamily, legendColor, originX, originY)
     } else {
       const legendHeight = Math.max(24, legendFontSize + 14)
       bottom -= legendHeight
-      drawChartLegend(ctx, entries, { x: left, y: bottom, width: right - left, height: legendHeight }, 'horizontal', legendFontSize, originX, originY)
+      drawChartLegend(ctx, entries, { x: left, y: bottom, width: right - left, height: legendHeight }, 'horizontal', legendFontSize, fontFamily, legendColor, originX, originY)
     }
   }
 
@@ -923,6 +1199,10 @@ async function drawNode(ctx: PdfContext, rendered: RenderedNode, originX: number
     drawTextNode(ctx, rendered, x, y, fontName)
     return
   }
+  if (rendered.type === 'richText') {
+    drawRichTextNode(ctx, rendered, x, y)
+    return
+  }
   if (rendered.type === 'separator') {
     drawSeparatorNode(ctx, rendered, x, y)
     return
@@ -943,6 +1223,10 @@ async function drawNode(ctx: PdfContext, rendered: RenderedNode, originX: number
   }
   if (rendered.type === 'table') {
     await drawTableNode(ctx, rendered, originX, originY)
+    return
+  }
+  if (rendered.type === 'container') {
+    await drawContainerNode(ctx, rendered, originX, originY)
     return
   }
 
@@ -1013,13 +1297,36 @@ export async function generatePdf(result: PaginatedResult, metadata?: PdfMetadat
   const footerOriginX = margins.left
   const footerOriginY = pageSize.height - margins.bottom - footerHeight
 
+  const pageWidthPt = pxToPt(pageSize.width)
+  const pageHeightPt = pxToPt(pageSize.height)
+
   for (const pdfPage of result.pages) {
     // No args: addPage() reuses the doc-level `options` (size + margin) passed to the PDFDocument
     // constructor above as its default for every new page.
     doc.addPage()
+    if (pdfPage.background !== null) {
+      doc.rect(0, 0, pageWidthPt, pageHeightPt).fill(resolvePdfColor(pdfPage.background))
+    }
     if (pdfPage.header !== null) await drawNode(ctx, pdfPage.header, headerOriginX, headerOriginY)
     for (const node of pdfPage.body) await drawNode(ctx, node, bodyOriginX, bodyOriginY)
     if (pdfPage.footer !== null) await drawNode(ctx, pdfPage.footer, footerOriginX, footerOriginY)
+    // Drawn last (before only the page border) — on top of everything, so an opaque table/container/
+    // chart background elsewhere on the page can never hide it. See drawWatermark's own comment.
+    if (pdfPage.watermark !== null) await drawWatermark(ctx, pdfPage.watermark, pageSize.width, pageSize.height)
+    if (pdfPage.border !== null) {
+      // pdfkit centers a stroke on its path, so a rect drawn flush with the page edges (0,0,w,h)
+      // would have HALF its line width fall outside the page's own MediaBox — there's no bleed area
+      // a PDF page can render into, so that outer half is simply clipped away, leaving only a
+      // half-thickness border visible (matches the reported "PDF border is too small" bug). Insetting
+      // the rect by half the stroke width on every side keeps the whole stroke within the page,
+      // matching CSS's border-box model (mount()'s border sits fully inside the page element).
+      const thicknessPt = pxToPt(pdfPage.border.thickness ?? 1)
+      const halfThicknessPt = thicknessPt / 2
+      doc
+        .rect(halfThicknessPt, halfThicknessPt, pageWidthPt - thicknessPt, pageHeightPt - thicknessPt)
+        .lineWidth(thicknessPt)
+        .stroke(resolvePdfColor(pdfPage.border.color ?? '#000000'))
+    }
   }
 
   doc.end()

@@ -16,7 +16,7 @@
 // throughout below by never coloring TEXT with a series color (labels/ticks/legend text always use
 // an ink role; only swatches/marks/fills carry the series hue).
 
-import type { CategoricalChartNode, ChartAxisConfig, ChartNode, ChartSeries, ChartViewConfig, RadialChartNode } from '../core/nodes.ts'
+import type { CategoricalChartNode, ChartAxisConfig, ChartNode, ChartSeries, ChartViewConfig, LineChartNode, RadialChartNode } from '../core/nodes.ts'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -44,6 +44,16 @@ export const LINE_STROKE_WIDTH = 2
 export const MARKER_RADIUS = 4
 export const MARKER_RING_RADIUS = 6
 
+// The white "surface ring" behind a marker stays exactly this many px larger than the marker
+// itself, matching the library's default (4px marker / 6px ring) — so an overridden markerRadius
+// keeps the same visual relationship rather than needing its own separate ring-radius config.
+const MARKER_RING_GAP = MARKER_RING_RADIUS - MARKER_RADIUS
+
+export function resolveMarkerRadii(node: LineChartNode): { radius: number; ringRadius: number } {
+  const radius = node.markerRadius ?? MARKER_RADIUS
+  return { radius, ringRadius: radius + MARKER_RING_GAP }
+}
+
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
   const el = document.createElementNS(SVG_NS, tag) as SVGElementTagNameMap[K]
   for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value))
@@ -54,12 +64,12 @@ function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<strin
 // `fontSize` every call site passes in — setAttribute('fontSize', …) sets a nonstandard attribute
 // name the renderer silently ignores, so this is the one place that translates the ergonomic
 // camelCase call-site shape into the attribute names the SVG spec actually recognizes.
-function svgText(content: string, x: number, y: number, attrs: Record<string, string | number> & { fontSize?: number }): SVGTextElement {
-  const { fontSize, ...rest } = attrs
+function svgText(content: string, x: number, y: number, attrs: Record<string, string | number> & { fontSize?: number; fontFamily?: string }): SVGTextElement {
+  const { fontSize, fontFamily, ...rest } = attrs
   const el = svgEl('text', {
     x,
     y,
-    'font-family': CHART_FONT_FAMILY,
+    'font-family': fontFamily ?? CHART_FONT_FAMILY,
     ...(fontSize !== undefined ? { 'font-size': fontSize } : {}),
     ...rest,
   })
@@ -139,10 +149,10 @@ export function resolveColor(explicit: string | undefined, overridePalette: stri
 // `'left'`/`'right'` are the horizontal-orientation equivalent of `'top'`/`'bottom'` — the caller
 // (renderCategoricalChart) is the one that knows whether a given chart is vertical or horizontal;
 // this function only knows which literal corners to round.
-export function barPath(x: number, y: number, w: number, h: number, round: 'top' | 'bottom' | 'left' | 'right' | 'none'): string {
+export function barPath(x: number, y: number, w: number, h: number, round: 'top' | 'bottom' | 'left' | 'right' | 'none', cornerRadius = BAR_CORNER_RADIUS): string {
   if (round === 'none') return `M ${x} ${y} h ${w} v ${h} h ${-w} Z`
   if (round === 'top' || round === 'bottom') {
-    const r = Math.min(BAR_CORNER_RADIUS, w / 2, h)
+    const r = Math.min(cornerRadius, w / 2, h)
     if (r <= 0) return `M ${x} ${y} h ${w} v ${h} h ${-w} Z`
     if (round === 'top') {
       return `M ${x} ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w} ${y + r} V ${y + h} H ${x} Z`
@@ -150,7 +160,7 @@ export function barPath(x: number, y: number, w: number, h: number, round: 'top'
     const bottom = y + h
     return `M ${x} ${y} H ${x + w} V ${bottom - r} A ${r} ${r} 0 0 1 ${x + w - r} ${bottom} H ${x + r} A ${r} ${r} 0 0 1 ${x} ${bottom - r} Z`
   }
-  const r = Math.min(BAR_CORNER_RADIUS, h / 2, w)
+  const r = Math.min(cornerRadius, h / 2, w)
   if (r <= 0) return `M ${x} ${y} h ${w} v ${h} h ${-w} Z`
   if (round === 'right') {
     return `M ${x} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w} ${y + r} V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} H ${x} Z`
@@ -435,7 +445,7 @@ export function resolveShowLegend(node: ChartNode, entryCount: number): boolean 
 }
 
 
-function renderLegend(svg: SVGSVGElement, entries: LegendEntry[], box: Box, orientation: 'vertical' | 'horizontal', fontSize: number): void {
+function renderLegend(svg: SVGSVGElement, entries: LegendEntry[], box: Box, orientation: 'vertical' | 'horizontal', fontSize: number, fontFamily: string, color: string): void {
   const swatch = 10
   const baselineOffset = textBaselineOffset(fontSize)
 
@@ -446,7 +456,7 @@ function renderLegend(svg: SVGSVGElement, entries: LegendEntry[], box: Box, orie
       const rowCenterY = box.y + i * rowHeight + rowHeight / 2
       svg.appendChild(svgEl('rect', { x: box.x, y: rowCenterY - swatch / 2, width: swatch, height: swatch, rx: 2, fill: entry.color }))
       const label = truncateToWidth(entry.label, box.width - swatch - 6, fontSize)
-      svg.appendChild(svgText(label, box.x + swatch + 6, rowCenterY + baselineOffset, { fontSize, fill: INK_SECONDARY }))
+      svg.appendChild(svgText(label, box.x + swatch + 6, rowCenterY + baselineOffset, { fontSize, fontFamily, fill: color }))
     })
     return
   }
@@ -460,7 +470,7 @@ function renderLegend(svg: SVGSVGElement, entries: LegendEntry[], box: Box, orie
     const entryWidth = swatch + 6 + labelWidth
     if (x + entryWidth > box.x + box.width) break // remaining entries dropped rather than overflowing the box
     svg.appendChild(svgEl('rect', { x, y: centerY - swatch / 2, width: swatch, height: swatch, rx: 2, fill: entry.color }))
-    svg.appendChild(svgText(label, x + swatch + 6, centerY + baselineOffset, { fontSize, fill: INK_SECONDARY }))
+    svg.appendChild(svgText(label, x + swatch + 6, centerY + baselineOffset, { fontSize, fontFamily, fill: color }))
     x += entryWidth + 14
   }
 }
@@ -547,9 +557,32 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
   const tickFontSize = axis.tickFontSize ?? 11
   const categoryFontSize = axis.categoryFontSize ?? 11
   const tickBaselineOffset = textBaselineOffset(tickFontSize)
+  const fontFamily = node.fontFamily ?? CHART_FONT_FAMILY
+  const axisColor = axis.color ?? AXIS_COLOR
+  const gridlineColor = axis.gridlineColor ?? GRIDLINE_COLOR
+  const tickColor = axis.tickColor ?? INK_MUTED
 
   if ((node.orientation ?? 'vertical') === 'horizontal') {
-    renderHorizontalCategoricalChart(svg, node, plot, { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset })
+    renderHorizontalCategoricalChart(svg, node, plot, {
+      categories,
+      series,
+      colors,
+      stacked,
+      dataMin,
+      dataMax,
+      barBaselineValue,
+      axisShow,
+      gridlinesShow,
+      ticks,
+      formatTick,
+      tickFontSize,
+      categoryFontSize,
+      tickBaselineOffset,
+      fontFamily,
+      axisColor,
+      gridlineColor,
+      tickColor,
+    })
     return
   }
 
@@ -572,15 +605,15 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
   if (gridlinesShow) {
     for (const tick of ticks) {
       const y = yScale(tick)
-      svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotRight, y1: y, y2: y, stroke: GRIDLINE_COLOR, 'stroke-width': 1 }))
+      svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotRight, y1: y, y2: y, stroke: gridlineColor, 'stroke-width': 1 }))
     }
   }
   if (axisShow) {
     for (const tick of ticks) {
       const y = yScale(tick)
-      svg.appendChild(svgText(formatTick(tick), plotLeft - 8, y + tickBaselineOffset, { fontSize: tickFontSize, fill: INK_MUTED, 'text-anchor': 'end' }))
+      svg.appendChild(svgText(formatTick(tick), plotLeft - 8, y + tickBaselineOffset, { fontSize: tickFontSize, fontFamily, fill: tickColor, 'text-anchor': 'end' }))
     }
-    svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotRight, y1: plotBottom, y2: plotBottom, stroke: AXIS_COLOR, 'stroke-width': 1 }))
+    svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotRight, y1: plotBottom, y2: plotBottom, stroke: axisColor, 'stroke-width': 1 }))
   }
 
   const bandWidth = categories.length > 0 ? plotWidth / categories.length : plotWidth
@@ -591,13 +624,14 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
     categories.forEach((category, ci) => {
       if (ci % labelStep !== 0) return
       const x = plotLeft + bandWidth * (ci + 0.5)
-      svg.appendChild(svgText(category, x, plotBottom + categoryLabelOffset, { fontSize: categoryFontSize, fill: INK_MUTED, 'text-anchor': 'middle' }))
+      svg.appendChild(svgText(category, x, plotBottom + categoryLabelOffset, { fontSize: categoryFontSize, fontFamily, fill: tickColor, 'text-anchor': 'middle' }))
     })
   }
 
   if (node.chartKind === 'bar' && stacked) {
     const segmentGap = node.barSegmentGap ?? 0
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, bandWidth - MARK_SURFACE_GAP * 2))
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandX = plotLeft + bandWidth * ci
@@ -606,7 +640,7 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
       for (const seg of stackedBarSegments(values)) {
         const range = stackedSegmentPixelRange(seg, yScale, segmentGap)
         if (range === null) continue
-        svg.appendChild(svgEl('path', { d: barPath(barX, range.coordStart, barThickness, range.length, seg.round), fill: colors[seg.seriesIndex]! }))
+        svg.appendChild(svgEl('path', { d: barPath(barX, range.coordStart, barThickness, range.length, seg.round, cornerRadius), fill: colors[seg.seriesIndex]! }))
       }
     })
     return
@@ -617,6 +651,7 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, rawThickness))
     const groupWidth = barThickness * series.length + MARK_SURFACE_GAP * Math.max(series.length - 1, 0)
     const zeroY = yScale(barBaselineValue)
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandX = plotLeft + bandWidth * ci
@@ -628,7 +663,7 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
         const barY = Math.min(zeroY, valueY)
         const barH = Math.abs(valueY - zeroY)
         if (barH <= 0) return
-        svg.appendChild(svgEl('path', { d: barPath(barX, barY, barThickness, barH, value >= barBaselineValue ? 'top' : 'bottom'), fill: colors[si]! }))
+        svg.appendChild(svgEl('path', { d: barPath(barX, barY, barThickness, barH, value >= barBaselineValue ? 'top' : 'bottom', cornerRadius), fill: colors[si]! }))
       })
     })
     return
@@ -636,6 +671,8 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
 
   // Line chart.
   const curve = node.lineCurve ?? 'linear'
+  const lineStrokeWidth = node.lineStrokeWidth ?? LINE_STROKE_WIDTH
+  const { radius: markerRadius, ringRadius: markerRingRadius } = resolveMarkerRadii(node)
   series.forEach((s, si) => {
     const points = categories.map((_, ci) => {
       const x = plotLeft + bandWidth * (ci + 0.5)
@@ -653,14 +690,14 @@ function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, 
         d: linePath(points, curve, 'x'),
         fill: 'none',
         stroke: colors[si]!,
-        'stroke-width': LINE_STROKE_WIDTH,
+        'stroke-width': lineStrokeWidth,
         'stroke-linejoin': 'round',
         'stroke-linecap': 'round',
       }),
     )
     for (const [x, y] of points) {
-      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: MARKER_RING_RADIUS, fill: SURFACE_COLOR }))
-      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: MARKER_RADIUS, fill: colors[si]! }))
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: markerRingRadius, fill: SURFACE_COLOR }))
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: markerRadius, fill: colors[si]! }))
     }
   })
 }
@@ -680,6 +717,10 @@ type CategoricalChartContext = {
   tickFontSize: number
   categoryFontSize: number
   tickBaselineOffset: number
+  fontFamily: string
+  axisColor: string
+  gridlineColor: string
+  tickColor: string
 }
 
 // Categories run top-to-bottom along the y-axis; values run left-to-right along the x-axis (bars
@@ -687,7 +728,8 @@ type CategoricalChartContext = {
 // with the two axes' roles swapped — see that function's header comment for why this is a separate
 // path rather than a shared abstraction.
 function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalChartNode, plot: Box, ctx: CategoricalChartContext): void {
-  const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset } = ctx
+  const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset, fontFamily, axisColor, gridlineColor, tickColor } =
+    ctx
 
   const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize))) + 16) : 4
   const bottomMargin = axisShow ? tickFontSize + 20 : 4
@@ -704,15 +746,15 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
   if (gridlinesShow) {
     for (const tick of ticks) {
       const x = xScale(tick)
-      svg.appendChild(svgEl('line', { x1: x, x2: x, y1: plotTop, y2: plotBottom, stroke: GRIDLINE_COLOR, 'stroke-width': 1 }))
+      svg.appendChild(svgEl('line', { x1: x, x2: x, y1: plotTop, y2: plotBottom, stroke: gridlineColor, 'stroke-width': 1 }))
     }
   }
   if (axisShow) {
     for (const tick of ticks) {
       const x = xScale(tick)
-      svg.appendChild(svgText(formatTick(tick), x, plotBottom + tickFontSize + 4, { fontSize: tickFontSize, fill: INK_MUTED, 'text-anchor': 'middle' }))
+      svg.appendChild(svgText(formatTick(tick), x, plotBottom + tickFontSize + 4, { fontSize: tickFontSize, fontFamily, fill: tickColor, 'text-anchor': 'middle' }))
     }
-    svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotLeft, y1: plotTop, y2: plotBottom, stroke: AXIS_COLOR, 'stroke-width': 1 }))
+    svg.appendChild(svgEl('line', { x1: plotLeft, x2: plotLeft, y1: plotTop, y2: plotBottom, stroke: axisColor, 'stroke-width': 1 }))
   }
 
   const bandHeight = categories.length > 0 ? plotHeight / categories.length : plotHeight
@@ -723,13 +765,14 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
     categories.forEach((category, ci) => {
       if (ci % labelStep !== 0) return
       const y = plotTop + bandHeight * (ci + 0.5)
-      svg.appendChild(svgText(category, plotLeft - 8, y + tickBaselineOffset, { fontSize: categoryFontSize, fill: INK_MUTED, 'text-anchor': 'end' }))
+      svg.appendChild(svgText(category, plotLeft - 8, y + tickBaselineOffset, { fontSize: categoryFontSize, fontFamily, fill: tickColor, 'text-anchor': 'end' }))
     })
   }
 
   if (node.chartKind === 'bar' && stacked) {
     const segmentGap = node.barSegmentGap ?? 0
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, bandHeight - MARK_SURFACE_GAP * 2))
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandY = plotTop + bandHeight * ci
@@ -739,7 +782,7 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
         const range = stackedSegmentPixelRange(seg, xScale, segmentGap)
         if (range === null) continue
         const round = seg.round === 'top' ? 'right' : seg.round === 'bottom' ? 'left' : 'none'
-        svg.appendChild(svgEl('path', { d: barPath(range.coordStart, barY, range.length, barThickness, round), fill: colors[seg.seriesIndex]! }))
+        svg.appendChild(svgEl('path', { d: barPath(range.coordStart, barY, range.length, barThickness, round, cornerRadius), fill: colors[seg.seriesIndex]! }))
       }
     })
     return
@@ -750,6 +793,7 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
     const barThickness = Math.max(1, Math.min(BAR_MAX_THICKNESS, rawThickness))
     const groupHeight = barThickness * series.length + MARK_SURFACE_GAP * Math.max(series.length - 1, 0)
     const zeroX = xScale(barBaselineValue)
+    const cornerRadius = node.barCornerRadius ?? BAR_CORNER_RADIUS
 
     categories.forEach((_, ci) => {
       const bandY = plotTop + bandHeight * ci
@@ -761,7 +805,7 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
         const barX = Math.min(zeroX, valueX)
         const barW = Math.abs(valueX - zeroX)
         if (barW <= 0) return
-        svg.appendChild(svgEl('path', { d: barPath(barX, barY, barW, barThickness, value >= barBaselineValue ? 'right' : 'left'), fill: colors[si]! }))
+        svg.appendChild(svgEl('path', { d: barPath(barX, barY, barW, barThickness, value >= barBaselineValue ? 'right' : 'left', cornerRadius), fill: colors[si]! }))
       })
     })
     return
@@ -769,6 +813,8 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
 
   // Line chart.
   const curve = node.lineCurve ?? 'linear'
+  const lineStrokeWidth = node.lineStrokeWidth ?? LINE_STROKE_WIDTH
+  const { radius: markerRadius, ringRadius: markerRingRadius } = resolveMarkerRadii(node)
   series.forEach((s, si) => {
     const points = categories.map((_, ci) => {
       const y = plotTop + bandHeight * (ci + 0.5)
@@ -786,14 +832,14 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
         d: linePath(points, curve, 'y'),
         fill: 'none',
         stroke: colors[si]!,
-        'stroke-width': LINE_STROKE_WIDTH,
+        'stroke-width': lineStrokeWidth,
         'stroke-linejoin': 'round',
         'stroke-linecap': 'round',
       }),
     )
     for (const [x, y] of points) {
-      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: MARKER_RING_RADIUS, fill: SURFACE_COLOR }))
-      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: MARKER_RADIUS, fill: colors[si]! }))
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: markerRingRadius, fill: SURFACE_COLOR }))
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: markerRadius, fill: colors[si]! }))
     }
   })
 }
@@ -835,6 +881,7 @@ function renderPieChart(svg: SVGSVGElement, node: RadialChartNode, plot: Box): v
 
 export function renderChartSvg(node: ChartNode, width: number, height: number): SVGSVGElement {
   const svg = svgEl('svg', { width, height, viewBox: `0 0 ${width} ${height}` })
+  const fontFamily = node.fontFamily ?? CHART_FONT_FAMILY
 
   let top = 0
   let bottom = height
@@ -844,22 +891,23 @@ export function renderChartSvg(node: ChartNode, width: number, height: number): 
   const title = resolveTitle(node)
   if (title !== null) {
     const band = title.fontSize + 16
-    svg.appendChild(svgText(title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, fill: title.color, 'text-anchor': 'middle' }))
+    svg.appendChild(svgText(title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, fontFamily, fill: title.color, 'text-anchor': 'middle' }))
     top += band
   }
 
   const entries = legendEntriesFor(node)
   if (resolveShowLegend(node, entries.length) && entries.length > 0) {
     const legendFontSize = node.legend?.fontSize ?? 11
+    const legendColor = node.legend?.color ?? INK_SECONDARY
     const position = node.legend?.position ?? 'right'
     if (position === 'right') {
       const legendWidth = Math.min(140, width * 0.28)
       right -= legendWidth
-      renderLegend(svg, entries, { x: right + 12, y: top, width: legendWidth - 12, height: bottom - top }, 'vertical', legendFontSize)
+      renderLegend(svg, entries, { x: right + 12, y: top, width: legendWidth - 12, height: bottom - top }, 'vertical', legendFontSize, fontFamily, legendColor)
     } else {
       const legendHeight = Math.max(24, legendFontSize + 14)
       bottom -= legendHeight
-      renderLegend(svg, entries, { x: left, y: bottom, width: right - left, height: legendHeight }, 'horizontal', legendFontSize)
+      renderLegend(svg, entries, { x: left, y: bottom, width: right - left, height: legendHeight }, 'horizontal', legendFontSize, fontFamily, legendColor)
     }
   }
 

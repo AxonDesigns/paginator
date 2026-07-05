@@ -1,4 +1,4 @@
-export { definePage, group, text, separator, pageBreak, image, table, chart, rowGroup } from './core/nodes.ts'
+export { definePage, group, text, richText, separator, pageBreak, image, container, table, chart, rowGroup } from './core/nodes.ts'
 export { paginate } from './core/paginate.ts'
 export { mount, renderPreview, printDocument } from './render/shadow-dom.ts'
 export { ready } from './ready.ts'
@@ -15,14 +15,23 @@ export type {
   PageSize,
   HeaderFooterContext,
   HeaderFooterContent,
+  Watermark,
+  TextWatermark,
+  ImageWatermark,
+  WatermarkContent,
   Node,
   GroupNode,
   RowGroupNode,
   ColumnGroupNode,
   TextNode,
+  RichTextNode,
+  RichTextRun,
+  RichInlineCursorLike,
   SeparatorNode,
   PageBreakNode,
   ImageNode,
+  ContainerNode,
+  ContainerBorder,
   TableNode,
   TableColumn,
   TableRow,
@@ -51,7 +60,7 @@ export type {
   FlexSize,
   Interactive,
 } from './core/nodes.ts'
-export type { RenderedNode, Box, PositionedLine, RenderedTableRow, RenderedTableCell } from './core/geometry.ts'
+export type { RenderedNode, Box, PositionedLine, PositionedRun, PositionedRichLine, RenderedTableRow, RenderedTableCell } from './core/geometry.ts'
 export type { PaginatedResult, PaginatedPage } from './core/paginate.ts'
 export type {
   InteractionController,

@@ -3,15 +3,17 @@
 // union in nodes.ts and adding one entry here — paginate.ts and group-layout.ts never need to
 // change, they only ever dispatch through `registry[node.type]` and `isSplittable(node)`.
 
-import type { ChartNode, GroupNode, ImageNode, Node, PageBreakNode, SeparatorNode, TableNode, TextNode } from './nodes.ts'
+import type { ChartNode, ContainerNode, GroupNode, ImageNode, Node, PageBreakNode, RichTextNode, SeparatorNode, TableNode, TextNode } from './nodes.ts'
 import type { RenderedNode } from './geometry.ts'
 import { textMeasurer } from './measure-text.ts'
+import { richTextMeasurer } from './measure-rich-text.ts'
 import { separatorMeasurer } from './separator-layout.ts'
 import { groupMeasurer } from './group-layout.ts'
 import { pageBreakMeasurer } from './page-break-layout.ts'
 import { imageMeasurer } from './image-layout.ts'
 import { tableMeasurer } from './table-layout.ts'
 import { chartMeasurer } from './chart-layout.ts'
+import { containerMeasurer } from './container-layout.ts'
 
 export type SplitOutcome<T extends Node> = {
   /** The portion that fit this page, box-local (x=0, y=0). */
@@ -33,29 +35,36 @@ export interface NodeMeasurer<T extends Node = Node> {
 
 export const registry: {
   text: NodeMeasurer<TextNode>
+  richText: NodeMeasurer<RichTextNode>
   separator: NodeMeasurer<SeparatorNode>
   group: NodeMeasurer<GroupNode>
   'page-break': NodeMeasurer<PageBreakNode>
   image: NodeMeasurer<ImageNode>
   table: NodeMeasurer<TableNode>
   chart: NodeMeasurer<ChartNode>
+  container: NodeMeasurer<ContainerNode>
 } = {
   text: textMeasurer,
+  richText: richTextMeasurer,
   separator: separatorMeasurer,
   group: groupMeasurer,
   'page-break': pageBreakMeasurer,
   image: imageMeasurer,
   table: tableMeasurer,
   chart: chartMeasurer,
+  container: containerMeasurer,
 }
 
 // Column groups split between children; separators and page breaks are always atomic; row groups
-// are atomic UNLESS explicitly opted into independent per-column splitting via `splitColumns`.
-// This is a function rather than a static `registry[...].splittable` field because splittability
-// for a group depends on its `direction`/`splitColumns`, not just its `type`.
+// are atomic UNLESS explicitly opted into independent per-column splitting via `splitColumns`. A
+// container delegates entirely to its own child. This is a function rather than a static
+// `registry[...].splittable` field because splittability for a group/container depends on
+// `direction`/`splitColumns`/`child`, not just `type`.
 export function isSplittable(node: Node): boolean {
   if (node.type === 'text') return true
+  if (node.type === 'richText') return true
   if (node.type === 'table') return true
+  if (node.type === 'container') return isSplittable(node.child)
   if (node.type !== 'group') return false
   return node.direction === 'column' || node.splitColumns === true
 }
@@ -69,6 +78,8 @@ export function measureNodeHeight(node: Node, width: number): number {
   switch (node.type) {
     case 'text':
       return registry.text.measureHeight(node, width)
+    case 'richText':
+      return registry.richText.measureHeight(node, width)
     case 'separator':
       return registry.separator.measureHeight(node, width)
     case 'group':
@@ -81,6 +92,8 @@ export function measureNodeHeight(node: Node, width: number): number {
       return registry.table.measureHeight(node, width)
     case 'chart':
       return registry.chart.measureHeight(node, width)
+    case 'container':
+      return registry.container.measureHeight(node, width)
   }
 }
 
@@ -88,6 +101,8 @@ export function layoutNodeFull(node: Node, width: number): RenderedNode {
   switch (node.type) {
     case 'text':
       return registry.text.layout(node, width)
+    case 'richText':
+      return registry.richText.layout(node, width)
     case 'separator':
       return registry.separator.layout(node, width)
     case 'group':
@@ -100,6 +115,8 @@ export function layoutNodeFull(node: Node, width: number): RenderedNode {
       return registry.table.layout(node, width)
     case 'chart':
       return registry.chart.layout(node, width)
+    case 'container':
+      return registry.container.layout(node, width)
   }
 }
 
@@ -107,10 +124,14 @@ export function splitNode(node: Node, width: number, availableHeight: number): S
   switch (node.type) {
     case 'text':
       return registry.text.split!(node, width, availableHeight)
+    case 'richText':
+      return registry.richText.split!(node, width, availableHeight)
     case 'group':
       return registry.group.split!(node, width, availableHeight)
     case 'table':
       return registry.table.split!(node, width, availableHeight)
+    case 'container':
+      return registry.container.split!(node, width, availableHeight)
     case 'separator':
     case 'page-break':
     case 'image':

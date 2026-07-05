@@ -2,6 +2,7 @@ import './style.css'
 import {
   attachInteractions,
   chart,
+  container,
   definePage,
   generatePdf,
   group,
@@ -14,6 +15,7 @@ import {
   ready,
   registerFont,
   renderPreview,
+  richText,
   rowGroup,
   separator,
   showPdfDialog,
@@ -304,9 +306,49 @@ const receiptTable = table({
   rows: receiptRows,
 })
 
+const tableStylingIntro = `Beyond the table-wide border modes and cellPadding above, styling now goes finer-grained: "stripe" (table-level) desugars into alternating row background at build time, same architecture column grouping already uses — table-layout.ts never knows striping happened. "padding" is resolvable per column or per cell (cell.padding ?? column.padding ?? table cellPadding), shown below on the tighter "Qty" column. And "border" on a cell draws a complete rectangle around just that cell's own box, independent of the table-wide border — shown on the one low-stock row's Qty cell — which is why it's a full, separate rectangle rather than a shared-edge line like the table-wide modes (adjacent bordered cells would show a double-thickness line between them).`
+
+const stylingTableColumns: TableColumn[] = [
+  { width: 3, content: headerCaption('Item') },
+  { width: '70px', align: 'end', padding: 4, verticalAlign: 'center', content: headerCaption('Qty') },
+  { width: '84px', align: 'end', content: headerCaption('Price') },
+]
+
+const stylingTableRows: TableRow[] = [
+  { qty: 12, low: false },
+  { qty: 3, low: true },
+  { qty: 40, low: false },
+  { qty: 8, low: false },
+].map((r, i) => ({
+  cells: [
+    { content: text({ content: `Widget ${String.fromCharCode(65 + i)}`, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 }) },
+    {
+      content: text({ content: String(r.qty), fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: r.low ? '#b3261e' : undefined }),
+      ...(r.low ? { border: { thickness: 2, color: '#b3261e' } } : {}),
+      verticalAlign: 'center',
+    },
+    { content: text({ content: `$${(4.5 + i * 3).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }) },
+  ],
+}))
+
+const stylingTable = table({
+  columns: stylingTableColumns,
+  rows: stylingTableRows,
+  cellPadding: 8,
+  border: { mode: 'outer', thickness: 1, color: '#dddddd' },
+  headerBackground: '#eef1f6',
+  stripe: { even: '#ffffff', odd: '#f7f9fc' },
+})
+
 const imageIntro = `Image sizing is deliberately explicit rather than auto-detected from the loaded asset: paginate() stays fully synchronous, so an image node always needs enough of width, height, and aspectRatio to compute its box before anything has actually loaded. The banner below only declares an aspectRatio, so it stretches to the full column width and derives its height from that — the same behavior CSS's own aspect-ratio property gives an element with one auto dimension.`
 
 const objectFitIntro = `Below, the same 400x300 source image is forced into a 220x140 box three times, once per objectFit value, to see how each reconciles a box whose aspect ratio does not match the asset — exactly the native CSS property doing exactly its native job on a real <img> element.`
+
+const containerIntro = `A container node is a single-child decorative wrapper (Flutter's Container is the reference point) — the one thing group deliberately never has: background, border, borderRadius, and padding. Below: a plain card; a row of badges sized via "flex" like any other row child; a chart wrapped in a container to prove background/border/padding "for free" on a node that has none of its own; two containers whose "height" is a MINIMUM rather than an exact size — one shorter than its content (the box grows to fit, content is never clipped or lost) and one taller (the extra space just sits below); a long paragraph wrapped in a container that spans a page break, to prove padding/background repaint correctly on the continuation page; a container nested inside a table cell; and an interactive, draggable container wired into the same interaction demo as everything else below.`
+
+const richTextIntro = `A richText node mixes styled runs inline within a single paragraph — a separate node type from plain text, which stays one uniform run. Below, one paragraph carries a bold run, a colored run, and a real inline link, all wrapping and reflowing together exactly like an ordinary paragraph. The link renders as a genuine anchor element on screen and a real clickable annotation in the exported PDF, both natively clickable with no custom hit-testing involved.`
+
+const containerSplitParagraph = `${longParagraph1} ${longParagraph2} ${longParagraph3} ${longParagraph4} ${longParagraph5}`
 
 const chartIntro = `A chart node is an SVG built entirely by hand at render time — no charting library, consistent with the rest of this engine having no runtime dependency beyond pretext. It sizes itself the same way an image does (height or aspectRatio, resolved before anything is drawn), then chart-render.ts fills that box with axis ticks, gridlines, a legend, and the marks themselves, all as inline SVG attributes. The four kinds below share one chartKind-discriminated node type: two grouped-bar/multi-line series prove the series[] array isn't limited to a single line, and the last chart turns off axis/legend/title entirely via config to show that chrome is opt-out, not baked in. The first chart is also draggable, same as the demo image above — interaction wiring needed zero chart-specific code.`
 
@@ -319,9 +361,16 @@ const cardIntro = `In this card, the outer row is interactive and droppable but 
 const doc = definePage(
   {
     size: 'Letter',
-    margins: { top: 56, right: 56, bottom: 56, left: 56 },
+    margins: { top: 35, right: 35, bottom: 35, left: 35 },
     headerGap: 16,
     footerGap: 16,
+    // Page-level background/border, both page-aware — resolved once per page exactly like header/
+    // footer/watermark. Only page 1 gets a tinted background (no charts there yet, so no clash with
+    // chart-render.ts's white "surface ring" assumption around markers, documented there); the border
+    // is heavier on the cover and final page, thin everywhere else.
+    background: ({ pageNumber }) => (pageNumber === 1 ? '#f5f8ff' : '#ffffff'),
+    border: ({ pageNumber, totalPages }) => ({ thickness: pageNumber === 1 || pageNumber === totalPages ? 3 : 1, color: '#4f7cff' }),
+    watermark: ({ pageNumber }) => ({ kind: 'text', text: pageNumber === 1 ? 'ORIGINAL' : 'COPY', fontSize: 150 }),
     header: () =>
       text({
         content: 'Paginator — Declarative Document Pagination Engine',
@@ -355,6 +404,11 @@ const doc = definePage(
       text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: '#2a7a2a', flex: '100px' }),
     ]),
     text({ content: longParagraph2, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    group({ direction: 'row', gap: 16 }, [
+      text({ content: 'Normal text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18 }),
+      text({ content: 'Underlined text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18, textDecoration: 'underline' }),
+      text({ content: 'Struck-through text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18, textDecoration: 'line-through' }),
+    ]),
     text({ content: 'Isolation From Host CSS', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: longParagraph3, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
@@ -393,6 +447,10 @@ const doc = definePage(
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: spansIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     receiptTable,
+    text({ content: 'Table Styling', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    separator({ thickness: 1, color: '#dddddd' }),
+    text({ content: tableStylingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    stylingTable,
     pageBreak(),
     group({ direction: 'column', crossAlign: 'stretch' }, [
       text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26, align: 'center' }),
@@ -422,6 +480,116 @@ const doc = definePage(
         text({ content: 'objectFit: "fill"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
       ]),
     ]),
+    text({
+      content: `An image also takes a "borderRadius" (clips the image's own pixels — a container's borderRadius only decorates around a still-rectangular image, since it doesn't know how to clip arbitrary content) and "opacity". Both below use the same 400x300 source.`,
+      fontFamily: BODY_FONT,
+      fontSize: 13,
+      lineHeight: 20,
+    }),
+    group({ direction: 'row', gap: 16 }, [
+      group({ direction: 'column', gap: 6 }, [
+        image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', borderRadius: 24, alt: 'borderRadius: 24' }),
+        text({ content: 'borderRadius: 24', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+      ]),
+      group({ direction: 'column', gap: 6 }, [
+        image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', opacity: 0.4, alt: 'opacity: 0.4' }),
+        text({ content: 'opacity: 0.4', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+      ]),
+    ]),
+    text({ content: 'Containers', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    separator({ thickness: 1, color: '#dddddd' }),
+    text({ content: containerIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    container(
+      { background: '#f7f9fc', border: { thickness: 1, color: '#dddddd' }, borderRadius: 8, padding: 16 },
+      group({ direction: 'column', gap: 4 }, [
+        text({ content: 'Plain Card', fontFamily: UI_FONT, fontSize: 14, fontWeight: 700, lineHeight: 18 }),
+        text({
+          content: 'background + border + borderRadius + padding, wrapping an ordinary column group that has none of its own.',
+          fontFamily: BODY_FONT,
+          fontSize: 12,
+          lineHeight: 17,
+          color: '#666666',
+        }),
+      ]),
+    ),
+    group({ direction: 'row', gap: 8 }, [
+      container(
+        { background: '#eef1f6', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        text({ content: 'Draft', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, align: 'center' }),
+      ),
+      container(
+        { background: '#e8f5e9', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        text({ content: 'Approved', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#2a7a2a', align: 'center' }),
+      ),
+      container(
+        { background: '#fdecea', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, flex: '90px' },
+        text({ content: 'Rejected', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#b3261e', align: 'center' }),
+      ),
+    ]),
+    container(
+      { background: '#ffffff', border: { thickness: 1, color: '#dddddd' }, borderRadius: 12, padding: 16 },
+      chart({
+        chartKind: 'bar',
+        height: 200,
+        title: 'Chart Wrapped in a Container',
+        categories: ['Q1', 'Q2', 'Q3', 'Q4'],
+        series: [{ name: 'Revenue', data: [42, 55, 61, 58] }],
+      }),
+    ),
+    group({ direction: 'row', gap: 16 }, [
+      container(
+        { height: 40, background: '#fff7e6', border: { thickness: 1, color: '#f0c36d' }, padding: 8, flex: 1 },
+        text({ content: '"height: 40" — this content needs more room than that, so the box grows to fit it: height is a MINIMUM, never a clip.', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 17 }),
+      ),
+      container(
+        { height: 120, background: '#eef7ff', border: { thickness: 1, color: '#a8d0f0' }, padding: 8, flex: 1 },
+        text({ content: '"height: 120" — shorter content, so the extra space just sits below it.', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 17 }),
+      ),
+    ]),
+    container(
+      { background: '#fafafa', border: { thickness: 1, color: '#dddddd' }, padding: 16 },
+      text({ content: containerSplitParagraph, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    ),
+    table({
+      columns: [{ width: 3, content: headerCaption('Item') }, { width: '120px', content: headerCaption('Status') }],
+      cellPadding: 8,
+      border: { mode: 'all', thickness: 1, color: '#dddddd' },
+      headerBackground: '#eef1f6',
+      rows: [
+        {
+          cells: [
+            { content: text({ content: 'Widget A1', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 }) },
+            {
+              content: container(
+                { background: '#e8f5e9', borderRadius: 4, padding: { top: 3, right: 8, bottom: 3, left: 8 } },
+                text({ content: 'In Stock', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#2a7a2a', align: 'center' }),
+              ),
+            },
+          ],
+        },
+      ],
+    }),
+    container(
+      { background: '#ffffff', border: { thickness: 2, color: '#4f7cff' }, borderRadius: 8, padding: 12, interactive: true, draggable: true, dragType: 'container' },
+      text({ content: 'Drag me — I am an interactive, draggable container', fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 17, color: '#4f7cff' }),
+    ),
+    text({ content: 'Rich Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    separator({ thickness: 1, color: '#dddddd' }),
+    text({ content: richTextIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    richText({
+      fontFamily: BODY_FONT,
+      fontSize: 14,
+      lineHeight: 21,
+      runs: [
+        { text: 'This paragraph starts in plain text, then switches to a ' },
+        { text: 'bold run', fontWeight: 700 },
+        { text: ' mid-sentence, continues with a ' },
+        { text: 'colored run', color: '#4f7cff' },
+        { text: ', and ends with an inline link to the ' },
+        { text: 'pretext repository', color: '#4f7cff', textDecoration: 'underline', href: 'https://github.com/chenglou/pretext' },
+        { text: ' — the same rich-inline layout engine this node is built on.' },
+      ],
+    }),
     text({ content: 'Charts', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: chartIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
@@ -641,6 +809,41 @@ const doc = definePage(
           sliceGap: 0,
         }),
         text({ content: 'colors: [...], sliceGap: 0', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+      ]),
+    ]),
+    text({
+      content: `Beyond series colors, a chart's chrome is themeable too: axis.color/gridlineColor/tickColor override the axis line, gridlines, and tick/category text independently of each other; legend.color overrides legend text; and fontFamily (chart-level) applies to every text role — on the PDF export specifically, this now goes through the SAME font registry text() nodes use, so a chart can render in a registered custom font instead of always falling back to a system font in the exported PDF. Mark geometry is configurable too: barCornerRadius (bar charts), lineStrokeWidth and markerRadius (line charts).`,
+      fontFamily: BODY_FONT,
+      fontSize: 13,
+      lineHeight: 20,
+    }),
+    group({ direction: 'row', gap: 16 }, [
+      group({ direction: 'column', gap: 6 }, [
+        chart({
+          chartKind: 'bar',
+          height: 220,
+          title: 'Custom Theme + Font',
+          fontFamily: BODY_FONT,
+          categories: ['Q1', 'Q2', 'Q3', 'Q4'],
+          series: [{ name: 'Revenue', data: [42, 55, 61, 58] }],
+          axis: { color: '#8a5a00', gridlineColor: '#f3e0b8', tickColor: '#8a5a00' },
+          legend: { color: '#8a5a00' },
+          colors: ['#c98a1a'],
+          barCornerRadius: 10,
+        }),
+        text({ content: 'axis/gridline/tick/legend colors + fontFamily + barCornerRadius: 10', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+      ]),
+      group({ direction: 'column', gap: 6 }, [
+        chart({
+          chartKind: 'line',
+          height: 220,
+          title: 'Custom Mark Geometry',
+          categories: ['W1', 'W2', 'W3', 'W4', 'W5'],
+          series: [{ name: '2026', data: [140, 151, 149, 162, 171] }],
+          lineStrokeWidth: 4,
+          markerRadius: 7,
+        }),
+        text({ content: 'lineStrokeWidth: 4, markerRadius: 7', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({ content: 'Interaction Events', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),

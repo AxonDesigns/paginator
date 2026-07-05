@@ -22,15 +22,17 @@
 // bodies, never at module top level. See group-layout.ts's header comment for the full argument.
 // Do not hoist either cross-reference out of a function body.
 
-import type { Node, TableCell, TableColumn, TableNode, TableRow } from './nodes.ts'
+import type { ContainerBorder, Node, TableCell, TableColumn, TableNode, TableRow } from './nodes.ts'
 import type { Box, RenderedNode, RenderedTableCell, RenderedTableRow } from './geometry.ts'
 import { translateRendered } from './geometry.ts'
 import type { NodeMeasurer, SplitOutcome } from './behavior.ts'
 import { textMeasurer } from './measure-text.ts'
+import { richTextMeasurer } from './measure-rich-text.ts'
 import { separatorMainSize, separatorMeasurer } from './separator-layout.ts'
 import { imageMeasurer } from './image-layout.ts'
 import { childCrossWidthInColumn, groupMeasurer, resolveFlexWidths, type RowChildSizing } from './group-layout.ts'
 import { chartMeasurer } from './chart-layout.ts'
+import { containerMeasurer } from './container-layout.ts'
 
 const EPSILON = 0.01
 
@@ -43,21 +45,25 @@ const GROUP_INDENT = 16
 
 function measureNodeHeight(node: Node, width: number): number {
   if (node.type === 'text') return textMeasurer.measureHeight(node, width)
+  if (node.type === 'richText') return richTextMeasurer.measureHeight(node, width)
   if (node.type === 'separator') return separatorMainSize(node)
   if (node.type === 'page-break') return 0
   if (node.type === 'image') return imageMeasurer.measureHeight(node, width)
   if (node.type === 'group') return groupMeasurer.measureHeight(node, width)
   if (node.type === 'chart') return chartMeasurer.measureHeight(node, width)
+  if (node.type === 'container') return containerMeasurer.measureHeight(node, width)
   return tableMeasurer.measureHeight(node, width)
 }
 
 function layoutNode(node: Node, width: number): RenderedNode {
   if (node.type === 'text') return textMeasurer.layout(node, width)
+  if (node.type === 'richText') return richTextMeasurer.layout(node, width)
   if (node.type === 'separator') return separatorMeasurer.layout(node, width)
   if (node.type === 'page-break') return { type: 'page-break', box: { x: 0, y: 0, width, height: 0 }, node }
   if (node.type === 'image') return imageMeasurer.layout(node, width)
   if (node.type === 'group') return groupMeasurer.layout(node, width)
   if (node.type === 'chart') return chartMeasurer.layout(node, width)
+  if (node.type === 'container') return containerMeasurer.layout(node, width)
   return tableMeasurer.layout(node, width)
 }
 
@@ -93,19 +99,23 @@ function sumRange(values: number[], start: number, end: number): number {
 
 // --- Cell alignment resolution ---
 
-type ResolvedCell = { contentBox: Box; rendered: RenderedNode }
+type ResolvedCell = { contentBox: Box; rendered: RenderedNode; padding: number }
 
 // colWidth is the cell's FULL effective width — already summed across colSpan by the caller, so
-// this function itself needs no awareness of spans at all.
-function layoutCell(cell: TableCell, column: TableColumn, colWidth: number, cellPadding: number): ResolvedCell {
-  const availableWidth = Math.max(0, colWidth - 2 * cellPadding)
+// this function itself needs no awareness of spans at all. `tablePadding` is the table-wide
+// default (TableNode.cellPadding); resolution order for what actually applies to THIS cell is
+// cell.padding ?? column.padding ?? tablePadding, mirroring how `background` already resolves
+// (cell ?? row ?? column) in prepareRowCells below.
+function layoutCell(cell: TableCell, column: TableColumn, colWidth: number, tablePadding: number): ResolvedCell {
+  const padding = cell.padding ?? column.padding ?? tablePadding
+  const availableWidth = Math.max(0, colWidth - 2 * padding)
   const hAlign = cell.align ?? column.align ?? 'stretch'
   const content = requireContent(cell)
   const contentWidth = hAlign === 'stretch' ? availableWidth : Math.min(childCrossWidthInColumn(content, availableWidth), availableWidth)
   const contentHeight = measureNodeHeight(content, contentWidth)
-  const x = cellPadding + (hAlign === 'center' ? (availableWidth - contentWidth) / 2 : hAlign === 'end' ? availableWidth - contentWidth : 0)
-  const rendered = translateRendered(layoutNode(content, contentWidth), x, cellPadding)
-  return { contentBox: { x, y: cellPadding, width: contentWidth, height: contentHeight }, rendered }
+  const x = padding + (hAlign === 'center' ? (availableWidth - contentWidth) / 2 : hAlign === 'end' ? availableWidth - contentWidth : 0)
+  const rendered = translateRendered(layoutNode(content, contentWidth), x, padding)
+  return { contentBox: { x, y: padding, width: contentWidth, height: contentHeight }, rendered, padding }
 }
 
 type CellsRow = Extract<TableRow, { kind?: 'cells' }>
@@ -122,9 +132,11 @@ type PreparedCell = {
   rowSpan: number
   width: number // combined width across colSpan
   naturalHeight: number // this cell's own natural content height at `width`
-  hAlignedRendered: RenderedNode // horizontally positioned + cellPadding-y baked in; vertical align offset added later
+  hAlignedRendered: RenderedNode // horizontally positioned + padding-y baked in; vertical align offset added later
   background?: string
+  border?: ContainerBorder
   verticalAlign: 'start' | 'center' | 'end'
+  padding: number // resolved cell.padding ?? column.padding ?? table cellPadding
 }
 
 function prepareRowCells(row: CellsRow, columns: TableColumn[], colWidths: number[], cellPadding: number): PreparedCell[] {
@@ -143,7 +155,9 @@ function prepareRowCells(row: CellsRow, columns: TableColumn[], colWidths: numbe
       naturalHeight: laid.contentBox.height,
       hAlignedRendered: laid.rendered,
       background: cell.background ?? row.background ?? column.background,
-      verticalAlign: cell.verticalAlign ?? row.verticalAlign ?? 'start',
+      border: cell.border,
+      verticalAlign: cell.verticalAlign ?? row.verticalAlign ?? column.verticalAlign ?? 'start',
+      padding: laid.padding,
     }
   })
 }
@@ -176,7 +190,7 @@ function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: 
         // the deficit pass below explicitly skips every header row regardless.
         const prepared = prepareRowCells({ cells: row.cells, background: row.background }, columns, colWidths, cellPadding)
         preparedPerRow.push(null)
-        heights.push(prepared.reduce((acc, c) => Math.max(acc, c.naturalHeight + 2 * cellPadding), 0))
+        heights.push(prepared.reduce((acc, c) => Math.max(acc, c.naturalHeight + 2 * c.padding), 0))
         continue
       }
       const availableWidth = Math.max(0, fullWidth - 2 * cellPadding - row.depth * GROUP_INDENT)
@@ -186,7 +200,7 @@ function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: 
     }
     const prepared = prepareRowCells(row, columns, colWidths, cellPadding)
     preparedPerRow.push(prepared)
-    const intrinsic = prepared.reduce((acc, c) => (c.rowSpan > 1 ? acc : Math.max(acc, c.naturalHeight + 2 * cellPadding)), 0)
+    const intrinsic = prepared.reduce((acc, c) => (c.rowSpan > 1 ? acc : Math.max(acc, c.naturalHeight + 2 * c.padding)), 0)
     heights.push(intrinsic)
   }
 
@@ -195,7 +209,7 @@ function resolveRowHeights(rows: TableRow[], columns: TableColumn[], colWidths: 
     for (const cell of preparedPerRow[r]!) {
       if (cell.rowSpan <= 1) continue
       const spanEnd = r + cell.rowSpan // guaranteed <= rows.length by resolveCellSpans() at build time
-      const combinedNatural = cell.naturalHeight + 2 * cellPadding
+      const combinedNatural = cell.naturalHeight + 2 * cell.padding
       const currentSum = sumRange(heights, r, spanEnd)
       if (combinedNatural > currentSum) {
         heights[spanEnd - 1] = heights[spanEnd - 1]! + (combinedNatural - currentSum)
@@ -230,11 +244,11 @@ function layoutRows(rows: TableRow[], columns: TableColumn[], colWidths: number[
   const renderCells = (prepared: PreparedCell[], r: number): RenderedTableCell[] =>
     prepared.map(cell => {
       const boxHeight = cell.rowSpan > 1 ? sumRange(heights, r, r + cell.rowSpan) : heights[r]!
-      const availableHeight = Math.max(0, boxHeight - 2 * cellPadding)
+      const availableHeight = Math.max(0, boxHeight - 2 * cell.padding)
       const dy =
         cell.verticalAlign === 'center' ? (availableHeight - cell.naturalHeight) / 2 : cell.verticalAlign === 'end' ? availableHeight - cell.naturalHeight : 0
       const rendered = translateRendered(cell.hAlignedRendered, colX[cell.resolvedCol]!, rowY[r]! + dy)
-      return { box: { x: colX[cell.resolvedCol]!, y: rowY[r]!, width: cell.width, height: boxHeight }, rendered, background: cell.background }
+      return { box: { x: colX[cell.resolvedCol]!, y: rowY[r]!, width: cell.width, height: boxHeight }, rendered, background: cell.background, border: cell.border }
     })
 
   return rows.map((row, r) => {

@@ -7,6 +7,55 @@ export type PageSize = 'A4' | 'Letter' | { width: number; height: number }
 export type HeaderFooterContext = { pageNumber: number; totalPages: number }
 export type HeaderFooterContent = Node | ((ctx: HeaderFooterContext) => Node)
 
+// A watermark is deliberately NOT a Node: it never participates in pagination/flow (doesn't
+// consume content-box height, isn't registered in behavior.ts's measure/layout/split dispatch). It's
+// a page-absolute decorative overlay, resolved once per page in paginate() exactly like header/footer
+// content is, then painted directly by each renderer LAST — on top of header/body/footer/background/
+// border — so an opaque table stripe, container background, or chart's white surface elsewhere on
+// the page can never fully hide it. `pointerEvents`/hit-testing never apply to it for the same reason
+// it isn't a Node: it can't be an attachInteractions() target since it isn't part of the authored tree.
+export type WatermarkBase = {
+  /** 0-1. Default 0.15. */
+  opacity?: number
+  /** Degrees, clockwise. Default -45 (classic diagonal stamp). */
+  rotation?: number
+  /** Repeat in a grid across the whole page instead of a single centered instance. Default false. */
+  tile?: boolean
+  /** px gap between tiled repeats. Only meaningful when `tile` is true. */
+  tileGapX?: number
+  tileGapY?: number
+}
+
+export type TextWatermark = WatermarkBase & {
+  kind: 'text'
+  text: string
+  /** Falls back to a built-in bold Helvetica when omitted — no registerFont() warning, since no
+   *  family was ever requested. */
+  fontFamily?: string
+  fontWeight?: number
+  fontStyle?: 'normal' | 'italic'
+  /** px. Default 72. */
+  fontSize?: number
+  /** Default '#000000'. */
+  color?: string
+}
+
+export type ImageWatermark = WatermarkBase & {
+  kind: 'image'
+  src: string
+  width: number
+  height: number
+}
+
+export type Watermark = TextWatermark | ImageWatermark
+export type WatermarkContent = Watermark | ((ctx: HeaderFooterContext) => Watermark)
+
+// Same per-page-aware shape as HeaderFooterContent/WatermarkContent: a plain value, resolved once
+// per page in paginate() with a `{pageNumber, totalPages}` callback when a page-varying decoration
+// is needed (e.g. a colored background only on the cover page, or a heavier border on the last page).
+export type PageBackgroundContent = string | ((ctx: HeaderFooterContext) => string)
+export type PageBorderContent = ContainerBorder | ((ctx: HeaderFooterContext) => ContainerBorder)
+
 export type PageDef = {
   size: PageSize
   margins: Margins
@@ -18,6 +67,12 @@ export type PageDef = {
   footerHeight?: number
   headerGap?: number
   footerGap?: number
+  /** Solid page background color. Default white. */
+  background?: PageBackgroundContent
+  /** Border drawn around the page's own edge. No `borderRadius` (a page is never clipped/cropped). */
+  border?: PageBorderContent
+  /** Decorative overlay drawn on top of every page's content (e.g. a "DRAFT" stamp or logo). */
+  watermark?: WatermarkContent
   body: Node
 }
 
@@ -113,6 +168,7 @@ export type TextNode = Interactive & {
   fontStyle?: 'normal' | 'italic'
   color?: string
   align?: TextAlign
+  textDecoration?: 'none' | 'underline' | 'line-through'
   /** px. Required — pretext takes line-height at layout time, not baked into prepare(). */
   lineHeight: number
   letterSpacing?: number
@@ -124,6 +180,52 @@ export type TextNode = Interactive & {
   __prepared?: unknown
   /** @internal set on synthetic continuation nodes produced by splitting across a page break */
   __resumeCursor?: LayoutCursorLike
+}
+
+export type RichTextRun = {
+  text: string
+  /** Falls back to RichTextNode.fontFamily when omitted. */
+  fontFamily?: string
+  /** Falls back to RichTextNode.fontSize when omitted. */
+  fontSize?: number
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+  color?: string
+  textDecoration?: 'none' | 'underline' | 'line-through'
+  letterSpacing?: number
+  /** Presence marks this run as an inline link: rendered as a real `<a href>` in the DOM
+   *  output and a real pdfkit `.link()` clickable annotation in the PDF output — deliberately
+   *  NOT part of the generic interactive/hit-registry system (see the Node union comment below). */
+  href?: string
+}
+
+export type RichInlineCursorLike = { itemIndex: number; segmentIndex: number; graphemeIndex: number }
+
+// Mixed-style inline runs (bold one word mid-sentence, colored spans, inline links) within a
+// single paragraph — a separate node type from TextNode (which stays one uniform run), per the
+// Node union's own "Phase 2" comment below. No `whiteSpace`/`wordBreak` fields: pretext's
+// rich-inline module (@chenglou/pretext/rich-inline) is documented as inline-only and
+// `white-space: normal`-only on purpose, so those TextNode options don't apply here.
+export type RichTextNode = Interactive & {
+  type: 'richText'
+  runs: RichTextRun[]
+  /** Paragraph-level defaults — any run above that omits a field falls back to this. */
+  fontFamily: string
+  fontSize: number
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+  color?: string
+  align?: TextAlign
+  textDecoration?: 'none' | 'underline' | 'line-through'
+  /** px. Required — pretext takes line-height at layout time, not baked into prepare(). */
+  lineHeight: number
+  letterSpacing?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+  /** @internal memoized PreparedRichInline, set lazily by the measure layer */
+  __prepared?: unknown
+  /** @internal set on synthetic continuation nodes produced by splitting across a page break */
+  __resumeCursor?: RichInlineCursorLike
 }
 
 export type SeparatorNode = Interactive & {
@@ -159,8 +261,39 @@ export type ImageNode = Interactive & {
   /** width / height. Used to derive whichever of width/height is missing. */
   aspectRatio?: number
   objectFit?: ObjectFit // default 'fill', matching the CSS initial value
+  /** Rounds the image's own painted content (not just a wrapping box) — clips the actual pixels,
+   *  unlike wrapping the image in a `container`'s `borderRadius`, which would only decorate around
+   *  a still-rectangular image. */
+  borderRadius?: number
+  /** 0-1. */
+  opacity?: number
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
+}
+
+export type ContainerBorder = { thickness?: number; color?: string }
+
+// A single-child decorative wrapper (Flutter's Container) — the paint group deliberately never
+// has: background/border/borderRadius/padding. Unlike group, it never lays out multiple children;
+// it exists purely to decorate one child, plus width/flex/height sizing whose mechanism is
+// identical to ImageNode's (see container-layout.ts's header comment for the full sizing contract).
+export type ContainerNode = Interactive & {
+  type: 'container'
+  child: Node
+  /** Natural/shrink-wrap width in a non-stretch context — same mechanism as ImageNode.width (see
+   *  childCrossWidthInColumn in group-layout.ts). Overridden by an ancestor's crossAlign: 'stretch',
+   *  same known limitation image/chart already have. */
+  width?: number
+  /** MINIMUM content-box height, NOT exact/clipped — box height is
+   *  Math.max(height ?? 0, childNaturalHeight + padding.top + padding.bottom). Not enforced on a
+   *  fragment produced by splitting across a page boundary (see container-layout.ts). */
+  height?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. */
+  flex?: FlexSize
+  padding?: number | Margins
+  background?: string
+  border?: ContainerBorder
+  borderRadius?: number
 }
 
 export type ChartKind = 'bar' | 'line' | 'pie' | 'donut'
@@ -198,6 +331,12 @@ export type ChartAxisConfig = {
   tickFontSize?: number
   /** Font size (px) of the x-axis category labels. Default 11. */
   categoryFontSize?: number
+  /** Axis baseline color. Default a neutral gray. */
+  color?: string
+  /** Gridline color. Independent of `color`/`show` — see `gridlines`. Default a lighter neutral gray. */
+  gridlineColor?: string
+  /** Text color of BOTH the y-axis tick numbers and the x-axis category labels. Default a muted ink. */
+  tickColor?: string
 }
 
 export type ChartViewConfig = {
@@ -227,6 +366,8 @@ export type ChartLegendConfig = {
   position?: 'right' | 'bottom' // default 'right'
   /** Font size (px) of legend entry labels. Default 11. */
   fontSize?: number
+  /** Text color of legend entry labels. Default a secondary ink. */
+  color?: string
 }
 
 export type ChartTitleConfig = { text: string; fontSize?: number; color?: string }
@@ -242,6 +383,11 @@ type ChartCommon = Interactive & {
   legend?: ChartLegendConfig
   /** Categorical palette override, cycled by index — falls back to a built-in default palette. */
   colors?: string[]
+  /** Font family for every text role in the chart (title/axis/legend). Default a system-ui stack.
+   *  On the PDF renderer, this is looked up in the SAME font registry `text()` nodes use
+   *  (`registerFont()`) — an unregistered family falls back to Helvetica, same warn-once behavior
+   *  as a TextNode with a missing font. */
+  fontFamily?: string
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
 }
@@ -277,6 +423,8 @@ export type BarChartNode = CategoricalChartCommon & {
   /** `barMode: 'stacked'` only. Gap (px) left between consecutive stacked segments — the true
    *  baseline edge and the outermost tip edge are never inset by this. Default 0 (flush segments). */
   barSegmentGap?: number
+  /** Corner radius (px) of the rounded "data end" of a bar — see the dataviz mark spec. Default 4. */
+  barCornerRadius?: number
 }
 
 export type LineChartNode = CategoricalChartCommon & {
@@ -286,6 +434,11 @@ export type LineChartNode = CategoricalChartCommon & {
    *  — tangents are clamped so the curve never overshoots past a point's own value between it and
    *  its neighbors, unlike a naive Catmull-Rom spline. Applies to every series in the chart. */
   lineCurve?: 'linear' | 'monotone'
+  /** Stroke width (px) of the line itself. Default 2. */
+  lineStrokeWidth?: number
+  /** Radius (px) of each data-point marker. The white "surface ring" behind it stays 2px larger
+   *  than this, same relationship as the library's default (4px marker / 6px ring). Default 4. */
+  markerRadius?: number
 }
 
 export type PieChartNode = RadialChartCommon & { chartKind: 'pie' }
@@ -330,6 +483,13 @@ export type TableColumn = {
   width?: FlexSize
   background?: string
   align?: CrossAlign
+  /** Per-column default cell padding (px, all 4 sides) — overrides `TableNode.cellPadding` for
+   *  every cell in this column, unless that cell sets its own `TableCell.padding`. */
+  padding?: number
+  /** Per-column default vertical alignment — overrides the table default (`'start'`) for every
+   *  cell in this column, unless that cell or its row sets its own `verticalAlign`. Also applies
+   *  to the auto-generated header row (from `content`, below), which has no other way to set this. */
+  verticalAlign?: 'start' | 'center' | 'end'
   /**
    * Optional header caption for this column. If ANY column defines this, table() auto-builds a
    * single header row from every column's `content` (all of them must then define it — partial
@@ -358,6 +518,15 @@ export type TableCell = {
   background?: string
   align?: CrossAlign // overrides the cell's column — for a colSpan cell, resolved against its STARTING column only
   verticalAlign?: 'start' | 'center' | 'end' // overrides the cell's row
+  /** Overrides `column.padding`/`TableNode.cellPadding` for THIS cell only (px, all 4 sides). */
+  padding?: number
+  /** A complete rectangle drawn around this cell's own box — independent of, and always drawn on
+   *  top of, the table-wide `TableNode.border` modes. Unlike those (which never double-draw
+   *  thickness at a shared edge between two cells), a per-cell border always draws its own full
+   *  perimeter, so two adjacent bordered cells show a double-thickness line between them — a
+   *  simpler, deliberately different look, not a bug. No `borderRadius` (a rounded corner on one
+   *  cell in a shared grid has no well-defined visual meaning next to its square neighbors). */
+  border?: ContainerBorder
   /**
    * Plain comparable value, purely a convenience: `totals()` callbacks receive the original
    * authored rows, so stashing a plain number/string here (alongside `content`) gives them
@@ -451,13 +620,19 @@ export type TableNode = Interactive & {
    *  object is present but `mode` isn't specified. */
   border?: { mode?: TableBorderMode; thickness?: number; color?: string }
   cellPadding?: number // default 0, reserved on all 4 sides inside every cell box
+  /** Alternating row background, desugared entirely at table() build time into per-row
+   *  `background` (table-layout.ts never knows striping happened, same architecture as `groups`).
+   *  Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a
+   *  column-grouping header/divider bar — and never overrides a row that already sets its own
+   *  `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even). */
+  stripe?: { even?: string; odd?: string }
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
 }
 
-export type Node = GroupNode | TextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode
-// Phase 2 (not built here): rich-text Node, CustomNode — added as new union members plus new
-// registry entries in behavior.ts, with no change required to paginate.ts or group-layout.ts.
+export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode
+// Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
+// new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 
 export function definePage(config: Omit<PageDef, 'body'>, body: Node): PageDef {
   return { ...config, body }
@@ -470,6 +645,11 @@ export function group(config: DistributiveOmit<GroupNode, 'type' | 'children'>, 
 export function text(config: Omit<TextNode, 'type' | 'lineHeight'> & { lineHeight?: number }): TextNode {
   const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2)
   return { type: 'text', ...config, lineHeight }
+}
+
+export function richText(config: Omit<RichTextNode, 'type' | 'lineHeight'> & { lineHeight?: number }): RichTextNode {
+  const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2)
+  return { type: 'richText', ...config, lineHeight }
 }
 
 export function separator(config?: Omit<SeparatorNode, 'type'>): SeparatorNode {
@@ -494,6 +674,10 @@ export function image(config: Omit<ImageNode, 'type'>): ImageNode {
     )
   }
   return { type: 'image', ...config }
+}
+
+export function container(config: Omit<ContainerNode, 'type' | 'child'>, child: Node): ContainerNode {
+  return { type: 'container', ...config, child }
 }
 
 export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
@@ -776,6 +960,7 @@ export function rowGroup(groupValues: string[], rows: Extract<TableRow, { kind?:
 
 export function table(config: Omit<TableNode, 'type'>): TableNode {
   const hasGroups = (config.groups?.length ?? 0) > 0
+  const hasStripe = config.stripe !== undefined
 
   const hasAnySpan = config.rows.some(row => row.kind !== 'header' && row.cells.some(c => (c.colSpan ?? 1) !== 1 || (c.rowSpan ?? 1) !== 1))
   if (hasAnySpan && config.rows.some(r => r.kind === 'header')) {
@@ -834,7 +1019,7 @@ export function table(config: Omit<TableNode, 'type'>): TableNode {
     })
   })
 
-  if (!hasGroups && !useAutoHeader && !hasAnySpan) {
+  if (!hasGroups && !useAutoHeader && !hasAnySpan && !hasStripe) {
     return { type: 'table', ...config } // unchanged fast path — zero overhead for ordinary tables
   }
 
@@ -855,11 +1040,29 @@ export function table(config: Omit<TableNode, 'type'>): TableNode {
 
   const desugaredBodyRows = hasGroups ? applyGroupingRows(spanResolvedBodyRows, config.groups!, config.repeatGroupHeaders ?? true, config.columns.length) : spanResolvedBodyRows
   const headerRowCount = useAutoHeader ? 1 : manualHeaderRowCount
+  const assembledRows = headerRowCount > 0 ? [...literalHeaderRows, ...desugaredBodyRows] : desugaredBodyRows
+  const finalRows = hasStripe ? applyStripeRows(assembledRows, headerRowCount, config.stripe!) : assembledRows
 
   return {
     type: 'table',
     ...config,
-    rows: headerRowCount > 0 ? [...literalHeaderRows, ...desugaredBodyRows] : desugaredBodyRows,
+    rows: finalRows,
     headerRows: headerRowCount,
   }
+}
+
+// Desugars `TableNode.stripe` into per-row `background` at build time — table-layout.ts never
+// knows striping happened, same architecture `groups` already uses. Skips the literal header-row
+// prefix (the first `headerRowCount` rows, whether hand-authored or auto-generated from
+// column.content) and any column-grouping header/divider bar (`kind: 'header'`) — `even`/`odd`
+// count sequentially through only the ordinary data rows that remain, and never override a row
+// that already set its own `background`.
+function applyStripeRows(rows: TableRow[], headerRowCount: number, stripe: { even?: string; odd?: string }): TableRow[] {
+  let dataIndex = 0
+  return rows.map((row, i) => {
+    if (i < headerRowCount || row.kind === 'header') return row
+    const background = row.background ?? (dataIndex % 2 === 0 ? stripe.even : stripe.odd)
+    dataIndex++
+    return background === row.background ? row : { ...row, background }
+  })
 }

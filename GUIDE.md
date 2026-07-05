@@ -1,11 +1,12 @@
 # Paginator — Architecture & API Guide
 
 Declarative, print/PDF-style document layout and pagination engine. You author a document as a
-tree of building blocks (page config with header/footer/margins, Group, Text, Separator,
-PageBreak, Image), and the engine computes page breaks and exact pixel positions **purely
-arithmetically** — never via DOM measurement (`getBoundingClientRect`/`offsetHeight`) — then
-renders the result into real, isolated DOM. A separate opt-in layer adds hover/click/drag/drop
-events over the same computed layout, intended for building an editor on top of this later.
+tree of building blocks (page config with header/footer/margins, Group, Text, RichText, Separator,
+PageBreak, Image, Container, Table, Chart), and the engine computes page breaks and exact pixel
+positions **purely arithmetically** — never via DOM measurement
+(`getBoundingClientRect`/`offsetHeight`) — then renders the result into real, isolated DOM. A
+separate opt-in layer adds hover/click/drag/drop events over the same computed layout, intended
+for building an editor on top of this later.
 
 This document is written for an AI (or human) picking up this codebase cold. It states the
 load-bearing invariants explicitly rather than leaving them implicit in code, since several bugs
@@ -103,9 +104,11 @@ mount(result, document.getElementById('app')!)
 | `definePage` | `(config: Omit<PageDef,'body'>, body: Node) => PageDef` | Top-level document wrapper |
 | `group` | `(config: Omit<GroupNode,'type'\|'children'>, children: Node[]) => GroupNode` | Row or column container |
 | `text` | `(config: Omit<TextNode,'type'\|'lineHeight'> & { lineHeight?: number }) => TextNode` | `lineHeight` defaults to `round(fontSize * 1.2)` |
+| `richText` | `(config: Omit<RichTextNode,'type'\|'lineHeight'> & { lineHeight?: number }) => RichTextNode` | Mixed-style inline `runs` (bold one word mid-sentence, colored spans, inline links via `run.href`) within one paragraph — a separate node from `text`, which stays one uniform run. `lineHeight` defaults the same way. A run with `href` renders as a real `<a>` on screen and a real pdfkit link annotation in the PDF, bypassing the interactive/hit-registry system entirely (see "Known limitations") |
 | `separator` | `(config?: Omit<SeparatorNode,'type'>) => SeparatorNode` | Thin rule, dual orientation (see below) |
 | `pageBreak` | `() => PageBreakNode` | Forces a page break; zero-size marker |
 | `image` | `(config: Omit<ImageNode,'type'>) => ImageNode` | **Throws** if neither `height` nor `aspectRatio` is given |
+| `container` | `(config: Omit<ContainerNode,'type'\|'child'>, child: Node) => ContainerNode` | Single-child decorative wrapper (Flutter's `Container`) — `background`/`border`/`borderRadius`/`padding`, plus `width`/`height`(minimum)/`flex` sizing. The one place `background`/`border`/`padding` exist for an otherwise-plain piece of content, since `group` deliberately has none of those |
 | `table` | `(config: Omit<TableNode,'type'>) => TableNode` | Fixed grid, not semantic HTML — see below. **Throws** on a row/column-count mismatch, `headerRows` exceeding the row count, every column marked `group`, a `totals()` callback returning the wrong cell count, partial adoption of `column.content` across the effective columns, or `column.content` combined with an explicit `headerRows` |
 | `chart` | `(config: Omit<ChartNode,'type'>) => ChartNode` | SVG bar/line/pie/donut, discriminated by `chartKind`. **Throws** if neither `height` nor `aspectRatio` is given, if `categories`/`series` are missing (or a series' `data` length doesn't match `categories`) for `bar`/`line`, or if `slices` are missing (or a slice has a negative/non-finite `value`) for `pie`/`donut` |
 
@@ -152,7 +155,46 @@ default. See the "Interaction system" section for their semantics.
 | `header` / `footer` | `Node \| ((ctx: { pageNumber, totalPages }) => Node)` | See two-pass resolution below |
 | `headerHeight` / `footerHeight` | `number?` | Explicit override; skips auto-measurement |
 | `headerGap` / `footerGap` | `number?` | Default 0 |
+| `background` | `string \| ((ctx: { pageNumber, totalPages }) => string)?` | Solid page background color. Default white. Resolved once per page in `paginate()`, exactly like `header`/`footer`/`watermark` — same callback shape, so e.g. only the cover page can have a colored background. Threaded through `PaginatedPage.background`, drawn by both `mount()` and `generatePdf()` |
+| `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`. No `borderRadius` (a page is never clipped/cropped) |
+| `watermark` | `Watermark \| ((ctx: { pageNumber, totalPages }) => Watermark)?` | Decorative overlay drawn on every page. See below |
 | `body` | `Node` | Usually a column `group` |
+
+### `Watermark`
+Not a `Node` — it never participates in pagination/flow (doesn't consume content-box height, isn't
+registered in `behavior.ts`'s measure/layout/split dispatch). It's a page-absolute overlay, resolved
+once per page in `paginate()` exactly like `header`/`footer` content is (same
+`{ pageNumber, totalPages }` callback shape), then painted directly by both renderers **last** — on
+top of the page background, border, and header/body/footer content — so an opaque table stripe,
+container background, or chart's white surface elsewhere on the page can never hide it. Never a
+hit-test target (it can't be an `attachInteractions()` target since it isn't part of the authored
+node tree).
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | `'text' \| 'image'` | Discriminant |
+| `opacity` | `number?` | `0-1`. Default `0.15` |
+| `rotation` | `number?` | Degrees, clockwise. Default `-45` (classic diagonal stamp) |
+| `tile` | `boolean?` | Repeat in a grid across the whole page instead of a single centered instance. Default `false` |
+| `tileGapX` / `tileGapY` | `number?` | px gap between tiled repeats. Only meaningful when `tile: true` |
+
+Text watermark (`kind: 'text'`) additionally: `text: string`, `fontFamily?` (falls back to a
+built-in bold Helvetica/sans-serif with no `registerFont()` warning when omitted — no family was
+ever requested), `fontWeight?`, `fontStyle?`, `fontSize?` (default `72`), `color?` (default
+`#000000`).
+
+Image watermark (`kind: 'image'`) additionally: `src: string`, `width: number`, `height: number`.
+
+```ts
+definePage(
+  {
+    size: 'A4',
+    margins: { top: 40, right: 40, bottom: 40, left: 40 },
+    watermark: ({ pageNumber }) => ({ kind: 'text', text: pageNumber === 1 ? 'ORIGINAL' : 'COPY' }),
+    body: myBody,
+  },
+)
+```
 
 ### `GroupNode` (`type: 'group'`)
 | Field | Type | Notes |
@@ -171,7 +213,8 @@ default. See the "Interaction system" section for their semantics.
 | `content` | `string` | |
 | `fontFamily`, `fontSize` | `string`, `number` | Required |
 | `fontWeight`, `fontStyle`, `color` | optional | `fontWeight` default 400, `color` default `#000000` |
-| `align` | `'left'\|'center'\|'right'` | Default `'left'` — pretext has **no** alignment concept; this is computed per-line from `line.width` vs box width |
+| `align` | `'left'\|'center'\|'right'` | Default `'left'` — pretext has **no** alignment concept; this is computed per-line from `line.width` vs box width. No `'justify'` — see Known Limitations |
+| `textDecoration` | `'none'\|'underline'\|'line-through'?` | Default `'none'`. On the PDF renderer, drawn as a hand-positioned line using each line's own already-known `line.width` — deliberately NOT pdfkit's built-in `.text()` `underline`/`strike` options, which throw `"unsupported number: NaN"` under this codebase's `lineBreak: false`/manual-baseline positioning (see Common Pitfalls) |
 | `lineHeight` | `number` | px. Required by the type, but the `text()` builder fills a default |
 | `letterSpacing`, `whiteSpace`, `wordBreak` | optional | Forwarded to pretext's `prepare()` |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
@@ -198,7 +241,31 @@ structure; inert (renders nothing, forces nothing) as a row's column.
 | `width`, `height` | `number?` | At least one of `{width & height}`, `{width & aspectRatio}`, `{height & aspectRatio}`, or `{aspectRatio alone}` required |
 | `aspectRatio` | `number?` | `width / height` |
 | `objectFit` | `'fill'\|'contain'\|'cover'\|'none'\|'scale-down'` | Default `'fill'`, maps directly to the CSS property |
+| `borderRadius` | `number?` | Rounds the image's own painted content (a replaced element clips to `border-radius` natively on screen; PDF uses a clip region) — NOT the same as wrapping the image in a `container`'s `borderRadius`, which would only decorate around a still-rectangular image |
+| `opacity` | `number?` | `0-1` |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
+
+### `ContainerNode` (`type: 'container'`)
+A single-child decorative wrapper — Flutter's `Container` is the reference point — since `group`
+(the only general-purpose multi-child node) deliberately carries none of this: no background,
+border, borderRadius, or padding. Wrapping any other node (image, chart, table, text, another
+group) in a zero-padding container gives it a background/border/padding "for free," which is why
+those don't need their own such fields.
+
+| Field | Type | Notes |
+|---|---|---|
+| `child` | `Node` | Exactly one — not an array. Wrap a `group` for multiple children |
+| `width` | `number?` | Natural/shrink-wrap width in a non-stretch column context — same mechanism as `ImageNode.width` (`childCrossWidthInColumn` in `group-layout.ts`). Overridden by an ancestor's `crossAlign: 'stretch'`, same known limitation image/chart already have |
+| `height` | `number?` | A **MINIMUM**, not exact/clipped: box content height is `Math.max(height ?? 0, childNaturalHeight + padding.top + padding.bottom)` — the same `targetHeight`-as-floor pattern `layoutColumn` already uses. Deliberately not exact/clipping: no clip-region code needed in either renderer, and content is never silently lost. Not re-enforced on a fragment produced by splitting across a page boundary — the ordinary (non-split) layout path re-applies it naturally once nothing more needs splitting |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child |
+| `padding` | `number \| { top, right, bottom, left }?` | Insets `child` from whatever width/height the box resolved to |
+| `background` | `string?` | |
+| `border` | `{ thickness?; color? }?` | A plain rectangle at the container's own edge — no straddle-avoidance needed (unlike table borders), since there's no internal grid to share edges with |
+| `borderRadius` | `number?` | Rounds the container's own box (background + border) — does NOT clip `child`'s own content to match (e.g. wrapping an image needs `ImageNode.borderRadius` too if you want the image itself rounded, not just the box behind it) |
+
+Splittability delegates entirely to `child` (splittable iff `child` is splittable, exactly like
+`group` delegates to its own children) — a container wrapping a long paragraph or a tall column can
+still split across a page boundary like any other splittable node.
 
 ### `ChartNode` (`type: 'chart'`)
 SVG bar/line/pie/donut charts, discriminated by `chartKind`, built by hand at render time
@@ -216,14 +283,18 @@ measured text). Non-splittable, same as image.
 | `orientation` | `'vertical' \| 'horizontal'?` | `bar`/`line` only. Default `'vertical'` (categories on the x-axis, values on the y-axis). `'horizontal'` swaps them: categories run top-to-bottom, values run left-to-right, bars grow rightward (or leftward below the baseline) — implemented as its own rendering path (`renderHorizontalCategoricalChart`/`drawHorizontalCategoricalChart`), mirroring the vertical one field-for-field rather than a single axis-agnostic function, same reasoning as `group-layout.ts`'s `layoutRow`/`layoutColumn` split |
 | `barMode` | `'grouped' \| 'stacked'?` | `bar` only. `'grouped'` (default) places each category's series side by side; `'stacked'` stacks them into one bar per category — positive values above the zero baseline, negative below, each in series order, with the rounded "data-end" only on the outermost segment |
 | `barSegmentGap` | `number?` | `barMode: 'stacked'` only. Gap (px) between consecutive stacked segments — the true baseline and outermost-tip edges are never inset. Default `0` (flush segments). **Throws** if negative |
+| `barCornerRadius` | `number?` | `bar` only. Corner radius (px) of the rounded "data end" of a bar. Default 4 |
 | `lineCurve` | `'linear' \| 'monotone'?` | `line` only. Default `'linear'` (straight segments between points). `'monotone'` draws a cubic-Bezier curve through every point using monotone cubic (Fritsch–Carlson) interpolation — tangents are clamped so the curve never overshoots past a point's own value relative to its neighbors, unlike a naive Catmull-Rom spline. Applies to every series in the chart |
+| `lineStrokeWidth` | `number?` | `line` only. Stroke width (px) of the line itself. Default 2 |
+| `markerRadius` | `number?` | `line` only. Radius (px) of each data-point marker. The white "surface ring" behind it stays 2px larger than this, preserving the library's default 4px/6px marker/ring relationship regardless of the override. Default 4 |
 | `slices` | `{ label: string; value: number; color?: string }[]?` | `pie`/`donut` only. Each slice's own `color` wins over `colors`/the default palette. **Throws** if any `value` is negative/non-finite |
 | `donutInnerRadiusRatio` | `number?` | `donut` only. Default `0.6`. **Throws** if set outside `[0, 1)` |
 | `sliceGap` | `number?` | `pie`/`donut` only. Gap between slices, in degrees (converted internally to a constant pixel width evaluated at the outer radius — so the visible channel is the same width from the inner rim/apex to the outer rim, not an angular wedge that tapers to nothing at the center). Default `1.5`; `0` removes it. **Throws** if negative |
 | `title` | `string \| { text: string; fontSize?; color? }` | Optional, centered above the chart |
-| `axis` | `{ show?; gridlines?; tickCount?; formatTick?(v); tickFontSize?; categoryFontSize? }?` | `bar`/`line` only. Chrome only — ticks/gridlines/labels drawn on top of whatever domain `view` resolves; never affects the domain itself (see `view` below). `show` toggles ticks+gridlines+category labels together; `gridlines` independently toggles just the lines. Both default `true`. `tickFontSize`/`categoryFontSize` (px, default 11 each) size the y-axis numbers and x-axis labels independently — margins, label-thinning, and baseline offsets are all recomputed from whichever size you set, so neither clips or overlaps the plot |
+| `fontFamily` | `string?` | Applies to every text role (title/axis/legend). Default a `system-ui` stack. On the PDF renderer specifically, chart text now resolves through the SAME font registry `text()` nodes use (`registerFont()`) — an unregistered family falls back to Helvetica with the same one-time `console.warn` a `TextNode` gets, rather than always silently using Helvetica the way chart text used to unconditionally |
+| `axis` | `{ show?; gridlines?; tickCount?; formatTick?(v); tickFontSize?; categoryFontSize?; color?; gridlineColor?; tickColor? }?` | `bar`/`line` only. Chrome only — ticks/gridlines/labels drawn on top of whatever domain `view` resolves; never affects the domain itself (see `view` below). `show` toggles ticks+gridlines+category labels together; `gridlines` independently toggles just the lines. Both default `true`. `tickFontSize`/`categoryFontSize` (px, default 11 each) size the y-axis numbers and x-axis labels independently — margins, label-thinning, and baseline offsets are all recomputed from whichever size you set, so neither clips or overlaps the plot. `color` (axis baseline), `gridlineColor`, and `tickColor` (BOTH y-axis numbers and x-axis category labels) independently override the library's default neutral-gray theme colors |
 | `view` | `{ domain?: 'zero' \| 'auto' \| { min?; max? }; padding?: number }?` | `bar`/`line` only. Controls the y-domain. `domain` omitted or `'zero'` (default): auto-computed, always spans `[min(0, dataMin), max(0, dataMax)]` (or the stacked-sum equivalent). `'auto'`: auto-computed but tight to the data's own `[dataMin, dataMax]` — NOT forced through zero — then widened by `padding` (fraction of that range, default `0.1`) on both ends, e.g. so the single lowest/highest bar isn't flush against the plot's own edge (which would draw it at zero height). An explicit `{ min?, max? }` object overrides either auto mode outright — set either or both bounds; an unset one stays auto-computed the `'zero'` way. If zero ends up outside the resolved domain, bars grow from the domain's own nearer edge instead of zero. **Throws** if the object form has `min >= max`, or if `padding` is negative |
-| `legend` | `{ show?; position?: 'right'\|'bottom'; fontSize? }?` | Default: on for `pie`/`donut` and for `bar`/`line` with `series.length > 1`; off for a single series. `fontSize` (px, default 11) sizes legend entry labels — row height/band size scale with it |
+| `legend` | `{ show?; position?: 'right'\|'bottom'; fontSize?; color? }?` | Default: on for `pie`/`donut` and for `bar`/`line` with `series.length > 1`; off for a single series. `fontSize` (px, default 11) sizes legend entry labels — row height/band size scale with it. `color` overrides the default secondary-ink legend text color |
 | `colors` | `string[]?` | Categorical palette override, cycled by index; falls back to the built-in default palette |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
 
@@ -233,27 +304,32 @@ cell merging is supported; see "Cell spans" below.
 
 | Field | Type | Notes |
 |---|---|---|
-| `columns` | `{ width?: FlexSize; background?: string; align?: CrossAlign; content?: Node }[]` | `width` uses the *same* fixed-px/flex-weight model as row-child sizing below. `content` — a header caption for this column; see "Column header captions" below. Always exactly what you authored — no other feature (grouping included) ever strips or reshapes this array |
+| `columns` | `{ width?: FlexSize; background?: string; align?: CrossAlign; padding?: number; verticalAlign?: 'start'\|'center'\|'end'; content?: Node }[]` | `width` uses the *same* fixed-px/flex-weight model as row-child sizing below. `padding`/`verticalAlign` are per-column DEFAULTS for every cell in that column (see precedence below) — `verticalAlign` in particular is the only way to align the auto-generated header row (from `content`), since that row has no other mechanism to set it. `content` — a header caption for this column; see "Column header captions" below. Always exactly what you authored — no other feature (grouping included) ever strips or reshapes this array |
 | `rows` | `TableRow[]` — `{ kind?: 'cells'; cells: TableCell[]; groupValues?: string[]; background?: string; verticalAlign?: 'start'\|'center'\|'end' }` or `{ kind: 'header'; depth: number; content?: Node; cells?: TableCell[]; background?: string; repeat?: boolean }` | `cells.length` must equal `columns.length` for every non-header row (implicit-flow authoring changes this when spans are in play — see "Cell spans"). `groupValues` — see "Column grouping". The `header` variant is either a full-width single-`content` bar, or colSpan-aware, column-grid-aligned `cells` (exactly one of the two is set) — see "Column grouping" |
-| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
+| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; padding?: number; border?: { thickness?; color? }; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `padding` overrides `column.padding`/`TableNode.cellPadding` for this one cell. `border` draws a complete rectangle around just this cell's own box, independent of (and drawn on top of) the table-wide `border` modes below — since it's a full rect rather than a shared-edge line, two adjacent bordered cells show a double-thickness line between them (deliberately simpler, not a bug); no `borderRadius` (a rounded corner on one cell in a shared grid has no well-defined meaning next to its square neighbors). `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
 | `groups` | `TableGroupLevel[]?` | Report-style row grouping levels, ordered outermost -> innermost — see "Column grouping" |
 | `headerRows` | `number?` | Leading row count repeated at the top of every continuation page this table spans. Freely composable with `groups`; mutually exclusive with `column.content` (see "Column header captions") |
 | `headerBackground` | `string?` | Background for the single auto-generated header row (from `column.content`). Ignored if no column defines `content`, or if you author header row(s) manually via `headerRows` instead (set `background` on that row directly) |
 | `repeatHeaderRow` | `boolean?` | Default `true`. Whether the table's own `headerRows` prefix repeats on every continuation page, or appears only once at the very top |
 | `repeatGroupHeaders` | `boolean?` | Default `true`. Table-wide default for `TableGroupLevel.repeat` on every grouping level that doesn't set its own — see "Column grouping" |
-| `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color? }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges |
-| `cellPadding` | `number?` | Default 0, applied identically on all 4 sides of every cell |
+| `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color? }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges. No `borderRadius` — rounding corners across a whole grid of cells with shared edges (without disturbing the inner grid lines) has no existing primitive to build on; not supported |
+| `cellPadding` | `number?` | Default 0. Table-wide default, overridable per column (`column.padding`) or per cell (`cell.padding`) — see precedence below |
+| `stripe` | `{ even?: string; odd?: string }?` | Alternating row background, desugared entirely at `table()` build time into per-row `background` (`table-layout.ts` never knows striping happened, same architecture "Column grouping" already uses). Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a column-grouping header/divider bar — and never overrides a row that already sets its own `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even) |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
 
 Alignment precedence, resolved per cell: horizontal `cell.align ?? column.align ?? 'stretch'`;
-vertical `cell.verticalAlign ?? row.verticalAlign ?? 'start'`. Background precedence:
-`cell.background ?? row.background ?? column.background ?? undefined`, resolved once at layout
-time (`table-layout.ts`) and baked into the `RenderedNode`, not re-derived at render time. Rows are
-atomic (a row's content never splits mid-row) — the table itself splits **between** rows across a
-page boundary, same "walk top-to-bottom, defer the rest" shape as a column group's split, just over
-`rows` instead of `children`. Cells (and a group header bar's `content`) participate in the
-interaction system's bubble-up hit-testing exactly like group children — see "Interaction system"
-below.
+vertical `cell.verticalAlign ?? row.verticalAlign ?? column.verticalAlign ?? 'start'`. Padding
+precedence: `cell.padding ?? column.padding ?? TableNode.cellPadding ?? 0` — note the row height
+itself is still shared across every cell in that row (`Math.max` of each cell's own
+`naturalHeight + 2*padding`), so a column with a smaller padding than its neighbors doesn't shrink
+the row — it just gets more slack inside a box already sized for the taller neighbors, which is why
+`verticalAlign` matters for a tighter-padded column. Background precedence: `cell.background ??
+row.background ?? column.background ?? undefined`, resolved once at layout time (`table-layout.ts`)
+and baked into the `RenderedNode`, not re-derived at render time. Rows are atomic (a row's content
+never splits mid-row) — the table itself splits **between** rows across a page boundary, same "walk
+top-to-bottom, defer the rest" shape as a column group's split, just over `rows` instead of
+`children`. Cells (and a group header bar's `content`) participate in the interaction system's
+bubble-up hit-testing exactly like group children — see "Interaction system" below.
 
 #### Column grouping
 
@@ -657,10 +733,14 @@ px, anchored at the chart's own local origin) are fed to it completely unchanged
 included, wrapped in a `save()`/`translate(originPt)`/`scale(PX_TO_PT)`/`restore()` content-matrix push
 rather than any per-coordinate math — deliberately, since hand-rewriting the numbers inside an SVG path
 string would be one misplaced digit away from corrupting an arc command's `0`/`1` flag fields. Chart
-text deliberately never goes through the font registry — `chart-render.ts` already documents using a
-fixed heuristic text-width estimate rather than real measurement, so it never claimed font-exact
-fidelity to the document's own registered fonts; the two shared Helvetica Standard-14 names
-`generatePdf()` uses for the missing-font fallback are reused here for free.
+text (title/axis/legend) DOES go through the same font registry a `TextNode` gets — `resolveChartFontName()`
+in `pdf-render.ts` mirrors `resolveTextFont()`, mapping `ChartNode.fontFamily` (default a
+`system-ui` stack) plus a binary bold/regular weight (chart text has no arbitrary numeric weight
+the way body text does) through `lookupFont()`, falling back to Helvetica with the same one-time
+`console.warn` on a miss. `chart-render.ts`'s own `estimateTextWidth` heuristic (no real
+measurement, by design — see that file's header comment) is unaffected by this; it only ever
+decides internal margins/truncation, never actual glyph rendering, so it never claimed font-exact
+fidelity to begin with and doesn't need to.
 
 **Viewing helpers** (`src/render/pdf-view.ts`) are deliberately decoupled from `generatePdf`/
 `PaginatedResult` entirely — same data/paint split as `paginate()`/`mount()` — so either works with PDF
@@ -758,12 +838,19 @@ src/
                                      header comment and the "Common pitfalls" entry about it)
     chart-layout.ts                — chartMeasurer, chartNaturalWidth(), same height-resolution
                                       shape as image-layout.ts
+    container-layout.ts            — containerMeasurer, containerNaturalWidth(); height is a
+                                      MINIMUM (targetHeight-as-floor, same pattern layoutColumn
+                                      uses); a third participant in the group-layout.ts <->
+                                      table-layout.ts cycle (imports groupMeasurer/tableMeasurer,
+                                      is imported back by both)
     page-sizes.ts                — PAGE_SIZE_PRESETS, resolvePageSize()
     paginate.ts                   — paginateNode(), two-pass header/footer, paginate()
   render/
     shadow-dom.ts                  — mount(), printDocument(), renderPreview(), renderNode() (flat
                                       rendering, draggableAncestor/user-select threading),
-                                      renderTableNode() (background/border line segments)
+                                      renderTableNode() (background/border line segments),
+                                      renderContainerNode() (background/border/borderRadius via
+                                      plain CSS — no straddle math needed, unlike table borders)
     chart-render.ts                 — renderChartSvg(): hand-built inline SVG for bar/line/pie/donut,
                                        fixed heuristic margins (no text measurement — see its header
                                        comment), default categorical palette from the dataviz skill;
@@ -790,26 +877,37 @@ src/
 ```
 
 `main.ts` is a living demo/test bed, not shipped library code — it builds one large document that
-exercises: multi-page text splitting, header/footer with "Page X of Y", CSS-isolation
-demonstration, row/column groups with all alignment modes, `flex` sizing (default/weighted/fixed),
-`splitColumns` independent column splitting, `pageBreak()`, `Image` with `aspectRatio` and all
-`objectFit` values, a multi-page `table()` with header-row repetition, nested-group cells, cell/row/
+exercises: multi-page text splitting, `textDecoration` (underline/line-through), header/footer with
+"Page X of Y", CSS-isolation demonstration, row/column groups with all alignment modes, `flex`
+sizing (default/weighted/fixed), `splitColumns` independent column splitting, `pageBreak()`, a
+Containers section (background/border/borderRadius/padding card, a badge row sized via `flex`, a
+chart wrapped in a container to show background/border "for free," `height`-as-minimum in both
+directions, a container split across a page boundary, a container nested in a table cell, and an
+interactive/draggable container), `Image` with `aspectRatio`, all `objectFit` values, `borderRadius`,
+and `opacity`, a multi-page `table()` with header-row repetition, nested-group cells, cell/row/
 column background + alignment, cell-level interaction delegation, a second table demonstrating
 column grouping (nested Warehouse/Status groups, `totals()` at both levels, a custom `header()` at
 one level and the library default at the other, and non-adjacent duplicate group values proving
 the "global regroup by value" semantics), a third (receipt-style) table demonstrating `colSpan`/
 `rowSpan` (a quantity cell spanning two physical rows, a product-name cell spanning two columns)
 combined WITH column grouping (by category) in the same table — proving the two features coexist —
-and the full interaction system (bubble-up, specific-child-wins, drag preview, typed drag-and-drop
-with live valid/invalid highlighting).
+a fourth table demonstrating per-cell `border`, per-column `padding`/`verticalAlign`, and `stripe`
+zebra striping, chart theming (`axis`/`legend` colors, a custom `fontFamily`, `barCornerRadius`/
+`lineStrokeWidth`/`markerRadius`), and the full interaction system (bubble-up, specific-child-wins,
+drag preview, typed drag-and-drop with live valid/invalid highlighting).
 Reading it top to bottom is a good way to see every API in realistic use.
 
 ## Extension seam — adding a new node type
 
 `TableNode` (`src/core/table-layout.ts`) and `ChartNode` (`src/core/chart-layout.ts`,
-`src/render/chart-render.ts`) are worked examples of this pattern — read one alongside the steps
-below. Still not implemented: rich mixed-style text runs, a generic `CustomNode` escape hatch. To
-add one:
+`src/render/chart-render.ts`) are worked examples of a node that holds MULTIPLE pieces of nested
+content (cells, series). `ContainerNode` (`src/core/container-layout.ts`) is a worked example of the
+other shape — exactly ONE child, no array — closer to what a `CustomNode` wrapping/decorating a
+single piece of content would look like. `RichTextNode` (`src/core/measure-rich-text.ts`) is a
+worked example of a splittable leaf whose internal content is itself an array requiring a dedicated
+measurement library adapter (`@chenglou/pretext/rich-inline`), closer to what a multi-style/rich
+content type would look like — read whichever is closest to what you're adding, alongside the steps
+below. Still not implemented: a generic `CustomNode` escape hatch. To add one:
 
 1. Add the new variant to the `Node` union in `nodes.ts` (extend `Interactive` like the others if
    it should support hover/click/drag).
@@ -870,9 +968,13 @@ the entire point of the registry pattern.
   used) — use one or the other. A rowSpan cluster's rows must all agree on
   `groupValues` (see "Cell spans") — `table()` throws otherwise, since satisfying both would require
   splitting an atomic cluster.
-- PDF export: colors on any node (`TextNode.color`, separator/table border/background colors) are
-  parsed as hex only (`#rgb`/`#rrggbb`/`#rrggbbaa`, alpha ignored) — any other CSS color syntax falls
-  back to black with a `console.warn`. An unregistered font falls back to a Helvetica standard font
+- PDF export: `resolvePdfColor()` accepts hex (`#rgb`/`#rrggbb`/`#rrggbbaa`, alpha dropped) directly,
+  and resolves anything else CSS accepts as a color (`rgb()`/`rgba()`/`hsl()`/`hsla()`/named
+  keywords/etc., alpha dropped the same way) via `normalizeCssColor()` — a canvas 2D `fillStyle`
+  round-trip that delegates to the browser's own CSS color parser rather than a hand-written
+  named-color table or an hsl->rgb converter, same "trust the browser's own engine" approach
+  `measureFontMetricsPx()` already uses for font metrics. A string that isn't a valid CSS color at
+  all still falls back to black with a `console.warn`. An unregistered font falls back to a Helvetica standard font
   (warn, not throw — see "PDF export" above) rather than blocking generation, so a document with
   unregistered fonts still produces a PDF, just not a font-exact one. Registered fonts ARE subsetted
   (pdfkit always subsets, see "PDF export" above) — no known equivalent of the old pdf-lib-era
@@ -890,6 +992,28 @@ the entire point of the registry pattern.
   JPEG, so a document with several large photos can still produce a noticeably heavier PDF than an
   equivalent JPEG-based export would — not fixed for v1 (see "PDF export" above for the tradeoff this
   scale factor represents).
+- `ContainerNode.height` is a MINIMUM, not an exact/clipped size — deliberately, so no clip-region
+  code is needed in either renderer and content is never silently lost. If you want a true fixed-
+  and-clipped box, it isn't supported.
+- `TableNode.border` has no `borderRadius` — rounding corners across a whole grid of cells with
+  shared edges (without disturbing the inner grid lines) has no existing primitive to build on.
+  `TableCell.border` (per-cell) draws a complete, independent rectangle rather than a shared-edge
+  line, so two adjacent bordered cells show a double-thickness line between them by design.
+- `TextNode.align` has no `'justify'` option — true justify needs per-word spacing distribution,
+  which needs word-boundary data pretext's `LayoutLine` doesn't currently expose; not attempted
+  without first investigating pretext's own API.
+- `RichTextNode`'s mixed-style runs share ONE baseline per line, computed from the node's own
+  default font (`fontFamily`/`fontSize`/`fontStyle`), not a per-run ascent-aware CSS-style vertical
+  alignment — mixing run font *sizes* on the same line doesn't reflow the baseline the way a
+  browser's native inline formatting would. This matches `@chenglou/pretext/rich-inline`'s own model
+  (`lineHeight` is a single caller-supplied layout input, not derived per-fragment), not a bug
+  specific to this renderer. Link runs (`RichTextRun.href`) are deliberately NOT part of the generic
+  interactive/hit-registry system — they render as a real `<a href>` on screen and a real pdfkit
+  `.link()` annotation in the PDF, both natively clickable without any custom hit-testing.
+- `ImageNode` has no filters/tint (grayscale, sepia, color overlay) — would need a canvas filter
+  graph on the DOM side and per-pixel raster work in `rasterizeImageToPng` on the PDF side.
+- No rotation or transform support anywhere in the node model — e.g. a diagonal watermark isn't
+  buildable; `PageDef.background` covers a solid-color page background, nothing rotated on top of it.
 
 ## Common pitfalls (bugs caught during development — don't reintroduce)
 
@@ -944,3 +1068,13 @@ the entire point of the registry pattern.
   `InteractionTarget.node`, unlike every other splittable node type. If you ever touch
   `tableMeasurer.split()`, keep `rendered.node` as the full original — reintroducing the slice
   would silently break `InteractionTarget.node` again.
+- **pdfkit's own `underline`/`strike` `.text()` options throw `"unsupported number: NaN"` under
+  this codebase's positioning model** — `drawTextNode()` (`pdf-render.ts`) already calls `.text()`
+  with `lineBreak: false` and a hand-computed `baseline: 0` position per line (needed to reproduce
+  pretext's already-decided line breaks exactly, see "PDF export" above), and pdfkit's internal
+  underline/strike line-extent computation depends on state that path never populates — reproduces
+  regardless of font (registered or fallback), confirmed by isolating the exact same `.text()` call
+  with only `underline: true` added. Fixed by drawing the decoration line by hand instead, using
+  each line's own already-known `line.width` — the same manual-line approach `drawChartLine`
+  already uses elsewhere in this file. Don't reach for pdfkit's built-in options here again without
+  re-verifying against this failure mode first.

@@ -17,11 +17,13 @@
 
 import type { PaginatedResult } from '../core/paginate.ts'
 import type { RenderedNode, RenderedTableCell, RenderedTableRow } from '../core/geometry.ts'
-import type { ImageNode, SeparatorNode, TableNode, TextNode } from '../core/nodes.ts'
+import type { ImageNode, RichTextNode, RichTextRun, SeparatorNode, TableNode, TextNode, Watermark } from '../core/nodes.ts'
 import { resolveColumnWidths } from '../core/table-layout.ts'
+import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { BASE_ELEMENT_STYLE } from './reset.ts'
 import { renderChartSvg } from './chart-render.ts'
 import { BORDER_EPSILON, subtractIntervals } from './interval-utils.ts'
+import { measureTextWidthPx } from './text-measure.ts'
 
 function styledDiv(style: Partial<CSSStyleDeclaration>): HTMLDivElement {
   const el = document.createElement('div')
@@ -60,9 +62,65 @@ function renderTextNode(rendered: Extract<RenderedNode, { type: 'text' }>, x: nu
       color: node.color ?? '#000000',
       letterSpacing: node.letterSpacing !== undefined ? `${node.letterSpacing}px` : 'normal',
       whiteSpace: 'pre',
+      ...(node.textDecoration !== undefined && node.textDecoration !== 'none' ? { textDecoration: node.textDecoration } : {}),
     })
     lineEl.textContent = line.text
     boxEl.appendChild(lineEl)
+  }
+  container.appendChild(boxEl)
+}
+
+function runFontString(run: RichTextRun, node: RichTextNode): string {
+  const style = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic ' : ''
+  const weight = run.fontWeight ?? node.fontWeight ?? 400
+  const size = run.fontSize ?? node.fontSize
+  const family = run.fontFamily ?? node.fontFamily
+  return `${style}${weight} ${size}px ${family}`
+}
+
+// One element per RUN/fragment (not per line, unlike renderTextNode) since style can vary within a
+// line. A run carrying `href` renders as a real `<a>` — natively clickable/hoverable/keyboard-
+// focusable — rather than going through the generic interactive/hit-registry system (see
+// RichTextRun.href's doc comment in nodes.ts for why).
+function renderRichTextNode(rendered: Extract<RenderedNode, { type: 'richText' }>, x: number, y: number, container: HTMLElement, unselectable: boolean): void {
+  const node = rendered.node
+  const boxEl = styledDiv({
+    left: `${x}px`,
+    top: `${y}px`,
+    width: `${rendered.box.width}px`,
+    height: `${rendered.box.height}px`,
+    ...(unselectable ? { userSelect: 'none' as const } : {}),
+  })
+
+  for (const line of rendered.lines) {
+    for (const run of line.runs) {
+      const source = node.runs[run.runIndex]!
+      const decoration = source.textDecoration ?? node.textDecoration
+      const isLink = source.href !== undefined
+      const style: Partial<CSSStyleDeclaration> = {
+        left: `${run.x}px`,
+        top: `${line.y}px`,
+        width: `${run.width}px`,
+        height: `${node.lineHeight}px`,
+        font: runFontString(source, node),
+        lineHeight: `${node.lineHeight}px`,
+        color: source.color ?? node.color ?? '#000000',
+        letterSpacing: (source.letterSpacing ?? node.letterSpacing) !== undefined ? `${source.letterSpacing ?? node.letterSpacing}px` : 'normal',
+        whiteSpace: 'pre',
+        ...(decoration !== undefined && decoration !== 'none' ? { textDecoration: decoration } : {}),
+        ...(isLink ? { display: 'block' as const } : {}),
+      }
+      const runEl: HTMLElement = isLink ? document.createElement('a') : document.createElement('div')
+      Object.assign(runEl.style, BASE_ELEMENT_STYLE, style)
+      if (isLink) {
+        const a = runEl as HTMLAnchorElement
+        a.href = source.href!
+        a.target = '_blank'
+        a.rel = 'noopener noreferrer'
+      }
+      runEl.textContent = run.text
+      boxEl.appendChild(runEl)
+    }
   }
   container.appendChild(boxEl)
 }
@@ -88,10 +146,94 @@ function renderImageNode(rendered: Extract<RenderedNode, { type: 'image' }>, x: 
     width: `${rendered.box.width}px`,
     height: `${rendered.box.height}px`,
     objectFit: node.objectFit ?? 'fill',
+    // A replaced element (like <img>) clips its own painted content to border-radius natively —
+    // no extra overflow:hidden wrapper needed, unlike a generic block-level box.
+    ...(node.borderRadius !== undefined ? { borderRadius: `${node.borderRadius}px` } : {}),
+    ...(node.opacity !== undefined ? { opacity: `${node.opacity}` } : {}),
   })
   el.src = node.src
   if (node.alt !== undefined) el.alt = node.alt
   container.appendChild(el)
+}
+
+// Watermark: a page-absolute decorative overlay, not a Node — resolved once per page by paginate()
+// and painted directly here. Appended LAST in mount()'s per-page loop below (after header/body/
+// footer) so it sits on top of everything, an opaque table/container/chart background elsewhere on
+// the page can otherwise fully hide it. Never a hit-test target (pointerEvents: none) since it isn't
+// part of the authored tree and can't be an attachInteractions() target.
+function watermarkFontCss(watermark: Extract<Watermark, { kind: 'text' }>): string {
+  const style = watermark.fontStyle === 'italic' ? 'italic ' : ''
+  const weight = watermark.fontWeight ?? 700
+  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'sans-serif'}`
+}
+
+function renderWatermark(watermark: Watermark, pageWidth: number, pageHeight: number, container: HTMLElement): void {
+  const opacity = watermark.opacity ?? 0.15
+  const rotation = watermark.rotation ?? -45
+
+  if (watermark.kind === 'image') {
+    const { width, height } = watermark
+    const instances = resolveWatermarkInstances(watermark, pageWidth, pageHeight, width, height)
+    for (const { x, y } of instances) {
+      const el = document.createElement('img')
+      Object.assign(el.style, BASE_ELEMENT_STYLE, {
+        left: `${x - width / 2}px`,
+        top: `${y - height / 2}px`,
+        width: `${width}px`,
+        height: `${height}px`,
+        opacity: `${opacity}`,
+        transform: `rotate(${rotation}deg)`,
+        transformOrigin: 'center',
+        pointerEvents: 'none' as const,
+      })
+      el.src = watermark.src
+      container.appendChild(el)
+    }
+    return
+  }
+
+  const fontSize = watermark.fontSize ?? 72
+  const fontCss = watermarkFontCss(watermark)
+  const width = measureTextWidthPx(watermark.text, fontCss)
+  const height = fontSize * 1.2
+  const instances = resolveWatermarkInstances(watermark, pageWidth, pageHeight, width, height)
+  for (const { x, y } of instances) {
+    const el = styledDiv({
+      left: `${x - width / 2}px`,
+      top: `${y - height / 2}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+      font: fontCss,
+      lineHeight: `${height}px`,
+      color: watermark.color ?? '#000000',
+      opacity: `${opacity}`,
+      transform: `rotate(${rotation}deg)`,
+      transformOrigin: 'center',
+      whiteSpace: 'pre',
+      textAlign: 'center',
+      pointerEvents: 'none' as const,
+    })
+    el.textContent = watermark.text
+    container.appendChild(el)
+  }
+}
+
+function renderContainerNode(rendered: Extract<RenderedNode, { type: 'container' }>, x: number, y: number, originX: number, originY: number, container: HTMLElement, unselectable: boolean): void {
+  const node = rendered.node
+  const style: Partial<CSSStyleDeclaration> = {
+    left: `${x}px`,
+    top: `${y}px`,
+    width: `${rendered.box.width}px`,
+    height: `${rendered.box.height}px`,
+  }
+  if (node.background !== undefined) style.background = node.background
+  if (node.border !== undefined) style.border = `${node.border.thickness ?? 1}px solid ${node.border.color ?? '#000000'}`
+  if (node.borderRadius !== undefined) style.borderRadius = `${node.borderRadius}px`
+  container.appendChild(styledDiv(style))
+  // Same convention as group/table: rendered.child.box is already resolved relative to this SAME
+  // (originX, originY), not to the container's own box (translateRendered's container branch
+  // shifts both by the same delta) — so recursion reuses the UNCHANGED origin, not (x, y).
+  renderNode(rendered.child, originX, originY, container, unselectable)
 }
 
 function renderChartNode(rendered: Extract<RenderedNode, { type: 'chart' }>, x: number, y: number, container: HTMLElement, unselectable: boolean): void {
@@ -245,6 +387,22 @@ function renderTableNode(rendered: Extract<RenderedNode, { type: 'table' }>, ori
     }
     // Cell content — flat, never nested, same as a group's children (see invariant #4).
     for (const cell of cells) renderNode(cell.rendered, originX, originY, container, unselectable)
+    // Per-cell border drawn last (on top of background/content), same ordering as the table-wide
+    // border (drawn after every row in renderTableNode below) — a plain CSS border on the cell's
+    // own full box, independent of and NOT straddle-avoided against the table-wide border modes
+    // (see TableCell.border's doc comment: two adjacent bordered cells double up, by design).
+    for (const cell of cells) {
+      if (cell.border === undefined) continue
+      container.appendChild(
+        styledDiv({
+          left: `${originX + cell.box.x}px`,
+          top: `${originY + cell.box.y}px`,
+          width: `${cell.box.width}px`,
+          height: `${cell.box.height}px`,
+          border: `${cell.border.thickness ?? 1}px solid ${cell.border.color ?? '#000000'}`,
+        }),
+      )
+    }
   }
 
   for (const row of rendered.rows) {
@@ -286,6 +444,10 @@ function renderNode(rendered: RenderedNode, originX: number, originY: number, co
     renderTextNode(rendered, x, y, container, unselectable)
     return
   }
+  if (rendered.type === 'richText') {
+    renderRichTextNode(rendered, x, y, container, unselectable)
+    return
+  }
   if (rendered.type === 'separator') {
     renderSeparatorNode(rendered, x, y, container)
     return
@@ -307,6 +469,10 @@ function renderNode(rendered: RenderedNode, originX: number, originY: number, co
     // this SAME (originX, originY), not to the table's own box, so it needs the unchanged origin —
     // renderTableNode re-derives (x, y) internally for its own wrapper/border positioning.
     renderTableNode(rendered, originX, originY, container, unselectable)
+    return
+  }
+  if (rendered.type === 'container') {
+    renderContainerNode(rendered, x, y, originX, originY, container, unselectable)
     return
   }
 
@@ -406,10 +572,13 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
     const pageEl = styledDiv({
       position: 'relative',
       overflow: 'hidden',
-      background: '#ffffff',
+      background: page.background ?? '#ffffff',
       width: `${pageSize.width}px`,
       height: `${pageSize.height}px`,
       boxShadow: SCREEN_PAGE_SHADOW,
+      ...(page.border !== null
+        ? { border: `${page.border.thickness ?? 1}px solid ${page.border.color ?? '#000000'}` }
+        : {}),
     })
     pageEl.dataset.pageNumber = String(page.pageNumber)
     // Inert on screen (fragmentation properties only matter in paged/print or multicol contexts) —
@@ -425,6 +594,9 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
     if (page.header !== null) renderNode(page.header, headerOriginX, headerOriginY, pageEl)
     for (const node of page.body) renderNode(node, bodyOriginX, bodyOriginY, pageEl)
     if (page.footer !== null) renderNode(page.footer, footerOriginX, footerOriginY, pageEl)
+    // Drawn last, on top of everything — an opaque table/container/chart background elsewhere on the
+    // page would otherwise fully hide a watermark painted underneath it. Matches pdf-render.ts.
+    if (page.watermark !== null) renderWatermark(page.watermark, pageSize.width, pageSize.height, pageEl)
   }
 
   // Not deduped across repeated mount() calls, same caveat as attachInteractions — each call binds

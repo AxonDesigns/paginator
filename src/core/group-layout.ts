@@ -21,10 +21,12 @@ import type { Box, RenderedNode } from './geometry.ts'
 import { translateRendered } from './geometry.ts'
 import type { NodeMeasurer, SplitOutcome } from './behavior.ts'
 import { measureTextNaturalWidth, textMeasurer } from './measure-text.ts'
+import { richTextMeasurer, richTextNaturalWidth } from './measure-rich-text.ts'
 import { separatorMainSize, separatorMeasurer } from './separator-layout.ts'
 import { imageMeasurer, imageNaturalWidth } from './image-layout.ts'
 import { tableMeasurer } from './table-layout.ts'
 import { chartMeasurer, chartNaturalWidth } from './chart-layout.ts'
+import { containerMeasurer, containerNaturalWidth } from './container-layout.ts'
 
 const EPSILON = 0.01
 
@@ -35,21 +37,25 @@ type DirectionLayoutResult = { children: LaidOutChild[]; contentWidth: number; c
 
 function measureNodeHeight(node: Node, width: number): number {
   if (node.type === 'text') return textMeasurer.measureHeight(node, width)
+  if (node.type === 'richText') return richTextMeasurer.measureHeight(node, width)
   if (node.type === 'separator') return separatorMainSize(node)
   if (node.type === 'page-break') return 0
   if (node.type === 'image') return imageMeasurer.measureHeight(node, width)
   if (node.type === 'table') return tableMeasurer.measureHeight(node, width)
   if (node.type === 'chart') return chartMeasurer.measureHeight(node, width)
+  if (node.type === 'container') return containerMeasurer.measureHeight(node, width)
   return node.direction === 'row' ? layoutRow(node, width).contentHeight : layoutColumn(node, width).contentHeight
 }
 
 function layoutNode(node: Node, width: number): RenderedNode {
   if (node.type === 'text') return textMeasurer.layout(node, width)
+  if (node.type === 'richText') return richTextMeasurer.layout(node, width)
   if (node.type === 'separator') return separatorMeasurer.layout(node, width)
   if (node.type === 'page-break') return { type: 'page-break', box: { x: 0, y: 0, width, height: 0 }, node }
   if (node.type === 'image') return imageMeasurer.layout(node, width)
   if (node.type === 'table') return tableMeasurer.layout(node, width)
   if (node.type === 'chart') return chartMeasurer.layout(node, width)
+  if (node.type === 'container') return containerMeasurer.layout(node, width)
   return layoutGroupNode(node, width)
 }
 
@@ -72,7 +78,9 @@ function layoutGroupNode(node: GroupNode, width: number): RenderedNode {
 
 function isSplittableNode(node: Node): boolean {
   if (node.type === 'text') return true
+  if (node.type === 'richText') return true
   if (node.type === 'table') return true
+  if (node.type === 'container') return isSplittableNode(node.child)
   if (node.type !== 'group') return false
   return node.direction === 'column' || node.splitColumns === true
 }
@@ -81,7 +89,9 @@ type AnySplitOutcome = { rendered: RenderedNode; consumedHeight: number; rest: N
 
 function splitNode(node: Node, width: number, availableHeight: number): AnySplitOutcome {
   if (node.type === 'text') return textMeasurer.split!(node, width, availableHeight)
+  if (node.type === 'richText') return richTextMeasurer.split!(node, width, availableHeight)
   if (node.type === 'table') return tableMeasurer.split!(node, width, availableHeight)
+  if (node.type === 'container') return containerMeasurer.split!(node, width, availableHeight)
   if (node.type === 'group' && node.direction === 'column') return columnGroupSplit(node, width, availableHeight)
   if (node.type === 'group' && node.direction === 'row' && node.splitColumns === true) return rowGroupSplit(node, width, availableHeight)
   return null
@@ -147,10 +157,12 @@ function sumFixedRowWidth(node: GroupNode, width: number): number {
 // the one direction of the group-layout.ts/table-layout.ts cycle documented in the header comment.
 export function childCrossWidthInColumn(node: Node, width: number): number {
   if (node.type === 'text') return Math.min(measureTextNaturalWidth(node), width)
+  if (node.type === 'richText') return Math.min(richTextNaturalWidth(node), width)
   if (node.type === 'separator') return width
   if (node.type === 'page-break') return width
   if (node.type === 'image') return Math.min(imageNaturalWidth(node, width), width)
   if (node.type === 'chart') return Math.min(chartNaturalWidth(node, width), width)
+  if (node.type === 'container') return Math.min(containerNaturalWidth(node, width), width)
   // A table shrink-wrapped as a whole (not per-cell alignment, a separate concern handled entirely
   // within table-layout.ts) always wants the full width offered to it, same as separator/page-break.
   if (node.type === 'table') return width

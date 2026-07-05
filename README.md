@@ -2,10 +2,10 @@
 
 Declarative, print/PDF-style document layout and pagination engine for the browser. You author a
 document as a tree of building blocks — page config with header/footer/margins, `group`, `text`,
-`separator`, `pageBreak`, `image`, `table`, `chart` — and the engine computes page breaks and exact
-pixel positions **purely arithmetically** (never via DOM measurement), then renders the result into
-real, isolated DOM. PDF export and an opt-in hover/click/drag/drop interaction layer are built on
-top of the same computed layout.
+`separator`, `pageBreak`, `image`, `container`, `table`, `chart` — and the engine computes page
+breaks and exact pixel positions **purely arithmetically** (never via DOM measurement), then
+renders the result into real, isolated DOM. PDF export and an opt-in hover/click/drag/drop
+interaction layer are built on top of the same computed layout.
 
 Built on [pretext](https://www.npmjs.com/package/@chenglou/pretext) for text measurement/line-
 breaking and [pdfkit](https://pdfkit.org) for vector PDF export.
@@ -48,9 +48,12 @@ bun run preview # preview the production build
 ```
 
 `src/main.ts` is a living demo app (not shipped library code) that exercises every feature: multi-
-page text splitting, header/footer pagination, all group/flex layout modes, images, multi-page
-tables (header repetition, column grouping with totals, cell spans), charts, PDF export, and the
-full interaction system. Reading it top to bottom is a good way to see every API in realistic use.
+page text splitting (including text decoration), header/footer pagination, all group/flex layout
+modes, containers (background/border/borderRadius/padding, min-height, splitting across a page
+boundary), images (including borderRadius/opacity), multi-page tables (header repetition, column
+grouping with totals, cell spans, per-cell border/padding, zebra striping), charts (including
+theming, custom fonts, and mark-geometry overrides), PDF export, and the full interaction system.
+Reading it top to bottom is a good way to see every API in realistic use.
 
 ## Project layout
 

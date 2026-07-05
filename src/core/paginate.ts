@@ -4,7 +4,7 @@
 // flow entirely to the next page). A node spanning many pages needs no special-casing — it's just
 // this function recursing on `rest` repeatedly.
 
-import type { HeaderFooterContent, Margins, Node, PageDef } from './nodes.ts'
+import type { ContainerBorder, HeaderFooterContent, HeaderFooterContext, Margins, Node, PageDef, Watermark } from './nodes.ts'
 import type { RenderedNode } from './geometry.ts'
 import { translateRendered } from './geometry.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from './behavior.ts'
@@ -16,6 +16,9 @@ export type PaginatedPage = {
   header: RenderedNode | null
   body: RenderedNode[]
   footer: RenderedNode | null
+  watermark: Watermark | null
+  background: string | null
+  border: ContainerBorder | null
 }
 
 export type PaginatedResult = {
@@ -127,6 +130,14 @@ function renderHeaderFooterForPage(content: HeaderFooterContent | undefined, wid
   return layoutNodeFull(node, width)
 }
 
+// Shared by watermark/background/border — all three are page-varying-aware the same way header/
+// footer content is (a plain value, or a `{pageNumber, totalPages}` callback producing one), just
+// without header/footer's extra Node-layout step.
+function resolvePerPageValue<T>(content: T | ((ctx: HeaderFooterContext) => T) | undefined, pageNumber: number, totalPages: number): T | null {
+  if (content === undefined) return null
+  return typeof content === 'function' ? (content as (ctx: HeaderFooterContext) => T)({ pageNumber, totalPages }) : content
+}
+
 // Single-page body `mainAlign` centering: applied as an isolated post-processing pass so the
 // pagination recursion itself never special-cases it. For multi-page documents this has no
 // well-defined single-page meaning and is left as `start`-equivalent packing (documented).
@@ -162,6 +173,9 @@ export function paginate(doc: PageDef): PaginatedResult {
     header: renderHeaderFooterForPage(doc.header, contentBoxWidth, i + 1, totalPages),
     body,
     footer: renderHeaderFooterForPage(doc.footer, contentBoxWidth, i + 1, totalPages),
+    watermark: resolvePerPageValue<Watermark>(doc.watermark, i + 1, totalPages),
+    background: resolvePerPageValue<string>(doc.background, i + 1, totalPages),
+    border: resolvePerPageValue<ContainerBorder>(doc.border, i + 1, totalPages),
   }))
 
   return {

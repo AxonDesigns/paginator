@@ -1,16 +1,20 @@
 // Resolved layout geometry — always page-content-box-relative by the time pagination finishes.
 
-import type { ChartNode, GroupNode, ImageNode, PageBreakNode, SeparatorNode, TableNode, TextNode } from './nodes.ts'
+import type { ChartNode, ContainerBorder, ContainerNode, GroupNode, ImageNode, PageBreakNode, RichTextNode, SeparatorNode, TableNode, TextNode } from './nodes.ts'
 
 export type Box = { x: number; y: number; width: number; height: number }
 
 export type PositionedLine = { x: number; y: number; width: number; text: string }
 
+/** One mixed-style fragment within a richText line — `runIndex` points back into RichTextNode.runs. */
+export type PositionedRun = { x: number; width: number; text: string; runIndex: number }
+export type PositionedRichLine = { y: number; width: number; runs: PositionedRun[] }
+
 // `box` is the FULL cell extent (column width × row height) — NOT the content sub-box (that's
 // `rendered.box`, inset within `box` by cellPadding/alignment). This is what makes background
 // painting fully self-contained per cell at render time, with no external column-width/row-height
 // lookup needed (see table-layout.ts and shadow-dom.ts).
-export type RenderedTableCell = { box: Box; rendered: RenderedNode; background?: string }
+export type RenderedTableCell = { box: Box; rendered: RenderedNode; background?: string; border?: ContainerBorder }
 
 export type RenderedTableRow =
   | { kind: 'cells'; box: Box; cells: RenderedTableCell[] }
@@ -20,12 +24,14 @@ export type RenderedTableRow =
 
 export type RenderedNode =
   | { type: 'text'; box: Box; node: TextNode; lines: PositionedLine[] }
+  | { type: 'richText'; box: Box; node: RichTextNode; lines: PositionedRichLine[] }
   | { type: 'separator'; box: Box; node: SeparatorNode }
   | { type: 'group'; box: Box; node: GroupNode; children: RenderedNode[] }
   | { type: 'page-break'; box: Box; node: PageBreakNode }
   | { type: 'image'; box: Box; node: ImageNode }
   | { type: 'table'; box: Box; node: TableNode; rows: RenderedTableRow[] }
   | { type: 'chart'; box: Box; node: ChartNode }
+  | { type: 'container'; box: Box; node: ContainerNode; child: RenderedNode }
 
 export function translateRendered(r: RenderedNode, dx: number, dy: number): RenderedNode {
   const box: Box = { x: r.box.x + dx, y: r.box.y + dy, width: r.box.width, height: r.box.height }
@@ -55,6 +61,9 @@ export function translateRendered(r: RenderedNode, dx: number, dy: number): Rend
         return { ...row, box: rowBox, cells: translateCells(row.cells) }
       }),
     }
+  }
+  if (r.type === 'container') {
+    return { ...r, box, child: translateRendered(r.child, dx, dy) }
   }
   return { ...r, box }
 }

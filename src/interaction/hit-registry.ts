@@ -49,7 +49,9 @@ function flatten(rendered: RenderedNode, pageNumber: number, region: Interaction
                 : [flatten(row.content!, pageNumber, region, nextAncestors)]
               : row.cells.map(c => flatten(c.rendered, pageNumber, region, nextAncestors)),
           )
-        : []
+        : rendered.type === 'container'
+          ? [flatten(rendered.child, pageNumber, region, nextAncestors)]
+          : []
   return { rendered, pageNumber, region, ancestors, children }
 }
 
