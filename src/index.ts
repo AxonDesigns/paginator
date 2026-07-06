@@ -1,15 +1,12 @@
 import './nodes/index.ts'
 
 export { definePage, group, text, richText, separator, pageBreak, image, svg, container, table, chart, rowGroup } from './core/nodes.ts'
-export { paginate } from './core/paginate.ts'
-export { mount, renderPreview, printDocument } from './render/shadow-dom.ts'
 export { ready } from './ready.ts'
+// Pretext's own module-global locale/measurement-cache state — no instance-scoped equivalent
+// exists, so this is deliberately not wrapped by Paginator (see paginator.ts's header comment).
 export { setLocale, clearCache } from '@chenglou/pretext'
-export { attachInteractions } from './interaction/attach-interactions.ts'
-export { buildHitRegistry, hitTest, hitTestDroppable, toTypeList } from './interaction/hit-registry.ts'
-export { generatePdf } from './render/pdf-render.ts'
-export { registerFont, normalizeFontWeight, listRegisteredFonts } from './render/font-registry.ts'
-export { openPdfInNewTab, showPdfDialog } from './render/pdf-view.ts'
+export { normalizeFontWeight } from './render/font-registry.ts'
+export { Paginator } from './paginator.ts'
 
 export type {
   PageDef,

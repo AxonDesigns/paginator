@@ -14,16 +14,22 @@ during development came from violating one of them without realizing it.
 
 ## Mental model in one paragraph
 
-`paginate(doc: PageDef): PaginatedResult` is a **pure, synchronous** function: node tree in, a
-list of pages (each a tree of `RenderedNode`s with fully-resolved page-relative pixel boxes) out.
-No DOM is touched during this call except pretext's own detached `OffscreenCanvas` for text
-measurement. `mount(result, host)` is a **dumb paint step**: it walks `PaginatedResult` and creates
-absolutely-positioned DOM elements with inline styles inside a Shadow DOM root — it does no layout
-math of its own. `attachInteractions(result, host)` is a **third, independent layer**: it builds
-its own pure-data hit-test registry from the same `PaginatedResult` and translates native Pointer
-Events into hover/click/drag/drop callbacks. These three functions can be called independently;
-`attachInteractions` requires `mount` to have run first only because it needs to find the live page
-`<div>` elements via `getBoundingClientRect()` to translate cursor coordinates.
+`new Paginator()` is the library's single entry point. An instance owns exactly one piece of real
+state — its own registered-font map (see "PDF export" below) — and exposes the whole pipeline as
+methods. `pdfDoc.paginate(doc: PageDef): PaginatedResult` is a **pure, synchronous** method: node
+tree in, a list of pages (each a tree of `RenderedNode`s with fully-resolved page-relative pixel
+boxes) out. No DOM is touched during this call except pretext's own detached `OffscreenCanvas` for
+text measurement. `pdfDoc.mount(result, host)` is a **dumb paint step**: it walks `PaginatedResult`
+and creates absolutely-positioned DOM elements with inline styles inside a Shadow DOM root — it does
+no layout math of its own. `pdfDoc.attachInteractions(result, host)` is a **third, independent
+layer**: it builds its own pure-data hit-test registry from the same `PaginatedResult` and translates
+native Pointer Events into hover/click/drag/drop callbacks. These three methods can be called
+independently; `attachInteractions` requires `mount` to have run first only because it needs to find
+the live page `<div>` elements via `getBoundingClientRect()` to translate cursor coordinates. Node
+builders (`text`, `group`, ...) stay plain top-level functions, not methods — they're pure content
+constructors with no state, and the same authored `Node` tree can be handed to more than one
+`Paginator`. See "Multiple `Paginator` instances" below for what is and isn't shared across
+instances.
 
 ## Core invariants (read before changing layout/pagination code)
 
@@ -71,7 +77,7 @@ Events into hover/click/drag/drop callbacks. These three functions can be called
 ## Quick start
 
 ```ts
-import { definePage, group, text, separator, image, pageBreak, ready, paginate, mount } from './index.ts'
+import { definePage, group, text, separator, image, pageBreak, ready, Paginator } from './index.ts'
 
 const doc = definePage(
   {
@@ -91,12 +97,51 @@ const doc = definePage(
   ]),
 )
 
+const pdfDoc = new Paginator()
 await ready()
-const result = paginate(doc)
-mount(result, document.getElementById('app')!)
+const result = pdfDoc.paginate(doc)
+pdfDoc.mount(result, document.getElementById('app')!)
 ```
 
+## Multiple `Paginator` instances
+
+Each `new Paginator()` owns exactly one piece of real state: its own registered-font map (see "PDF
+export" below) — the one thing that actually needed per-instance isolation, since two instances
+registering different font files under the same family/weight/style would otherwise silently
+corrupt whichever instance's `generatePdf()` happened to run later. Everything else the engine
+touches is either already a pure function/method with no state of its own (`paginate()`, `mount()`,
+`attachInteractions()`), or a deliberately shared global that's safe — and correct — to share across
+every instance:
+
+- The built-in node-type registry (`src/core/behavior.ts`) — a type-name -> layout/render-behavior
+  lookup table, populated once at import time by every module in `src/nodes/`. It's a plugin/schema
+  table, not per-document data, so one shared registry backing every `Paginator` instance is correct,
+  the same way every instance of an ordinary class shares its prototype's methods.
+- Several lazy `OffscreenCanvas` context singletons and content-addressed caches (text width, PDF
+  font metrics, CSS color parsing, rasterized watermark text) — pure memoization keyed by the content
+  being measured, not by which document or `Paginator` is asking.
+- `chart-render.ts`'s monotonic SVG-gradient-id counter — deliberately global so two charts sharing
+  one physical DOM/shadow root (even across two different `Paginator`-mounted documents) never
+  collide on an unqualified gradient id.
+
+So two `Paginator`s run side by side safely: register different fonts on each, paginate/mount/
+generate PDFs from each independently, and neither instance's `generatePdf()` output picks up the
+other's fonts. The one caveat that isn't fixable from this side: `registerFont()` still calls
+`document.fonts.add()`, and `document.fonts` is the browser's own page-wide font registry with no
+per-instance equivalent — on-screen text (`paginate()`'s pretext measurement, `mount()`'s painted
+DOM) still resolves whichever file the browser most recently associated with a given family/weight/
+style, regardless of which instance registered it last. Only PDF **embedding** reads bytes straight
+from the owning instance's own map, so that part — the part that was actually silently corrupting
+output before this was fixed — is correctly isolated per instance. Similarly, `setLocale`/
+`clearCache` (re-exported straight from `@chenglou/pretext`) are that dependency's own process-global
+state; there's no instance-scoped equivalent to wrap without forking pretext itself.
+
 ## Public API reference (`src/index.ts`)
+
+`src/index.ts` exports the `Paginator` class — the operational pipeline (pagination, DOM rendering,
+interactions, PDF export) as instance methods — alongside a handful of free functions/types that
+carry no per-instance state: node builders, `ready()`, and pretext's own `setLocale`/`clearCache`
+passthroughs.
 
 ### Document authoring
 | Export | Signature | Notes |
@@ -113,34 +158,42 @@ mount(result, document.getElementById('app')!)
 | `table` | `(config: Omit<TableNode,'type'>) => TableNode` | Fixed grid, not semantic HTML — see below. **Throws** on a row/column-count mismatch, `headerRows` exceeding the row count, every column marked `group`, a `totals()` callback returning the wrong cell count, partial adoption of `column.content` across the effective columns, or `column.content` combined with an explicit `headerRows` |
 | `chart` | `(config: Omit<ChartNode,'type'>) => ChartNode` | SVG bar/line/pie/donut, discriminated by `chartKind`. **Throws** if neither `height` nor `aspectRatio` is given, if `categories`/`series` are missing (or a series' `data` length doesn't match `categories`) for `bar`/`line`, or if `slices` are missing (or a slice has a negative/non-finite `value`) for `pie`/`donut` |
 
-### Pagination & rendering
+### Free-standing exports
 | Export | Signature | Notes |
 |---|---|---|
 | `ready` | `() => Promise<void>` | Awaits `document.fonts.ready`; call before `paginate()` |
+| `setLocale`, `clearCache` | pass-through from `@chenglou/pretext` | Locale-sensitive line-breaking / cache management escape hatches. Process-global — not scoped to any `Paginator` instance (pretext has no instance-scoped equivalent; see "Multiple `Paginator` instances" above) |
+| `normalizeFontWeight` | `(weight: number \| string \| undefined) => number` | `'bold'`/`'normal'`/`'bolder'`/`'lighter'`/numeric-string -> a definite CSS numeric weight. A pure normalizer with no registry involved, so it stays a free function even though the rest of the font API moved onto `Paginator` |
+
+### Pagination & rendering (`Paginator` instance methods)
+| Method | Signature | Notes |
+|---|---|---|
 | `paginate` | `(doc: PageDef) => PaginatedResult` | Pure, synchronous |
 | `mount` | `(result: PaginatedResult, host: HTMLElement) => void` | Creates/reuses an open Shadow DOM on `host`, replaces its content |
 | `printDocument` | `(host: HTMLElement) => void` | Prints a mounted document with correct page size/margins — see "Printing" below. **Throws** if `host` hasn't been `mount()`-ed |
 | `renderPreview` | `(rendered: RenderedNode) => HTMLElement` | Standalone, pixel-identical re-render of one subtree, re-based to (0,0) — for drag-preview ghosts |
-| `setLocale`, `clearCache` | pass-through from `@chenglou/pretext` | Locale-sensitive line-breaking / cache management escape hatches |
 
-### PDF export (see full section below)
-| Export | Signature | Notes |
+### PDF export (`Paginator` instance methods, see full section below)
+| Method | Signature | Notes |
 |---|---|---|
-| `registerFont` | `(options: { family: string; url: string; weight?: number \| string; style?: 'normal' \| 'italic' }) => Promise<void>` | Fetches a font file, registers it for on-screen use AND later PDF embedding. Call before `paginate()` |
-| `generatePdf` | `(result: PaginatedResult, metadata?: PdfMetadata) => Promise<Uint8Array>` | Real vector PDF from the same data `mount()` renders. Never throws on a missing font — warns once and falls back to Helvetica |
+| `registerFont` | `(options: { family: string; url: string; weight?: number \| string; style?: 'normal' \| 'italic' }) => Promise<void>` | Fetches a font file, registers it on THIS instance's own registry for on-screen use AND later PDF embedding. Call before `paginate()` |
+| `generatePdf` | `(result: PaginatedResult, metadata?: PdfMetadata) => Promise<Uint8Array>` | Real vector PDF from the same data `mount()` renders, embedding fonts from this instance's own registry. Never throws on a missing font — warns once and falls back to Helvetica |
 | `openPdfInNewTab` | `(bytes: Uint8Array) => void` | Opens PDF bytes in a new browser tab via an object URL |
 | `showPdfDialog` | `(bytes: Uint8Array, options?: { title?: string }) => { close(): void }` | Shows a modal `<dialog>` with an `<iframe>` displaying the PDF |
-| `normalizeFontWeight` | `(weight: number \| string \| undefined) => number` | `'bold'`/`'normal'`/`'bolder'`/`'lighter'`/numeric-string -> a definite CSS numeric weight |
-| `listRegisteredFonts` | `() => RegisteredFont[]` | Inspects what's currently registered |
+| `listRegisteredFonts` | `() => RegisteredFont[]` | Inspects what's currently registered on this instance |
 
-### Interaction (all opt-in, see full section below)
-| Export | Signature | Notes |
+### Interaction (`Paginator` instance methods, all opt-in, see full section below)
+| Method | Signature | Notes |
 |---|---|---|
 | `attachInteractions` | `(result: PaginatedResult, host: HTMLElement, options?: AttachInteractionsOptions) => InteractionController` | Requires `mount()` to have run on `host` first |
 | `buildHitRegistry` | `(result: PaginatedResult) => HitRegistry` | Pure data, no DOM; what `attachInteractions` builds internally |
 | `hitTest` | `(registry, pageNumber, x, y) => InteractionTarget \| null` | Resolves via `interactive: true`, bubble-up |
 | `hitTestDroppable` | `(registry, pageNumber, x, y, dragTypes?: string[]) => InteractionTarget \| null` | Resolves via `droppable: true` + `accepts` filter, bubble-up |
 | `toTypeList` | `(value: string \| string[] \| undefined) => string[]` | Normalizes `dragType`/`accepts` shorthand |
+
+None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
+write instance state — they're grouped onto `Paginator` for one consistent object-oriented surface,
+not because they need `this`.
 
 ## Node type reference
 
@@ -647,12 +700,12 @@ Single recursive function `paginateNode(node, width, ctx)` handles every case un
 
 ## Printing
 
-Call `printDocument(host)` — the same `host` element passed to `mount()` — instead of reaching for
-`window.print()` yourself:
+Call `pdfDoc.printDocument(host)` — the same `host` element passed to `pdfDoc.mount()` — instead of
+reaching for `window.print()` yourself:
 
 ```ts
-mount(result, host)
-printButton.addEventListener('click', () => printDocument(host))
+pdfDoc.mount(result, host)
+printButton.addEventListener('click', () => pdfDoc.printDocument(host))
 ```
 
 `printDocument()` is a thin, validated wrapper (`throws` if `host` was never `mount()`-ed); all of
@@ -683,11 +736,11 @@ the OS UI:
   with the physical page edge, matching the on-screen layout exactly — verified against a real
   `page.pdf()` render, not just print-media emulation.
 
-## PDF export (`src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`, `src/render/pdf-view.ts`)
+## PDF export (`src/paginator.ts`, `src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`, `src/render/pdf-view.ts`)
 
 A second, independent paint step over the same `PaginatedResult`/`RenderedNode` data `mount()` already
 consumes — same relationship `renderPreview()` has to `mount()`. Produces a real vector PDF via
-[pdfkit](https://pdfkit.org): selectable/searchable text, not a screenshot. `generatePdf(result,
+[pdfkit](https://pdfkit.org): selectable/searchable text, not a screenshot. `pdfDoc.generatePdf(result,
 metadata?)` needs no DOM (beyond an `OffscreenCanvas`/`<img>` for font metrics and image rasterization)
 and no arguments beyond what `mount()` itself needs — `PaginatedResult` is fully self-describing.
 Runs entirely client-side: pdfkit is Node-oriented (streams/Buffers) upstream, but its distributed
@@ -703,17 +756,28 @@ scope (not pre-bundled the way `pdfkit.standalone.js` is) — Vite can only exte
 measuring against whatever font FILE the browser's canvas resolved for a `fontFamily` string (see
 invariant #7 and `src/nodes/text.ts`). For the PDF's embedded vector glyphs to reproduce identical line
 breaks, the PDF must embed that literal file — not just a font that "looks like" the CSS family name.
-`registerFont({ family, url, weight?, style? })` fetches a font file once and serves both consumers
-from the one byte array: it registers a `FontFace` via `document.fonts.add()` + `.load()` (so canvas
-measurement AND on-screen DOM rendering use this exact file, same guarantee `ready()` already
-documents for `document.fonts.ready`), and retains the raw bytes for `generatePdf()` to embed
-identically later via pdfkit's bundled fontkit v2 (the actual font-name resolution each PDF-drawing
-node type calls into — `resolveTextFont()`/`resolveRunFont()`/`resolveChartFontName()` — lives in
-`src/render/pdf-fonts.ts`, shared by `src/nodes/text.ts`, `src/nodes/rich-text.ts`, and
-`src/nodes/chart/pdf.ts`). Must resolve before `paginate()` is called with text
-using that family/weight/style. `.ttf`/`.otf`/`.woff`/`.woff2` are all accepted — fontkit v2 decodes all
-four to real sfnt glyph data before embedding (verified: registering a `.woff2` file produces a valid,
-correctly-rendering PDF, checked against poppler's strict parser as well as Chromium's own viewer).
+`pdfDoc.registerFont({ family, url, weight?, style? })` fetches a font file once and serves both
+consumers from the one byte array: it registers a `FontFace` via `document.fonts.add()` + `.load()`
+(so canvas measurement AND on-screen DOM rendering use this exact file, same guarantee `ready()`
+already documents for `document.fonts.ready`), and retains the raw bytes in `pdfDoc`'s own registry
+for `generatePdf()` to embed identically later via pdfkit's bundled fontkit v2 (the actual font-name
+resolution each PDF-drawing node type calls into — `resolveTextFont()`/`resolveRunFont()`/
+`resolveChartFontName()` — lives in `src/render/pdf-fonts.ts`, shared by `src/nodes/text.ts`,
+`src/nodes/rich-text.ts`, and `src/nodes/chart/pdf.ts`). Must resolve before `paginate()` is called
+with text using that family/weight/style. `.ttf`/`.otf`/`.woff`/`.woff2` are all accepted — fontkit v2
+decodes all four to real sfnt glyph data before embedding (verified: registering a `.woff2` file
+produces a valid, correctly-rendering PDF, checked against poppler's strict parser as well as
+Chromium's own viewer).
+
+**The registry itself is owned per `Paginator` instance, not global.** `font-registry.ts`'s
+`registerFont()`/`lookupFont()`/`listRegisteredFonts()` all take an explicit `FontRegistry`
+(`Map<string, RegisteredFont>`) argument rather than reading/writing module state; `Paginator` holds
+the actual `Map` and threads it through every method that needs it — `registerFont`,
+`listRegisteredFonts`, and `generatePdf()`'s `PdfContext.fonts`. This is what lets two independent
+`Paginator` instances register different files under the same family/weight/style without one
+instance's `generatePdf()` output being corrupted by the other's later `registerFont()` call — see
+"Multiple `Paginator` instances" above for the full picture, including the one part of this that's
+still unavoidably page-global (`document.fonts`).
 
 **Missing-font behavior is warn-and-fallback, not throw.** If a `TextNode`'s `fontFamily`/`fontWeight`/
 `fontStyle` was never registered, `generatePdf()` substitutes a Helvetica standard font (by weight/
@@ -981,10 +1045,11 @@ src/
     reset.ts                        — BASE_ELEMENT_STYLE
     interval-utils.ts                — subtractIntervals()/BORDER_EPSILON, shared by
                                         src/nodes/table/dom.ts's and .../pdf.ts's border-segment math
-    font-registry.ts                  — registerFont(): fetches a font file once, registers it for
-                                         on-screen use (FontFace) AND retains its bytes for later PDF
-                                         embedding — the single-source-of-truth this whole feature
-                                         depends on, see "PDF export" above
+    font-registry.ts                  — registerFont()/lookupFont()/listRegisteredFonts(): fetch-once
+                                         FontFace registration (on-screen use) + retained bytes (later
+                                         PDF embedding), all operating on an explicit `FontRegistry`
+                                         map argument rather than module state — `../paginator.ts`
+                                         owns the actual Map instance, see "PDF export" above
     pdf-fonts.ts                       — PDF font-name resolution shared by every text-drawing node
                                          type (resolveTextFont/resolveRunFont/resolveChartFontName,
                                          ensureRegisteredFont, pickFallbackFont, measureFontMetricsPx)
@@ -1006,9 +1071,21 @@ src/
     attach-interactions.ts             — attachInteractions(): pointer event state machine (hover/
                                           click/drag/drop, threshold, dragTypes, overDropTarget)
   ready.ts                             — ready() (awaits document.fonts.ready)
+  paginator.ts                          — Paginator class: the public facade. Owns a per-instance
+                                           font registry (Map) and exposes paginate()/mount()/
+                                           renderPreview()/printDocument()/attachInteractions()/the
+                                           hit-registry functions/generatePdf()/registerFont()/
+                                           listRegisteredFonts()/openPdfInNewTab()/showPdfDialog() as
+                                           instance methods, delegating to the (unchanged) functions
+                                           in core/render/interaction. Only registerFont/
+                                           listRegisteredFonts/generatePdf actually touch instance
+                                           state — everything else is grouped here for one
+                                           consistent surface (see "Multiple Paginator instances")
   index.ts                              — public API surface (only file most consumers should import
-                                           from) — its first line imports src/nodes/index.ts so every
-                                           built-in node type is registered before anything else runs
+                                           from): node builders + types, ready(), setLocale/
+                                           clearCache (pretext's own globals), and Paginator. Its
+                                           first line imports src/nodes/index.ts so every built-in
+                                           node type is registered before anything else runs
   main.ts                               — demo app exercising every feature (see below)
 ```
 
@@ -1083,6 +1160,11 @@ type, splittable or not — this is the entire point of the registry pattern.
 
 ## Known limitations (documented, not bugs)
 
+- `setLocale`/`clearCache` (pretext's own state) and the built-in node-type registry
+  (`core/behavior.ts`) are process-global, not scoped to any `Paginator` instance — by design
+  (an external dependency's own global, and a schema/plugin-level table, respectively). Only the
+  font registry needed per-instance isolation and got it; see "Multiple `Paginator` instances" above
+  for the full list of what's shared vs. per-instance, and the one remaining `document.fonts` caveat.
 - Single-page-body `mainAlign` centering only has defined behavior when the whole document fits on
   one page; multi-page documents leave it as `start`-equivalent (no coherent single-page meaning).
 - `crossAlign` is not honored for `splitColumns: true` rows (always top-aligned per page-instance).

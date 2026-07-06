@@ -1,29 +1,21 @@
 import './style.css'
 import {
-  attachInteractions,
   chart,
   container,
   definePage,
-  generatePdf,
   group,
   image,
-  mount,
-  openPdfInNewTab,
   pageBreak,
-  paginate,
-  printDocument,
+  Paginator,
   ready,
-  registerFont,
-  renderPreview,
   richText,
   rowGroup,
   separator,
-  showPdfDialog,
   svg,
   table,
   text,
 } from './index.ts'
-import type { InteractionTarget, TableCell, TableColumn, TableRow } from './index.ts'
+import type { InteractionTarget, PaginatedResult, TableCell, TableColumn, TableRow } from './index.ts'
 
 // Raw TrueType files in public/fonts/ — see public/fonts/README.md for provenance/license.
 // registerFont() also accepts .woff/.woff2 directly; these are .ttf simply because that's how they
@@ -909,8 +901,8 @@ const doc = definePage(
 // without opening devtools) plus console logging (for the full event payloads: node type, box,
 // page number, and — for clicks — the ancestor chain). This is a consumer of the public API only,
 // the same way an editor built on this library would be — nothing here reaches into internals.
-function setupInteractionDemo(result: ReturnType<typeof paginate>, host: HTMLDivElement): void {
-  const controller = attachInteractions(result, host)
+function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: HTMLDivElement): void {
+  const controller = pdfDoc.attachInteractions(result, host)
   const shadowRoot = host.shadowRoot!
 
   const highlight = document.createElement('div')
@@ -1003,7 +995,7 @@ function setupInteractionDemo(result: ReturnType<typeof paginate>, host: HTMLDiv
   controller.on('dragstart', e => {
     console.log('[dragstart]', e.target.node.type, e.start, 'overDropTarget:', e.overDropTarget?.node.type ?? 'none')
 
-    const preview = renderPreview(e.target.rendered)
+    const preview = pdfDoc.renderPreview(e.target.rendered)
     Object.assign(preview.style, {
       position: 'fixed',
       zIndex: '1000',
@@ -1079,23 +1071,23 @@ function demoButton(label: string, rightOffsetPx: number): HTMLButtonElement {
   return button
 }
 
-function setupPrintButton(host: HTMLDivElement): void {
+function setupPrintButton(pdfDoc: Paginator, host: HTMLDivElement): void {
   const button = demoButton('Print', 16)
-  button.addEventListener('click', () => printDocument(host))
+  button.addEventListener('click', () => pdfDoc.printDocument(host))
 }
 
 // generatePdf() walks the same PaginatedResult mount() already rendered above — see pdf-render.ts's
 // header comment. Both buttons regenerate on each click rather than caching the bytes, since this is
 // a demo of the API surface, not a perf-sensitive app; a real integration would generate once and
 // reuse the bytes for both actions if the user might invoke either.
-function setupPdfButtons(result: ReturnType<typeof paginate>): void {
+function setupPdfButtons(pdfDoc: Paginator, result: PaginatedResult): void {
   const openButton = demoButton('Open PDF', 108)
   openButton.addEventListener('click', () => {
     void (async () => {
       openButton.disabled = true
       openButton.textContent = 'Generating…'
       try {
-        openPdfInNewTab(await generatePdf(result, { title: 'Paginator Demo' }))
+        pdfDoc.openPdfInNewTab(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }))
       } finally {
         openButton.disabled = false
         openButton.textContent = 'Open PDF'
@@ -1109,7 +1101,7 @@ function setupPdfButtons(result: ReturnType<typeof paginate>): void {
       previewButton.disabled = true
       previewButton.textContent = 'Generating…'
       try {
-        showPdfDialog(await generatePdf(result, { title: 'Paginator Demo' }), { title: 'PDF Preview' })
+        pdfDoc.showPdfDialog(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }), { title: 'PDF Preview' })
       } finally {
         previewButton.disabled = false
         previewButton.textContent = 'Preview PDF'
@@ -1119,25 +1111,27 @@ function setupPdfButtons(result: ReturnType<typeof paginate>): void {
 }
 
 async function main(): Promise<void> {
+  const pdfDoc = new Paginator()
+
   // Registers the literal font FILES this demo's text is set in, before ready()/paginate() ever run
   // — so pretext's canvas measurement and generatePdf()'s embedded PDF glyphs use the exact same
   // bytes (see font-registry.ts). Without this, UI_FONT/BODY_FONT would resolve to whatever system
   // font stack is installed, which generatePdf() cannot embed (no accessible file), and PDF export
   // would fall back to Helvetica with a console warning instead of matching the preview exactly.
   await Promise.all([
-    registerFont({ family: 'Inter', weight: 400, url: INTER_REGULAR_URL }),
-    registerFont({ family: 'Inter', weight: 700, url: INTER_BOLD_URL }),
-    registerFont({ family: 'Source Serif 4', weight: 400, url: SOURCE_SERIF_REGULAR_URL }),
-    registerFont({ family: 'Source Serif 4', weight: 700, url: SOURCE_SERIF_BOLD_URL }),
+    pdfDoc.registerFont({ family: 'Inter', weight: 400, url: INTER_REGULAR_URL }),
+    pdfDoc.registerFont({ family: 'Inter', weight: 700, url: INTER_BOLD_URL }),
+    pdfDoc.registerFont({ family: 'Source Serif 4', weight: 400, url: SOURCE_SERIF_REGULAR_URL }),
+    pdfDoc.registerFont({ family: 'Source Serif 4', weight: 700, url: SOURCE_SERIF_BOLD_URL }),
   ])
   await ready()
-  const result = paginate(doc)
+  const result = pdfDoc.paginate(doc)
   const app = document.querySelector<HTMLDivElement>('#app')
   if (app === null) throw new Error('#app not found')
-  mount(result, app)
-  setupInteractionDemo(result, app)
-  setupPrintButton(app)
-  setupPdfButtons(result)
+  pdfDoc.mount(result, app)
+  setupInteractionDemo(pdfDoc, result, app)
+  setupPrintButton(pdfDoc, app)
+  setupPdfButtons(pdfDoc, result)
 }
 
 void main()

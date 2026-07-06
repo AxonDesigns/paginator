@@ -52,7 +52,7 @@ export function pickFallbackFont(ctx: PdfContext, weight: number, style: FontSty
 export function resolveTextFont(ctx: PdfContext, node: TextNode): string {
   const weight = normalizeFontWeight(node.fontWeight)
   const style: FontStyle = node.fontStyle === 'italic' ? 'italic' : 'normal'
-  const registered = lookupFont(node.fontFamily, weight, style)
+  const registered = lookupFont(ctx.fonts, node.fontFamily, weight, style)
   if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
   warnMissingFontOnce(ctx, node.fontFamily, weight, style)
   return pickFallbackFont(ctx, weight, style)
@@ -64,7 +64,7 @@ export function resolveRunFont(ctx: PdfContext, run: RichTextRun, node: RichText
   const weight = normalizeFontWeight(run.fontWeight ?? node.fontWeight)
   const style: FontStyle = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic' : 'normal'
   const family = run.fontFamily ?? node.fontFamily
-  const registered = lookupFont(family, weight, style)
+  const registered = lookupFont(ctx.fonts, family, weight, style)
   if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
   warnMissingFontOnce(ctx, family, weight, style)
   return pickFallbackFont(ctx, weight, style)
@@ -77,7 +77,7 @@ export function resolveRunFont(ctx: PdfContext, run: RichTextRun, node: RichText
 // numeric weight through every chart draw call.
 export function resolveChartFontName(ctx: PdfContext, fontFamily: string, bold: boolean): string {
   const weight = bold ? 700 : 400
-  const registered = lookupFont(fontFamily, weight, 'normal')
+  const registered = lookupFont(ctx.fonts, fontFamily, weight, 'normal')
   if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
   warnMissingFontOnce(ctx, fontFamily, weight, 'normal')
   return pickFallbackFont(ctx, weight, 'normal')

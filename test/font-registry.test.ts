@@ -1,0 +1,86 @@
+// Regression coverage for the font-registry refactor: registerFont()/lookupFont()/
+// listRegisteredFonts() (src/render/font-registry.ts) take an explicit FontRegistry map instead of
+// reading/writing module state, specifically so two Paginator instances can register different font
+// files under the same family/weight/style without one clobbering the other's PDF output — see
+// paginator.ts's header comment and GUIDE.md's "Multiple Paginator instances" section.
+//
+// This exercises that isolation at the data/PdfContext level directly, bypassing
+// Paginator#registerFont's fetch()/document.fonts.add() calls and Paginator#generatePdf's
+// OffscreenCanvas-dependent font-metrics step — neither available under `bun test`, same DOM
+// constraint test/behavior.test.ts's header comment documents for the built-in node types.
+
+import { describe, expect, test } from 'bun:test'
+import { listRegisteredFonts, lookupFont } from '../src/render/font-registry.ts'
+import type { FontRegistry, RegisteredFont } from '../src/render/font-registry.ts'
+import { resolveTextFont } from '../src/render/pdf-fonts.ts'
+import type { PdfContext } from '../src/render/pdf-render.ts'
+import { text } from '../src/core/nodes.ts'
+
+// Mirrors font-registry.ts's private registryKey() format (`family.trim().toLowerCase()}|${weight}|
+// ${style}`) — two Paginator instances each registering 'Inter'/400/'normal' via their own
+// registerFont() call would each land on this same key in their own, separate Map.
+const INTER_400_NORMAL_KEY = 'inter|400|normal'
+
+function fakeFont(tag: string): RegisteredFont {
+  return { family: 'Inter', weight: 400, style: 'normal', bytes: new TextEncoder().encode(tag) }
+}
+
+function decode(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes)
+}
+
+function makeFakePdfContext(fonts: FontRegistry, registerFontCalls: { name: string; bytes: Uint8Array }[]): PdfContext {
+  return {
+    doc: { registerFont: (name: string, bytes: Uint8Array) => registerFontCalls.push({ name, bytes }) } as unknown as PdfContext['doc'],
+    fonts,
+    registeredFontNames: new Map(),
+    imageEmbedCache: new Map(),
+    fallbackFonts: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
+    warnedMissingFonts: new Set(),
+  }
+}
+
+describe('font registry isolation (two Paginator instances)', () => {
+  test('lookupFont() resolves independently per registry — one instance registering a font never leaks into another', () => {
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('instance-A-bytes')]])
+    const registryB: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('instance-B-bytes')]])
+
+    const fromA = lookupFont(registryA, 'Inter', 400, 'normal')
+    const fromB = lookupFont(registryB, 'Inter', 400, 'normal')
+
+    expect(fromA).toBeDefined()
+    expect(fromB).toBeDefined()
+    expect(decode(fromA!.bytes)).toBe('instance-A-bytes')
+    expect(decode(fromB!.bytes)).toBe('instance-B-bytes')
+  })
+
+  test('listRegisteredFonts() only reports the registry it was given', () => {
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A')]])
+    const registryB: FontRegistry = new Map()
+
+    expect(listRegisteredFonts(registryA)).toHaveLength(1)
+    expect(listRegisteredFonts(registryB)).toHaveLength(0)
+  })
+
+  test("generatePdf()'s font resolution embeds each instance's own bytes under the same family/weight/style, not whichever instance registered last", () => {
+    const node = text({ content: 'hi', fontFamily: 'Inter', fontWeight: 400, fontSize: 12, lineHeight: 14 })
+
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('instance-A-bytes')]])
+    const registryB: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('instance-B-bytes')]])
+
+    const callsA: { name: string; bytes: Uint8Array }[] = []
+    const callsB: { name: string; bytes: Uint8Array }[] = []
+    const ctxA = makeFakePdfContext(registryA, callsA)
+    const ctxB = makeFakePdfContext(registryB, callsB)
+
+    // Instance B resolves AFTER instance A — the exact ordering that used to corrupt instance A's
+    // already-generated PDF output back when the registry was module-global state.
+    resolveTextFont(ctxA, node)
+    resolveTextFont(ctxB, node)
+
+    expect(callsA).toHaveLength(1)
+    expect(callsB).toHaveLength(1)
+    expect(decode(callsA[0]!.bytes)).toBe('instance-A-bytes')
+    expect(decode(callsB[0]!.bytes)).toBe('instance-B-bytes')
+  })
+})

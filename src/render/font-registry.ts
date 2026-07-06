@@ -4,6 +4,14 @@
 // generatePdf()'s embedded vector glyphs to reproduce identical line breaks, the PDF must embed the
 // SAME font file that backed that measurement — not just a font that "looks like" the CSS family
 // name. registerFont() fetches a font file once and serves both consumers from the one byte array.
+//
+// The registry itself is an explicit `FontRegistry` map owned by a `Paginator` instance (see
+// paginator.ts), not module state — two Paginators registering different files under the same
+// family/weight/style must not clobber each other's PDF output. `document.fonts.add()` below is the
+// one part of this that stays unavoidably page-global (no per-instance equivalent exists in the
+// FontFace API): on-screen measurement/painting still shares whichever file the browser last
+// resolved for a given family/weight/style across every instance, but PDF embedding reads bytes
+// straight from the owning instance's own map, so that part is correctly isolated.
 
 export type FontStyle = 'normal' | 'italic'
 
@@ -14,7 +22,7 @@ export type RegisteredFont = {
   bytes: Uint8Array
 }
 
-const registry = new Map<string, RegisteredFont>()
+export type FontRegistry = Map<string, RegisteredFont>
 
 function registryKey(family: string, weight: number, style: FontStyle): string {
   return `${family.trim().toLowerCase()}|${weight}|${style}`
@@ -45,15 +53,18 @@ function parseFontFamilyStack(fontFamily: string): string[] {
 /**
  * Fetches `url`, registers a FontFace via document.fonts.add() + .load() (so canvas measurement AND
  * on-screen DOM rendering use this exact file — the same guarantee ready() already documents for
- * document.fonts.ready), and retains the raw bytes for generatePdf() to later embed identically.
- * Must resolve before paginate() is called with text using this family/weight/style. Idempotent by
- * (family, weight, style) — calling again re-fetches and replaces the cache entry.
+ * document.fonts.ready), and retains the raw bytes in `registry` for generatePdf() to later embed
+ * identically. Must resolve before paginate() is called with text using this family/weight/style.
+ * Idempotent by (family, weight, style) — calling again re-fetches and replaces the entry.
  *
  * Accepts .ttf/.otf/.woff/.woff2 — pdfkit's bundled fontkit decodes all four to real sfnt glyph data
  * before embedding (unlike the previous pdf-lib backend, which wrote registerFont()'s bytes verbatim
  * into the PDF and so could only accept raw, uncompressed sfnt containers).
  */
-export async function registerFont(options: { family: string; url: string; weight?: number | string; style?: FontStyle }): Promise<void> {
+export async function registerFont(
+  registry: FontRegistry,
+  options: { family: string; url: string; weight?: number | string; style?: FontStyle },
+): Promise<void> {
   const weight = normalizeFontWeight(options.weight)
   const style: FontStyle = options.style ?? 'normal'
 
@@ -71,8 +82,13 @@ export async function registerFont(options: { family: string; url: string; weigh
   registry.set(registryKey(options.family, weight, style), { family: options.family, weight, style, bytes })
 }
 
-/** Resolves a TextNode's `fontFamily` (a full CSS stack) + weight/style against the registry, trying each family in order. */
-export function lookupFont(fontFamily: string, weight: number | string | undefined, style: FontStyle | undefined): RegisteredFont | undefined {
+/** Resolves a TextNode's `fontFamily` (a full CSS stack) + weight/style against `registry`, trying each family in order. */
+export function lookupFont(
+  registry: FontRegistry,
+  fontFamily: string,
+  weight: number | string | undefined,
+  style: FontStyle | undefined,
+): RegisteredFont | undefined {
   const normalizedWeight = normalizeFontWeight(weight)
   const normalizedStyle: FontStyle = style ?? 'normal'
   for (const family of parseFontFamilyStack(fontFamily)) {
@@ -82,6 +98,6 @@ export function lookupFont(fontFamily: string, weight: number | string | undefin
   return undefined
 }
 
-export function listRegisteredFonts(): RegisteredFont[] {
+export function listRegisteredFonts(registry: FontRegistry): RegisteredFont[] {
   return [...registry.values()]
 }

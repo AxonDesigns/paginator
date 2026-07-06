@@ -34,7 +34,7 @@ import { drawPdfNode } from '../core/behavior.ts'
 import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { measureTextWidthPx } from './text-measure.ts'
 import { lookupFont, normalizeFontWeight } from './font-registry.ts'
-import type { FontStyle, RegisteredFont } from './font-registry.ts'
+import type { FontRegistry, FontStyle, RegisteredFont } from './font-registry.ts'
 import { ensureRegisteredFont, measureFontMetricsPx, pickFallbackFont, warnMissingFontOnce } from './pdf-fonts.ts'
 
 export type PdfMetadata = { title?: string; author?: string; subject?: string; keywords?: string[] }
@@ -46,6 +46,7 @@ export function pxToPt(n: number): number {
 
 export type PdfContext = {
   doc: PDFKit.PDFDocument
+  fonts: FontRegistry
   registeredFontNames: Map<RegisteredFont, string>
   imageEmbedCache: Map<string, string>
   fallbackFonts: { regular: string; bold: string; italic: string; boldItalic: string }
@@ -230,7 +231,7 @@ function resolveWatermarkFontName(ctx: PdfContext, watermark: Extract<Watermark,
   const weight = normalizeFontWeight(watermark.fontWeight ?? 700)
   const style: FontStyle = watermark.fontStyle === 'italic' ? 'italic' : 'normal'
   if (watermark.fontFamily === undefined) return pickFallbackFont(ctx, weight, style)
-  const registered = lookupFont(watermark.fontFamily, weight, style)
+  const registered = lookupFont(ctx.fonts, watermark.fontFamily, weight, style)
   if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
   warnMissingFontOnce(ctx, watermark.fontFamily, weight, style)
   return pickFallbackFont(ctx, weight, style)
@@ -358,8 +359,11 @@ function collectPdfBytes(doc: PDFKit.PDFDocument): Promise<Uint8Array> {
  * line breaks/widths to be guaranteed identical to the on-screen preview; an unregistered font/weight/
  * style falls back to a Helvetica standard font with a one-time console.warn naming the gap, rather
  * than throwing — generation always succeeds. `metadata` is optional document-info pass-through.
+ * `fonts` is the calling Paginator's own font registry (see paginator.ts) — kept separate per
+ * instance so two Paginators registering different files under the same family/weight/style never
+ * clobber each other's PDF output.
  */
-export async function generatePdf(result: PaginatedResult, metadata?: PdfMetadata): Promise<Uint8Array> {
+export async function generatePdf(result: PaginatedResult, fonts: FontRegistry, metadata?: PdfMetadata): Promise<Uint8Array> {
   const { pageSize } = result
   // Built conditionally rather than `{ Title: metadata?.title, ... }` — pdfkit copies every OWN key
   // of `options.info` into its internal info dict via `for...in`, undefined value or not, so an
@@ -381,6 +385,7 @@ export async function generatePdf(result: PaginatedResult, metadata?: PdfMetadat
 
   const ctx: PdfContext = {
     doc,
+    fonts,
     registeredFontNames: new Map(),
     imageEmbedCache: new Map(),
     fallbackFonts: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
