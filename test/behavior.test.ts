@@ -46,33 +46,48 @@ function registerFixtureA(overrides: Partial<FixtureDefinition> = {}): void {
   registerNode('__fixture_a' as Node['type'], def as unknown as Parameters<typeof registerNode>[1])
 }
 
+// The only three places a fixture value is unsafely cast to/from the real Node/RenderedNode types.
+// Every test below goes through these instead of repeating `as unknown as X` inline, since
+// FixtureNode/FixtureRendered structurally can't satisfy those closed unions (see the comment above).
+function asNode<T extends { type: string }>(value: T): Node {
+  return value as unknown as Node
+}
+
+function asFixtureRendered(rendered: RenderedNode): FixtureRendered {
+  return rendered as unknown as FixtureRendered
+}
+
+function fixtureRendered(node: FixtureNode, box: FixtureRendered['box']): RenderedNode {
+  return { type: '__fixture_a', box, node } as unknown as RenderedNode
+}
+
 describe('behavior.ts registry', () => {
   test('measureNodeHeight dispatches to the registered type', () => {
     registerFixtureA()
-    const node = { type: '__fixture_a', height: 42, label: 'a' } as unknown as Node
+    const node = asNode({ type: '__fixture_a', height: 42, label: 'a' })
     expect(measureNodeHeight(node, 100)).toBe(42)
   })
 
   test('layoutNodeFull dispatches to the registered type and receives the given width', () => {
     registerFixtureA()
-    const node = { type: '__fixture_a', height: 10, label: 'a' } as unknown as Node
-    const rendered = layoutNodeFull(node, 250) as unknown as FixtureRendered
+    const node = asNode({ type: '__fixture_a', height: 10, label: 'a' })
+    const rendered = asFixtureRendered(layoutNodeFull(node, 250))
     expect(rendered.type).toBe('__fixture_a')
     expect(rendered.box.width).toBe(250)
     expect(rendered.box.height).toBe(10)
   })
 
   test('isSplittable dispatches to the registered type\'s own isSplittable(node)', () => {
-    registerFixtureA({ isSplittable: node => (node as unknown as FixtureNode).label === 'splittable' })
-    const yes = { type: '__fixture_a', height: 1, label: 'splittable' } as unknown as Node
-    const no = { type: '__fixture_a', height: 1, label: 'nope' } as unknown as Node
+    registerFixtureA({ isSplittable: node => node.label === 'splittable' })
+    const yes = asNode({ type: '__fixture_a', height: 1, label: 'splittable' })
+    const no = asNode({ type: '__fixture_a', height: 1, label: 'nope' })
     expect(isSplittable(yes)).toBe(true)
     expect(isSplittable(no)).toBe(false)
   })
 
   test('splitNode returns null when the registered type has no split() implementation', () => {
     registerFixtureA()
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
     expect(splitNode(node, 100, 3)).toBeNull()
   })
 
@@ -80,27 +95,27 @@ describe('behavior.ts registry', () => {
     const rest: FixtureNode = { type: '__fixture_a', height: 2, label: 'rest' }
     registerFixtureA({
       split: (node, width): FixtureSplitOutcome => ({
-        rendered: { type: '__fixture_a', box: { x: 0, y: 0, width, height: 1 }, node } as unknown as RenderedNode,
+        rendered: fixtureRendered(node, { x: 0, y: 0, width, height: 1 }),
         consumedHeight: 1,
         rest,
       }),
     })
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
     const outcome = splitNode(node, 100, 3)
     expect(outcome).not.toBeNull()
     expect(outcome!.consumedHeight).toBe(1)
-    expect(outcome!.rest).toEqual(rest as unknown as Node)
+    expect(outcome!.rest).toEqual(asNode(rest))
   })
 
   test('naturalWidth falls back to availableWidth when the type registers no naturalWidth()', () => {
     registerFixtureA()
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
     expect(naturalWidth(node, 123)).toBe(123)
   })
 
   test('naturalWidth clamps the registered naturalWidth() result to availableWidth', () => {
     registerFixtureA({ naturalWidth: () => 9999 })
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
     expect(naturalWidth(node, 50)).toBe(50)
     registerFixtureA({ naturalWidth: () => 10 })
     expect(naturalWidth(node, 50)).toBe(10)
@@ -113,12 +128,13 @@ describe('behavior.ts registry', () => {
         calls.push({ x, y, ctx })
       },
     })
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
-    const rendered = layoutNodeFull(node, 100) as unknown as FixtureRendered
-      ; (rendered.box as { x: number }).x = 10
-      ; (rendered.box as { y: number }).y = 20
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
+    const rendered = layoutNodeFull(node, 100)
+    const fixture = asFixtureRendered(rendered)
+    fixture.box.x = 10
+    fixture.box.y = 20
     const container = {} as HTMLElement
-    renderNodeDom(rendered as unknown as RenderedNode, 5, 7, { container, unselectable: false })
+    renderNodeDom(rendered, 5, 7, { container, unselectable: false })
     expect(calls).toHaveLength(1)
     expect(calls[0]!.x).toBe(15) // originX(5) + box.x(10)
     expect(calls[0]!.y).toBe(27) // originY(7) + box.y(20)
@@ -129,8 +145,8 @@ describe('behavior.ts registry', () => {
   test('renderNodeDom marks unselectable when the node is interactive+draggable, even if the ancestor context was not', () => {
     const calls: DomRenderCtx[] = []
     registerFixtureA({ renderDom: (_r, _x, _y, ctx) => void calls.push(ctx) })
-    const node = { type: '__fixture_a', height: 5, label: 'a', interactive: true, draggable: true } as unknown as Node
-    const rendered = layoutNodeFull(node, 100) as unknown as RenderedNode
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a', interactive: true, draggable: true })
+    const rendered = layoutNodeFull(node, 100)
     renderNodeDom(rendered, 0, 0, { container: {} as HTMLElement, unselectable: false })
     expect(calls[0]!.unselectable).toBe(true)
   })
@@ -142,12 +158,13 @@ describe('behavior.ts registry', () => {
         calls.push({ x, y, ctx })
       },
     })
-    const node = { type: '__fixture_a', height: 5, label: 'a' } as unknown as Node
-    const rendered = layoutNodeFull(node, 100) as unknown as FixtureRendered
-      ; (rendered.box as { x: number }).x = 3
-      ; (rendered.box as { y: number }).y = 4
+    const node = asNode({ type: '__fixture_a', height: 5, label: 'a' })
+    const rendered = layoutNodeFull(node, 100)
+    const fixture = asFixtureRendered(rendered)
+    fixture.box.x = 3
+    fixture.box.y = 4
     const fakePdf = {} as PdfRenderCtx['pdf']
-    await drawPdfNode(rendered as unknown as RenderedNode, 1, 2, fakePdf)
+    await drawPdfNode(rendered, 1, 2, fakePdf)
     expect(calls).toHaveLength(1)
     expect(calls[0]!.x).toBe(4) // originX(1) + box.x(3)
     expect(calls[0]!.y).toBe(6) // originY(2) + box.y(4)
@@ -155,7 +172,7 @@ describe('behavior.ts registry', () => {
   })
 
   test('every generic dispatcher throws a clear error for an unregistered node type', () => {
-    const node = { type: '__never_registered' } as unknown as Node
+    const node = asNode({ type: '__never_registered' })
     expect(() => measureNodeHeight(node, 100)).toThrow(/no node type registered/)
     expect(() => layoutNodeFull(node, 100)).toThrow(/no node type registered/)
     expect(() => isSplittable(node)).toThrow(/no node type registered/)
