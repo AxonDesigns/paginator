@@ -19,6 +19,7 @@ import '../src/nodes/chart/index.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from '../src/core/behavior.ts'
 import { chart, container, group, image, pageBreak, separator, table } from '../src/core/nodes.ts'
 import type { RenderedNode } from '../src/core/geometry.ts'
+import { squarifyTreemap } from '../src/render/chart-geometry.ts'
 
 describe('image', () => {
   test('measureHeight uses explicit height', () => {
@@ -60,13 +61,380 @@ describe('page-break', () => {
 
 describe('chart', () => {
   test('measureHeight uses explicit height', () => {
-    const node = chart({ chartKind: 'bar', categories: ['a'], series: [{ data: [1] }], width: 100, height: 80 })
+    const node = chart({ chartKind: 'categorical', categories: ['a'], series: [{ data: [1] }], width: 100, height: 80 })
     expect(measureNodeHeight(node, 100)).toBe(80)
   })
 
   test('is not splittable (atomic)', () => {
-    const node = chart({ chartKind: 'pie', slices: [{ label: 'a', value: 1 }], width: 100, height: 80 })
+    const node = chart({ chartKind: 'radial', rings: [{ slices: [{ label: 'a', value: 1 }] }], width: 100, height: 80 })
     expect(isSplittable(node)).toBe(false)
+  })
+
+  describe('categorical (merged bar+line)', () => {
+    test('series.kind defaults to "bar" and mixes freely with "line"/"points"', () => {
+      const node = chart({
+        chartKind: 'categorical',
+        categories: ['a', 'b'],
+        series: [
+          { data: [1, 2] }, // defaults to 'bar'
+          { kind: 'line', data: [3, 4], curve: 'monotone', strokeWidth: 3, markerRadius: 5, fill: true },
+          { kind: 'points', data: [5, 6], markerRadius: 2 },
+        ],
+        width: 100,
+        height: 80,
+      })
+      expect(node.series[0]!.kind).toBeUndefined()
+      expect(node.series[1]!.kind).toBe('line')
+    })
+
+    test('throws when a non-"line" series sets "fill"', () => {
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'bar', data: [1], fill: true }], width: 100, height: 80 }),
+      ).toThrow(/"fill"/)
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'points', data: [1], fill: true }], width: 100, height: 80 }),
+      ).toThrow(/"fill"/)
+    })
+
+    test('throws when a "bar" series sets "curve"', () => {
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'bar', data: [1], curve: 'monotone' }], width: 100, height: 80 }),
+      ).toThrow(/"curve"/)
+    })
+
+    test('throws when a non-"line" series sets "strokeWidth"', () => {
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'points', data: [1], strokeWidth: 2 }], width: 100, height: 80 }),
+      ).toThrow(/"strokeWidth"/)
+    })
+
+    test('throws when a "bar" series sets "markerRadius"', () => {
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'bar', data: [1], markerRadius: 3 }], width: 100, height: 80 }),
+      ).toThrow(/"markerRadius"/)
+    })
+
+    test('"points" series may set "curve"/"markerRadius" but not "fill"/"strokeWidth"', () => {
+      expect(() =>
+        chart({ chartKind: 'categorical', categories: ['a'], series: [{ kind: 'points', data: [1], curve: 'linear', markerRadius: 3 }], width: 100, height: 80 }),
+      ).not.toThrow()
+    })
+  })
+
+  describe('radial (merged pie+donut, rings)', () => {
+    test('a plain single-ring pie is rings: [{ slices }]', () => {
+      const node = chart({ chartKind: 'radial', rings: [{ slices: [{ label: 'a', value: 1 }, { label: 'b', value: 2 }] }], width: 100, height: 80 })
+      expect(node.rings.length).toBe(1)
+    })
+
+    test('throws on a top-level "slices" field', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against the removed top-level shorthand
+        chart({ chartKind: 'radial', slices: [{ label: 'a', value: 1 }], width: 100, height: 80 }),
+      ).toThrow(/"slices"/)
+    })
+
+    test('throws on an empty "rings" array', () => {
+      expect(() => chart({ chartKind: 'radial', rings: [], width: 100, height: 80 })).toThrow(/non-empty "rings"/)
+    })
+
+    test('throws when ring 0 sets "parentIndex"', () => {
+      expect(() =>
+        chart({ chartKind: 'radial', rings: [{ slices: [{ label: 'a', value: 1, parentIndex: 0 }] }], width: 100, height: 80 }),
+      ).toThrow(/ring 0/)
+    })
+
+    test('throws when a ring mixes parented and unparented slices', () => {
+      expect(() =>
+        chart({
+          chartKind: 'radial',
+          rings: [
+            { slices: [{ label: 'a', value: 1 }] },
+            { slices: [{ label: 'x', value: 1, parentIndex: 0 }, { label: 'y', value: 1 }] },
+          ],
+          width: 100,
+          height: 80,
+        }),
+      ).toThrow(/mixes slices/)
+    })
+
+    test('throws when "parentIndex" is out of bounds for the previous ring', () => {
+      expect(() =>
+        chart({
+          chartKind: 'radial',
+          rings: [{ slices: [{ label: 'a', value: 1 }] }, { slices: [{ label: 'x', value: 1, parentIndex: 5 }] }],
+          width: 100,
+          height: 80,
+        }),
+      ).toThrow(/out of bounds/)
+    })
+
+    test('accepts a fully hierarchical sunburst with two rings', () => {
+      expect(() =>
+        chart({
+          chartKind: 'radial',
+          rings: [
+            { slices: [{ label: 'Fruit', value: 2 }, { label: 'Veg', value: 1 }] },
+            {
+              slices: [
+                { label: 'Apple', value: 1, parentIndex: 0 },
+                { label: 'Pear', value: 1, parentIndex: 0 },
+                { label: 'Carrot', value: 1, parentIndex: 1 },
+              ],
+            },
+          ],
+          width: 100,
+          height: 80,
+        }),
+      ).not.toThrow()
+    })
+
+    test('throws on innerRadiusRatio outside [0, 1)', () => {
+      expect(() => chart({ chartKind: 'radial', rings: [{ slices: [{ label: 'a', value: 1 }] }], innerRadiusRatio: 1, width: 100, height: 80 })).toThrow(
+        /innerRadiusRatio/,
+      )
+    })
+  })
+
+  describe('scatter', () => {
+    test('constructs with numeric x/y points', () => {
+      const node = chart({ chartKind: 'scatter', series: [{ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }], width: 100, height: 80 })
+      expect(node.series[0]!.points.length).toBe(2)
+    })
+
+    test('throws on an empty "series" array', () => {
+      expect(() => chart({ chartKind: 'scatter', series: [], width: 100, height: 80 })).toThrow(/non-empty "series"/)
+    })
+
+    test('throws on a series with an empty "points" array', () => {
+      expect(() => chart({ chartKind: 'scatter', series: [{ points: [] }], width: 100, height: 80 })).toThrow(/non-empty "points"/)
+    })
+
+    test('throws on a negative point "size"', () => {
+      expect(() => chart({ chartKind: 'scatter', series: [{ points: [{ x: 1, y: 2, size: -1 }] }], width: 100, height: 80 })).toThrow(/"size"/)
+    })
+
+    test('throws on an invalid "sizeScale.range"', () => {
+      expect(() =>
+        chart({ chartKind: 'scatter', series: [{ points: [{ x: 1, y: 2 }] }], sizeScale: { range: [10, 5] }, width: 100, height: 80 }),
+      ).toThrow(/sizeScale\.range/)
+    })
+
+    test('throws when "xView.domain.min" >= "xView.domain.max"', () => {
+      expect(() =>
+        chart({ chartKind: 'scatter', series: [{ points: [{ x: 1, y: 2 }] }], xView: { domain: { min: 10, max: 5 } }, width: 100, height: 80 }),
+      ).toThrow(/xView\.domain/)
+    })
+
+    test('throws on top-level "categories"/"slices"/"rings"', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against fields from other chart kinds
+        chart({ chartKind: 'scatter', series: [{ points: [{ x: 1, y: 2 }] }], categories: ['a'], width: 100, height: 80 }),
+      ).toThrow(/"categories"/)
+    })
+  })
+
+  describe('gantt', () => {
+    test('constructs with tasks', () => {
+      const node = chart({ chartKind: 'gantt', tasks: [{ label: 'A', start: 0, end: 5 }], width: 100, height: 80 })
+      expect(node.tasks.length).toBe(1)
+    })
+
+    test('passes through chart-level and per-group/per-task header/label styling', () => {
+      const node = chart({
+        chartKind: 'gantt',
+        groupHeaderColor: '#111',
+        groupHeaderBackground: '#eee',
+        groups: { Build: { color: '#222', background: '#ddd' } },
+        taskLabelColor: '#333',
+        tasks: [{ label: 'A', start: 0, end: 5, group: 'Build', labelColor: '#b3261e' }],
+        width: 100,
+        height: 80,
+      })
+      expect(node.groupHeaderColor).toBe('#111')
+      expect(node.groups!.Build!.color).toBe('#222')
+      expect(node.taskLabelColor).toBe('#333')
+      expect(node.tasks[0]!.labelColor).toBe('#b3261e')
+    })
+
+    test('throws on an empty "tasks" array', () => {
+      expect(() => chart({ chartKind: 'gantt', tasks: [], width: 100, height: 80 })).toThrow(/non-empty "tasks"/)
+    })
+
+    test('throws when a task\'s "end" is before "start"', () => {
+      expect(() => chart({ chartKind: 'gantt', tasks: [{ label: 'A', start: 10, end: 5 }], width: 100, height: 80 })).toThrow(/before "start"/)
+    })
+
+    test('allows a zero-width milestone task (end === start)', () => {
+      expect(() => chart({ chartKind: 'gantt', tasks: [{ label: 'Launch', start: 5, end: 5 }], width: 100, height: 80 })).not.toThrow()
+    })
+
+    test('throws on a non-positive "rowHeight"', () => {
+      expect(() => chart({ chartKind: 'gantt', tasks: [{ label: 'A', start: 0, end: 5 }], rowHeight: 0, width: 100, height: 80 })).toThrow(/rowHeight/)
+    })
+
+    test('throws on top-level "series"', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against fields from other chart kinds
+        chart({ chartKind: 'gantt', tasks: [{ label: 'A', start: 0, end: 5 }], series: [], width: 100, height: 80 }),
+      ).toThrow(/"series"/)
+    })
+  })
+
+  describe('radar', () => {
+    test('constructs with categories/series, allowing negative values', () => {
+      const node = chart({ chartKind: 'radar', categories: ['a', 'b', 'c'], series: [{ data: [1, -2, 3] }], width: 100, height: 80 })
+      expect(node.series[0]!.data).toEqual([1, -2, 3])
+    })
+
+    test('throws on an empty "categories" array', () => {
+      expect(() => chart({ chartKind: 'radar', categories: [], series: [{ data: [] }], width: 100, height: 80 })).toThrow(/non-empty "categories"/)
+    })
+
+    test('throws when a series\' "data" length mismatches "categories"', () => {
+      expect(() => chart({ chartKind: 'radar', categories: ['a', 'b'], series: [{ data: [1] }], width: 100, height: 80 })).toThrow(/data points/)
+    })
+
+    test('throws on an invalid "fill.opacity"', () => {
+      expect(() =>
+        chart({ chartKind: 'radar', categories: ['a'], series: [{ data: [1], fill: { opacity: 2 } }], width: 100, height: 80 }),
+      ).toThrow(/fill\.opacity/)
+    })
+
+    test('throws on a negative "markerRadius"', () => {
+      expect(() => chart({ chartKind: 'radar', categories: ['a'], series: [{ data: [1] }], markerRadius: -1, width: 100, height: 80 })).toThrow(
+        /markerRadius/,
+      )
+    })
+
+    test('throws on top-level "slices"/"rings"/"tasks"', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against fields from other chart kinds
+        chart({ chartKind: 'radar', categories: ['a'], series: [{ data: [1] }], slices: [], width: 100, height: 80 }),
+      ).toThrow(/"slices"/)
+    })
+  })
+
+  describe('candlestick', () => {
+    const candle = { open: 10, high: 12, low: 8, close: 11 }
+
+    test('constructs with categories/series of OHLC candles', () => {
+      const node = chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [candle] }], width: 100, height: 80 })
+      expect(node.series[0]!.data[0]).toEqual(candle)
+    })
+
+    test('throws on an empty "categories" array', () => {
+      expect(() => chart({ chartKind: 'candlestick', categories: [], series: [{ data: [] }], width: 100, height: 80 })).toThrow(/non-empty "categories"/)
+    })
+
+    test('throws when a series\' "data" length mismatches "categories"', () => {
+      expect(() => chart({ chartKind: 'candlestick', categories: ['a', 'b'], series: [{ data: [candle] }], width: 100, height: 80 })).toThrow(
+        /candles/,
+      )
+    })
+
+    test('throws when "low" is above min(open, close)', () => {
+      expect(() =>
+        chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [{ open: 10, high: 12, low: 11, close: 11 }] }], width: 100, height: 80 }),
+      ).toThrow(/"low"/)
+    })
+
+    test('throws when "high" is below max(open, close)', () => {
+      expect(() =>
+        chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [{ open: 10, high: 9, low: 8, close: 11 }] }], width: 100, height: 80 }),
+      ).toThrow(/"high"/)
+    })
+
+    test('throws on a negative "candleWidth"/"wickWidth"', () => {
+      expect(() =>
+        chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [candle] }], candleWidth: -1, width: 100, height: 80 }),
+      ).toThrow(/candleWidth/)
+      expect(() =>
+        chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [candle] }], wickWidth: -1, width: 100, height: 80 }),
+      ).toThrow(/wickWidth/)
+    })
+
+    test('throws on top-level "slices"/"rings"/"tasks"', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against fields from other chart kinds
+        chart({ chartKind: 'candlestick', categories: ['a'], series: [{ data: [candle] }], tasks: [], width: 100, height: 80 }),
+      ).toThrow(/"slices"/)
+    })
+  })
+
+  describe('treemap', () => {
+    test('constructs with items', () => {
+      const node = chart({ chartKind: 'treemap', items: [{ label: 'a', value: 10 }, { label: 'b', value: 5 }], width: 100, height: 80 })
+      expect(node.items.length).toBe(2)
+    })
+
+    test('throws on an empty "items" array', () => {
+      expect(() => chart({ chartKind: 'treemap', items: [], width: 100, height: 80 })).toThrow(/non-empty "items"/)
+    })
+
+    test('throws on a negative "value"', () => {
+      expect(() => chart({ chartKind: 'treemap', items: [{ label: 'a', value: -1 }], width: 100, height: 80 })).toThrow(/"value"/)
+    })
+
+    test('allows a zero "value" (degenerates to no visible rectangle)', () => {
+      expect(() => chart({ chartKind: 'treemap', items: [{ label: 'a', value: 0 }, { label: 'b', value: 5 }], width: 100, height: 80 })).not.toThrow()
+    })
+
+    test('throws on a non-finite "value"', () => {
+      expect(() => chart({ chartKind: 'treemap', items: [{ label: 'a', value: Infinity }], width: 100, height: 80 })).toThrow(/"value"/)
+    })
+
+    test('throws on a negative "itemGap"', () => {
+      expect(() => chart({ chartKind: 'treemap', items: [{ label: 'a', value: 1 }], itemGap: -1, width: 100, height: 80 })).toThrow(/itemGap/)
+    })
+
+    test('throws on top-level "categories"/"series"', () => {
+      expect(() =>
+        // @ts-expect-error — exercising the plain-JS-caller guard against fields from other chart kinds
+        chart({ chartKind: 'treemap', items: [{ label: 'a', value: 1 }], categories: ['a'], width: 100, height: 80 }),
+      ).toThrow(/"categories"/)
+    })
+  })
+})
+
+describe('squarifyTreemap (chart-geometry.ts)', () => {
+  const box = { x: 0, y: 0, width: 200, height: 100 }
+
+  test('tiles the box exactly — every rect area sums to the box area', () => {
+    const items = [{ value: 40 }, { value: 30 }, { value: 20 }, { value: 10 }]
+    const rects = squarifyTreemap(items, box)
+    const totalArea = rects.reduce((acc, r) => acc + r.width * r.height, 0)
+    expect(totalArea).toBeCloseTo(box.width * box.height, 5)
+  })
+
+  test('each rect area is proportional to its item\'s value', () => {
+    const items = [{ value: 40 }, { value: 30 }, { value: 20 }, { value: 10 }]
+    const rects = squarifyTreemap(items, box)
+    const totalValue = items.reduce((acc, it) => acc + it.value, 0)
+    rects.forEach((r, i) => {
+      const expectedArea = (items[i]!.value / totalValue) * box.width * box.height
+      expect(r.width * r.height).toBeCloseTo(expectedArea, 5)
+    })
+  })
+
+  test('returns rects in the SAME order as the input items, not sorted order', () => {
+    // Smallest value first in the input — squarify sorts internally but must un-sort on the way out.
+    const items = [{ value: 5 }, { value: 50 }, { value: 15 }]
+    const rects = squarifyTreemap(items, box)
+    expect(rects.length).toBe(3)
+    const totalValue = 70
+    expect(rects[0]!.width * rects[0]!.height).toBeCloseTo((5 / totalValue) * box.width * box.height, 5)
+    expect(rects[1]!.width * rects[1]!.height).toBeCloseTo((50 / totalValue) * box.width * box.height, 5)
+  })
+
+  test('a zero-value item gets a degenerate zero-area rect', () => {
+    const rects = squarifyTreemap([{ value: 0 }, { value: 10 }], box)
+    expect(rects[0]!.width * rects[0]!.height).toBe(0)
+    expect(rects[1]!.width * rects[1]!.height).toBeCloseTo(box.width * box.height, 5)
+  })
+
+  test('empty items produces an empty result', () => {
+    expect(squarifyTreemap([], box)).toEqual([])
   })
 })
 

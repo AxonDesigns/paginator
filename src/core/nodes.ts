@@ -346,7 +346,7 @@ export type ContainerNode = Interactive & SelfAlignable & {
   borderRadius?: number
 }
 
-export type ChartKind = 'bar' | 'line' | 'pie' | 'donut'
+export type ChartKind = 'categorical' | 'radial' | 'scatter' | 'gantt' | 'radar' | 'candlestick' | 'treemap'
 
 export type ChartSeriesFillConfig = {
   /** Overrides this series' own resolved color as the gradient's opaque end. */
@@ -355,17 +355,36 @@ export type ChartSeriesFillConfig = {
   opacity?: number
 }
 
+export type ChartSeriesKind = 'bar' | 'line' | 'points'
+
 export type ChartSeries = {
   name?: string
   data: number[]
   color?: string
-  /** `line` only. Off by default. Fills the area between this series' line and the baseline (the
-   *  same zero/domain-edge baseline bars grow from) with a linear gradient — opaque at the line,
-   *  fading to fully transparent at the baseline, so anything behind the chart stays visible near
-   *  the bottom. `true` fills with this series' own resolved color at the default opacity; an
+  /** How THIS series renders, independent of every other series in the same chart — freely mix
+   *  e.g. two `'bar'` series (grouped/stacked together — see `CategoricalChartNode.barMode`;
+   *  grouping/stacking only ever happens AMONG `'bar'`-kind series, never across kinds) with a
+   *  `'line'` series and a `'points'` series (markers only, no connecting stroke), all sharing the
+   *  same category x-axis and y-domain. Default `'bar'`. */
+  kind?: ChartSeriesKind
+  /** `kind: 'line'` only — chart() throws if set on a `'bar'`/`'points'` series (a stroke-less
+   *  "points" series has no line to fill toward a baseline, and a fill under a bar would duplicate
+   *  the bar itself). Off by default. Fills the area between this series' line and the baseline
+   *  (the same zero/domain-edge baseline bars grow from) with a linear gradient — opaque at the
+   *  line, fading to fully transparent at the baseline, so anything behind the chart stays visible
+   *  near the bottom. `true` fills with this series' own resolved color at the default opacity; an
    *  object overrides `color` and/or `opacity`. Purely a per-series toggle — unrelated series in
    *  the same chart can mix filled and unfilled lines. */
   fill?: boolean | ChartSeriesFillConfig
+  /** `kind: 'line'`/`'points'` only — per-series override of `CategoricalChartNode.lineCurve`, e.g.
+   *  so one series in a mixed chart draws a monotone curve while another stays linear. Falls back
+   *  to the chart-level default when unset. */
+  curve?: 'linear' | 'monotone'
+  /** `kind: 'line'` only — per-series override of `CategoricalChartNode.lineStrokeWidth`. */
+  strokeWidth?: number
+  /** `kind: 'line'`/`'points'` only — per-series override of `CategoricalChartNode.markerRadius`
+   *  (points ARE markers, so this sizes them the same way a line's data-point markers are sized). */
+  markerRadius?: number
 }
 export type ChartSlice = { label: string; value: number; color?: string }
 
@@ -444,10 +463,13 @@ type ChartCommon = Interactive & SelfAlignable & {
   flex?: FlexSize
 }
 
-type CategoricalChartCommon = ChartCommon & {
+export type CategoricalChartNode = ChartCommon & {
+  chartKind: 'categorical'
   /** x-axis labels, one per data point in every series. */
   categories: string[]
-  /** One or more series, each with one value per category (grouped bars / multi-line). */
+  /** One or more series, each independently `'bar'`/`'line'`/`'points'` via `ChartSeries.kind` —
+   *  freely mix e.g. grouped/stacked bars with one or more line/points series sharing the same
+   *  category x-axis and y-domain. */
   series: ChartSeries[]
   /** `'vertical'` (default) plots categories left-to-right on the x-axis and values bottom-to-top
    *  on the y-axis — the conventional column/line chart. `'horizontal'` swaps the two axes:
@@ -458,52 +480,303 @@ type CategoricalChartCommon = ChartCommon & {
    *  y-domain; see `ChartViewConfig`. Separate from `axis`, which only ever controls chrome
    *  (ticks/gridlines/labels) drawn on top of whatever domain `view` resolves. */
   view?: ChartViewConfig
-}
-
-type RadialChartCommon = ChartCommon & {
-  slices: ChartSlice[]
-  /** Angular gap between slices, in degrees. Default 1.5; 0 removes the gap entirely. */
-  sliceGap?: number
-}
-
-export type BarChartNode = CategoricalChartCommon & {
-  chartKind: 'bar'
-  /** `'grouped'` places each category's series side by side; `'stacked'` stacks them into one bar
-   *  per category, positive values above the zero baseline and negative values below it, each in
-   *  series order. Default `'grouped'`. */
+  /** Only meaningful AMONG `'bar'`-kind series (ignored, not thrown, if none exist). `'grouped'`
+   *  places each category's bar series side by side; `'stacked'` stacks them into one bar per
+   *  category, positive values above the zero baseline and negative values below it, each in
+   *  series order. A chart's `'line'`/`'points'` series are entirely unaffected either way — they
+   *  always draw as their own pass, never grouped/stacked with the bars. Default `'grouped'`. */
   barMode?: 'grouped' | 'stacked'
   /** `barMode: 'stacked'` only. Gap (px) left between consecutive stacked segments — the true
    *  baseline edge and the outermost tip edge are never inset by this. Default 0 (flush segments). */
   barSegmentGap?: number
   /** Corner radius (px) of the rounded "data end" of a bar — see the dataviz mark spec. Default 4. */
   barCornerRadius?: number
-}
-
-export type LineChartNode = CategoricalChartCommon & {
-  chartKind: 'line'
-  /** `'linear'` (default) connects points with straight segments. `'monotone'` draws a
-   *  cubic-Bezier curve through every point using monotone cubic (Fritsch–Carlson) interpolation
-   *  — tangents are clamped so the curve never overshoots past a point's own value between it and
-   *  its neighbors, unlike a naive Catmull-Rom spline. Applies to every series in the chart. */
+  /** Chart-level default for every `'line'`/`'points'`-kind series without its own
+   *  `ChartSeries.curve`. `'linear'` (default) connects points with straight segments. `'monotone'`
+   *  draws a cubic-Bezier curve through every point using monotone cubic (Fritsch–Carlson)
+   *  interpolation — tangents are clamped so the curve never overshoots past a point's own value
+   *  between it and its neighbors, unlike a naive Catmull-Rom spline. */
   lineCurve?: 'linear' | 'monotone'
-  /** Stroke width (px) of the line itself. Default 2. */
+  /** Chart-level default for every `'line'`-kind series without its own `ChartSeries.strokeWidth`.
+   *  Stroke width (px) of the line itself. Default 2. */
   lineStrokeWidth?: number
-  /** Radius (px) of each data-point marker. The white "surface ring" behind it stays 2px larger
-   *  than this, same relationship as the library's default (4px marker / 6px ring). Default 4. */
+  /** Chart-level default for every `'line'`/`'points'`-kind series without its own
+   *  `ChartSeries.markerRadius`. Radius (px) of each data-point marker. The white "surface ring"
+   *  behind it stays 2px larger than this, same relationship as the library's default (4px marker /
+   *  6px ring). Default 4. */
   markerRadius?: number
 }
 
-export type PieChartNode = RadialChartCommon & { chartKind: 'pie' }
-
-export type DonutChartNode = RadialChartCommon & {
-  chartKind: 'donut'
-  /** Fraction of the outer radius left as a hole. Default 0.6. */
-  donutInnerRadiusRatio?: number
+export type ChartRingSlice = ChartSlice & {
+  /** Index into the PREVIOUS ring's `slices` array (`rings[ringIndex - 1].slices`) — declares this
+   *  slice a sunburst child of that slice, constraining its angular span to a sub-arc of the
+   *  parent's own resolved arc, sized proportionally to this slice's value among its SIBLINGS
+   *  (other slices in THIS ring sharing the same `parentIndex`). Meaningless on ring 0 (nothing
+   *  "immediately inside" it) — chart() throws if set there. Within any other ring, every slice
+   *  must either set this or none may — chart() throws on a ring that mixes parented and
+   *  unparented slices, so "some slices nested, some not" only ever means different RINGS, never
+   *  different slices within the same ring. */
+  parentIndex?: number
 }
 
-export type ChartNode = BarChartNode | LineChartNode | PieChartNode | DonutChartNode
-export type CategoricalChartNode = BarChartNode | LineChartNode
-export type RadialChartNode = PieChartNode | DonutChartNode
+export type ChartRing = {
+  slices: ChartRingSlice[]
+  /** Per-ring override of `RadialChartNode.sliceGap`. Falls back to it when unset. */
+  sliceGap?: number
+  /** Per-ring palette override — same cycling rule as the chart-level `colors`, scoped to this
+   *  ring's own slice indices, so an inner and outer ring can use different palettes. */
+  colors?: string[]
+}
+
+export type RadialChartNode = ChartCommon & {
+  chartKind: 'radial'
+  /** Concentric rings, ordered innermost (index 0) to outermost. A plain single-ring pie/donut is
+   *  just `rings: [{ slices: [...] }]` — there is no separate flat-`slices` shorthand; every radial
+   *  chart, single-ring or multi-ring, is authored the same way. */
+  rings: ChartRing[]
+  /** Angular gap between slices, in degrees. Default 1.5; 0 removes the gap entirely. Per-ring
+   *  `ChartRing.sliceGap` overrides this for that one ring. */
+  sliceGap?: number
+  /** Fraction of the outer radius left as a hole at the very center, shared by every ring (each
+   *  ring gets an equal-width radial band across whatever radius remains outside that hole).
+   *  Replaces the old `donutInnerRadiusRatio` — same meaning, renamed since "donut" is no longer a
+   *  distinct chart kind. Default 0 (a solid pie, no hole). Must be in `[0, 1)`. */
+  innerRadiusRatio?: number
+}
+
+// A bare numeric axis — deliberately its OWN type, not a reuse of `ChartAxisConfig`: a purely
+// numeric axis has no category-label toggle to share, and a chart with two independent numeric
+// axes (scatter's x/y, gantt's time axis) needs to resolve each one separately rather than
+// `ChartAxisConfig`'s implicit "there is exactly one axis" assumption.
+export type ChartNumericAxisConfig = {
+  /** Master toggle for this axis' ticks/labels. Default true. */
+  show?: boolean
+  /** Independent of `show` — lets gridlines be turned off while ticks/labels stay. Default true. */
+  gridlines?: boolean
+  tickCount?: number // default 5
+  formatTick?: (value: number) => string
+  tickFontSize?: number // default 11
+  /** Axis baseline color. Default a neutral gray. */
+  color?: string
+  /** Gridline color. Default a lighter neutral gray. */
+  gridlineColor?: string
+  /** Tick label text color. Default a muted ink. */
+  tickColor?: string
+}
+
+export type ChartScatterPoint = {
+  x: number
+  y: number
+  /** Bubble-sizing driver — an arbitrary data value (NOT a px radius), mapped through
+   *  `ScatterChartNode.sizeScale`. Omitted, or `sizeScale` entirely unset on the chart, means this
+   *  point renders at the chart's fixed `pointRadius` instead. **Throws** if negative. */
+  size?: number
+  color?: string
+}
+
+export type ChartScatterSeries = { name?: string; points: ChartScatterPoint[]; color?: string }
+
+export type ChartSizeScaleConfig = {
+  /** `'sqrt'` (default): the point's AREA, not its radius, is linearly proportional to `size` — the
+   *  standard bubble-chart convention (a value 4x another reads as 4x the area, not 4x the radius /
+   *  16x the area, which would visually exaggerate the ratio). `'linear'`: radius directly
+   *  proportional to `size`. */
+  type?: 'sqrt' | 'linear'
+  /** Output radius range (px) that `[min(size), max(size)]` across every point WITH a `size` maps
+   *  onto. Default `[4, 24]`. **Throws** if `range[0] >= range[1]` or either bound is negative. */
+  range?: [number, number]
+}
+
+export type ScatterChartNode = ChartCommon & {
+  chartKind: 'scatter'
+  series: ChartScatterSeries[]
+  xAxis?: ChartNumericAxisConfig
+  yAxis?: ChartNumericAxisConfig
+  /** Independent x/y domains — same `ChartViewConfig` shape as `CategoricalChartNode.view`, but
+   *  unlike that y-domain (which defaults to `'zero'`, always including 0), an omitted `xView`/
+   *  `yView` here defaults to `'auto'` instead: scatter data routinely sits far from either axis'
+   *  zero (e.g. an x/y correlation plot over a 1000-2000 range), where forcing 0 into view would
+   *  squash the actual data into a sliver. Set `{ domain: 'zero' }` explicitly to opt back into the
+   *  zero-forcing behavior. */
+  xView?: ChartViewConfig
+  yView?: ChartViewConfig
+  /** Fixed radius (px) for every point without its own `size`, or when `sizeScale` is entirely
+   *  unset. Default 4. */
+  pointRadius?: number
+  /** Presence (even `{}`) opts every point WITH a `size` into bubble sizing; omitted means every
+   *  point renders at `pointRadius` regardless of whether it sets `size` — an explicit opt-in so
+   *  bubble-vs-plain-scatter never silently flips based on incidental data. */
+  sizeScale?: ChartSizeScaleConfig
+}
+
+export type ChartGanttTask = {
+  label: string
+  /** Plain numeric time offset — never a `Date`; this library does no date math anywhere (no
+   *  aggregation, no calendar-aware tick generation). Pre-convert real dates to numeric offsets
+   *  (e.g. days since a project start) and use `xAxis.formatTick` to render them back as dates. */
+  start: number
+  /** **Throws** if less than `start`. Equal to `start` is allowed (a zero-width "milestone"). */
+  end: number
+  /** This task's own bar fill color — independent of its label TEXT color (`labelColor` below);
+   *  the two are deliberately not linked, so a task's row label can stay a neutral, readable ink
+   *  while its bar carries whatever color scheme the caller wants. */
+  color?: string
+  /** Flat, single-level row grouping — NOT `TableNode.groups`' nested/aggregating machinery,
+   *  deliberately much simpler: tasks sharing a `group` value in a CONTIGUOUS run (adjacent to each
+   *  other in `tasks` array order) are preceded by one header band showing that group name. Tasks
+   *  are never reordered to cluster a non-contiguous same-named group together — unlike table
+   *  grouping's global regroup-by-value, this only recognizes runs as authored. */
+  group?: string
+  /** Overrides `GanttChartNode.taskLabelColor` for THIS task's own row label alone. */
+  labelColor?: string
+}
+
+export type ChartGanttGroupStyle = { color?: string; background?: string }
+
+export type GanttChartNode = ChartCommon & {
+  chartKind: 'gantt'
+  tasks: ChartGanttTask[]
+  xAxis?: ChartNumericAxisConfig
+  /** Same `ChartViewConfig` shape as everywhere else, but defaults to `'auto'` (tight to data)
+   *  rather than `'zero'` when entirely omitted — same reasoning as `ScatterChartNode.xView`: a
+   *  project's task offsets routinely start well after day 0, where forcing 0 into view would
+   *  squash the real schedule into a sliver. */
+  xView?: ChartViewConfig
+  /** px height of each row (task or group header). Default: divides the available plot height
+   *  evenly across every row, same as every other chart's band-based layout (e.g. a categorical
+   *  chart's category bands). An explicit value is used exactly as given instead — size `height`/
+   *  `aspectRatio` generously enough to fit `rows.length * rowHeight`, or rows simply overflow the
+   *  chart's own box (same visual-overflow consequence any other fixed-size chart layout already
+   *  has, e.g. too many bar-chart categories squeezed into too little width). **Throws** if <= 0. */
+  rowHeight?: number
+  /** Default: `true` iff any task sets `group`, `false` otherwise. */
+  showGroupHeaders?: boolean
+  /** Chart-level default text color for every group header band. Falls back to a neutral ink when
+   *  entirely unset. A per-group entry in `groups` overrides this for that one group's own band. */
+  groupHeaderColor?: string
+  /** Chart-level default background color for every group header band. Falls back to a neutral
+   *  light gray when entirely unset. A per-group entry in `groups` overrides this for that one
+   *  group's own band. */
+  groupHeaderBackground?: string
+  /** Per-group style override, keyed by the exact `group` string used on `ChartGanttTask`. A group
+   *  name with no entry here (or no `groups` object at all) falls back to
+   *  `groupHeaderColor`/`groupHeaderBackground` — which themselves fall back to the built-in
+   *  defaults. A key that never matches any task's `group` is simply unused, same as an unused
+   *  entry in a `colors` palette elsewhere in this library. */
+  groups?: Record<string, ChartGanttGroupStyle>
+  /** Chart-level default text color for every task's own row label (the task name drawn left of
+   *  its bar) — independent of `groupHeaderColor` (that's the header BAND text) and independent of
+   *  each task's own bar `color`. Falls back to a neutral ink when entirely unset. Per-task
+   *  `ChartGanttTask.labelColor` overrides this for that one task's label alone. */
+  taskLabelColor?: string
+}
+
+export type ChartRadarSeries = {
+  name?: string
+  /** One value per category/spoke — same length requirement as `CategoricalChartNode.series[].data`
+   *  (one entry per category, in the same order). No special negative-value handling: reuses the
+   *  same zero/auto/explicit domain resolution as a categorical chart's y-domain, so a negative
+   *  value simply extends the domain like a line chart dipping below its baseline — the domain's
+   *  own MINIMUM becomes radius-0 (the center), not a hard-coded literal zero. */
+  data: number[]
+  color?: string
+  /** Flat solid-color-at-opacity fill of the polygon interior — unlike `ChartSeries.fill` (a
+   *  line's gradient-to-baseline fade), a closed radial polygon has no single edge that reads as
+   *  "the baseline" to fade toward, so this is deliberately simpler: `true` = this series' own
+   *  resolved color at the default opacity (0.25); an object overrides `color`/`opacity`. */
+  fill?: boolean | ChartSeriesFillConfig
+}
+
+export type RadarChartNode = ChartCommon & {
+  chartKind: 'radar'
+  /** Spokes, arranged evenly around the circle — 0°=top, sweeping clockwise, same convention the
+   *  radial chart's own slice angles use. */
+  categories: string[]
+  series: ChartRadarSeries[]
+  /** Shared radial domain — every series' polygon is scaled against the SAME domain, same as a
+   *  categorical chart's shared y-domain across its series. */
+  view?: ChartViewConfig
+  /** Reuses `ChartAxisConfig` (not `ChartNumericAxisConfig`) since radar genuinely has both a
+   *  category axis (the spokes/categoryFontSize) AND a value axis (the concentric rings/
+   *  tickFontSize) at once, matching what `ChartAxisConfig` already models for a categorical chart. */
+  axis?: ChartAxisConfig
+  /** Radius (px) of each vertex marker. `0` draws no markers at all. Default 3. */
+  markerRadius?: number
+  /** Stroke width (px) of each series' polygon outline. Default 2. */
+  lineStrokeWidth?: number
+}
+
+export type ChartCandle = {
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export type ChartCandlestickSeries = {
+  name?: string
+  /** One candle per category, same length requirement as `CategoricalChartNode.series[].data`. */
+  data: ChartCandle[]
+  /** Per-series override of `CandlestickChartNode.upColor`/`downColor`. */
+  upColor?: string
+  downColor?: string
+}
+
+export type CandlestickChartNode = ChartCommon & {
+  chartKind: 'candlestick'
+  categories: string[]
+  series: ChartCandlestickSeries[]
+  /** Same `ChartViewConfig` shape as everywhere else, but defaults to `'auto'` rather than `'zero'`
+   *  when entirely omitted — same reasoning as `ScatterChartNode.xView`/`GanttChartNode.xView`: real
+   *  price data routinely sits far from 0 (e.g. a stock trading in the 140-180 range), where forcing
+   *  0 into view would squash the actual candles into a sliver at the very top of the plot. */
+  view?: ChartViewConfig
+  axis?: ChartAxisConfig
+  /** px width of each candle's body. Default: mirrors a single-series bar's own band-fit sizing
+   *  (capped at `BAR_MAX_THICKNESS`), divided among series like grouped bars when there's more
+   *  than one. */
+  candleWidth?: number
+  /** px width of the high-low wick line. Default 1. */
+  wickWidth?: number
+  /** Chart-level default fill color for a candle whose `close >= open`. Default a green. Per-series
+   *  `ChartCandlestickSeries.upColor` overrides this for that series alone. */
+  upColor?: string
+  /** Chart-level default fill color for a candle whose `close < open`. Default a red. */
+  downColor?: string
+}
+
+export type ChartTreemapItem = { label: string; value: number; color?: string }
+
+export type TreemapChartNode = ChartCommon & {
+  chartKind: 'treemap'
+  /** Flat, single-level — no nested/hierarchical drill-down (a hierarchical treemap was considered
+   *  and deliberately scoped out, matching the complexity level of every other new chart kind
+   *  here). Laid out via the standard squarified algorithm (Bruls/Huizing/van Wijk): rectangle area
+   *  is proportional to `value`, packed to keep aspect ratios close to 1:1 rather than the thin
+   *  slivers a naive slice-and-dice layout produces. **Throws** if any `value` is negative or
+   *  non-finite (a zero value is allowed — it degenerates to a zero-area rectangle the layout
+   *  simply skips, same "contributes no visible mark" pattern a zero data value already has
+   *  elsewhere, e.g. `stackedBarSegments`). */
+  items: ChartTreemapItem[]
+  /** px gap between adjacent rectangles — same "surface gap separates touching marks" convention
+   *  as `MARK_SURFACE_GAP` elsewhere, applied uniformly to every rectangle's own edges (a treemap
+   *  has no shared "baseline" edge the way a stacked bar does, so there's no flush-outer-edge
+   *  exception to make). Default 2. **Throws** if negative. */
+  itemGap?: number
+  /** px font size for each rectangle's own inline label. A rectangle too small to fit its label at
+   *  this size simply omits it — never overflows past the rectangle's own edge, never wraps.
+   *  Default 12. */
+  labelFontSize?: number
+}
+
+export type ChartNode =
+  | CategoricalChartNode
+  | RadialChartNode
+  | ScatterChartNode
+  | GanttChartNode
+  | RadarChartNode
+  | CandlestickChartNode
+  | TreemapChartNode
 
 // Report-style row grouping (see the "Column grouping" section of GUIDE.md). A group level is a
 // TABLE-level concept, entirely independent of `columns`/`cells` — it never marks or strips any
@@ -760,15 +1033,159 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
   // the narrowed type says shouldn't exist on the other branch.
   const raw = config as Record<string, unknown>
 
-  if (config.chartKind === 'bar' || config.chartKind === 'line') {
+  if (config.chartKind === 'categorical') {
     if (raw.slices !== undefined) {
-      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" cannot use "slices" — use "categories"/"series" instead.`)
+      throw new Error(`[paginator] chart() with chartKind "categorical" cannot use "slices" — use "categories"/"series" instead.`)
     }
     if (config.categories === undefined || config.categories.length === 0) {
-      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "categories" array.`)
+      throw new Error(`[paginator] chart() with chartKind "categorical" needs a non-empty "categories" array.`)
     }
     if (config.series === undefined || config.series.length === 0) {
-      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "series" array.`)
+      throw new Error(`[paginator] chart() with chartKind "categorical" needs a non-empty "series" array.`)
+    }
+    config.series.forEach((s, i) => {
+      if (s.data.length !== config.categories.length) {
+        throw new Error(
+          `[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`,
+        )
+      }
+      const kind = s.kind ?? 'bar'
+      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
+      if (s.fill !== undefined && kind !== 'line') {
+        throw new Error(`[paginator] chart() series ${label} sets "fill", which only applies to a 'line'-kind series (this series is "${kind}").`)
+      }
+      if (typeof s.fill === 'object' && s.fill.opacity !== undefined && (s.fill.opacity < 0 || s.fill.opacity > 1)) {
+        throw new Error(`[paginator] chart() series ${label} "fill.opacity" must be in [0, 1], got ${s.fill.opacity}.`)
+      }
+      if (s.curve !== undefined && kind !== 'line' && kind !== 'points') {
+        throw new Error(`[paginator] chart() series ${label} sets "curve", which only applies to a 'line'/'points'-kind series (this series is "${kind}").`)
+      }
+      if (s.strokeWidth !== undefined && kind !== 'line') {
+        throw new Error(`[paginator] chart() series ${label} sets "strokeWidth", which only applies to a 'line'-kind series (this series is "${kind}").`)
+      }
+      if (s.markerRadius !== undefined && kind !== 'line' && kind !== 'points') {
+        throw new Error(`[paginator] chart() series ${label} sets "markerRadius", which only applies to a 'line'/'points'-kind series (this series is "${kind}").`)
+      }
+    })
+    if (config.barSegmentGap !== undefined && config.barSegmentGap < 0) {
+      throw new Error(`[paginator] chart() "barSegmentGap" must be non-negative, got ${config.barSegmentGap}.`)
+    }
+    const domain = config.view?.domain
+    if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
+      throw new Error(`[paginator] chart() "view.domain.min" (${domain.min}) must be less than "view.domain.max" (${domain.max}).`)
+    }
+    if (config.view?.padding !== undefined && config.view.padding < 0) {
+      throw new Error(`[paginator] chart() "view.padding" must be non-negative, got ${config.view.padding}.`)
+    }
+  } else if (config.chartKind === 'radial') {
+    if (raw.categories !== undefined || raw.series !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "radial" cannot use "categories"/"series" — use "rings" instead.`)
+    }
+    if (raw.slices !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "radial" has no top-level "slices" — author a single-ring pie as "rings: [{ slices: [...] }]".`)
+    }
+    if (config.rings === undefined || config.rings.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "radial" needs a non-empty "rings" array.`)
+    }
+    config.rings.forEach((ring, ri) => {
+      if (ring.slices === undefined || ring.slices.length === 0) {
+        throw new Error(`[paginator] chart() ring ${ri} needs a non-empty "slices" array.`)
+      }
+      ring.slices.forEach((s, si) => {
+        if (!Number.isFinite(s.value) || s.value < 0) {
+          throw new Error(`[paginator] chart() ring ${ri} slice ${si} ("${s.label}") needs a non-negative finite "value", got ${s.value}.`)
+        }
+      })
+      if (ri === 0) {
+        if (ring.slices.some(s => s.parentIndex !== undefined)) {
+          throw new Error(`[paginator] chart() ring 0 slices cannot set "parentIndex" — there is no ring inside the innermost ring.`)
+        }
+      } else {
+        const parentedCount = ring.slices.filter(s => s.parentIndex !== undefined).length
+        if (parentedCount > 0 && parentedCount < ring.slices.length) {
+          throw new Error(`[paginator] chart() ring ${ri} mixes slices with and without "parentIndex" — a ring must be either fully hierarchical (every slice has a parentIndex) or fully flat (none do).`)
+        }
+        const previousRingSliceCount = config.rings![ri - 1]!.slices.length
+        ring.slices.forEach((s, si) => {
+          if (s.parentIndex !== undefined && (s.parentIndex < 0 || s.parentIndex >= previousRingSliceCount || !Number.isInteger(s.parentIndex))) {
+            throw new Error(`[paginator] chart() ring ${ri} slice ${si} "parentIndex" (${s.parentIndex}) is out of bounds for ring ${ri - 1}, which has ${previousRingSliceCount} slice(s).`)
+          }
+        })
+      }
+      if (ring.sliceGap !== undefined && ring.sliceGap < 0) {
+        throw new Error(`[paginator] chart() ring ${ri} "sliceGap" must be non-negative, got ${ring.sliceGap}.`)
+      }
+    })
+    if (config.innerRadiusRatio !== undefined && (config.innerRadiusRatio < 0 || config.innerRadiusRatio >= 1)) {
+      throw new Error(`[paginator] chart() "innerRadiusRatio" must be in [0, 1), got ${config.innerRadiusRatio}.`)
+    }
+    if (config.sliceGap !== undefined && config.sliceGap < 0) {
+      throw new Error(`[paginator] chart() "sliceGap" must be non-negative, got ${config.sliceGap}.`)
+    }
+  } else if (config.chartKind === 'scatter') {
+    if (raw.categories !== undefined || raw.slices !== undefined || raw.rings !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "scatter" cannot use "categories"/"slices"/"rings" — use "series" (with per-point x/y) instead.`)
+    }
+    if (config.series === undefined || config.series.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "scatter" needs a non-empty "series" array.`)
+    }
+    config.series.forEach((s, i) => {
+      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
+      if (s.points === undefined || s.points.length === 0) {
+        throw new Error(`[paginator] chart() series ${label} needs a non-empty "points" array.`)
+      }
+      s.points.forEach((p, pi) => {
+        if (p.size !== undefined && p.size < 0) {
+          throw new Error(`[paginator] chart() series ${label} point ${pi} "size" must be non-negative, got ${p.size}.`)
+        }
+      })
+    })
+    if (config.sizeScale?.range !== undefined) {
+      const [rMin, rMax] = config.sizeScale.range
+      if (rMin < 0 || rMax < 0 || rMin >= rMax) {
+        throw new Error(`[paginator] chart() "sizeScale.range" must be [min, max] with 0 <= min < max, got [${rMin}, ${rMax}].`)
+      }
+    }
+    for (const [key, view] of [['xView', config.xView] as const, ['yView', config.yView] as const]) {
+      const domain = view?.domain
+      if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
+        throw new Error(`[paginator] chart() "${key}.domain.min" (${domain.min}) must be less than "${key}.domain.max" (${domain.max}).`)
+      }
+      if (view?.padding !== undefined && view.padding < 0) {
+        throw new Error(`[paginator] chart() "${key}.padding" must be non-negative, got ${view.padding}.`)
+      }
+    }
+  } else if (config.chartKind === 'gantt') {
+    if (raw.categories !== undefined || raw.slices !== undefined || raw.rings !== undefined || raw.series !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "gantt" cannot use "categories"/"slices"/"rings"/"series" — use "tasks" instead.`)
+    }
+    if (config.tasks === undefined || config.tasks.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "gantt" needs a non-empty "tasks" array.`)
+    }
+    config.tasks.forEach((t, i) => {
+      if (t.end < t.start) {
+        throw new Error(`[paginator] chart() task ${i} ("${t.label}") has "end" (${t.end}) before "start" (${t.start}).`)
+      }
+    })
+    const domain = config.xView?.domain
+    if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
+      throw new Error(`[paginator] chart() "xView.domain.min" (${domain.min}) must be less than "xView.domain.max" (${domain.max}).`)
+    }
+    if (config.xView?.padding !== undefined && config.xView.padding < 0) {
+      throw new Error(`[paginator] chart() "xView.padding" must be non-negative, got ${config.xView.padding}.`)
+    }
+    if (config.rowHeight !== undefined && config.rowHeight <= 0) {
+      throw new Error(`[paginator] chart() "rowHeight" must be positive, got ${config.rowHeight}.`)
+    }
+  } else if (config.chartKind === 'radar') {
+    if (raw.slices !== undefined || raw.rings !== undefined || raw.tasks !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "radar" cannot use "slices"/"rings"/"tasks" — use "categories"/"series" instead.`)
+    }
+    if (config.categories === undefined || config.categories.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "radar" needs a non-empty "categories" array.`)
+    }
+    if (config.series === undefined || config.series.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "radar" needs a non-empty "series" array.`)
     }
     config.series.forEach((s, i) => {
       if (s.data.length !== config.categories.length) {
@@ -780,8 +1197,45 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
         throw new Error(`[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} "fill.opacity" must be in [0, 1], got ${s.fill.opacity}.`)
       }
     })
-    if (config.chartKind === 'bar' && config.barSegmentGap !== undefined && config.barSegmentGap < 0) {
-      throw new Error(`[paginator] chart() "barSegmentGap" must be non-negative, got ${config.barSegmentGap}.`)
+    const domain = config.view?.domain
+    if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
+      throw new Error(`[paginator] chart() "view.domain.min" (${domain.min}) must be less than "view.domain.max" (${domain.max}).`)
+    }
+    if (config.view?.padding !== undefined && config.view.padding < 0) {
+      throw new Error(`[paginator] chart() "view.padding" must be non-negative, got ${config.view.padding}.`)
+    }
+    if (config.markerRadius !== undefined && config.markerRadius < 0) {
+      throw new Error(`[paginator] chart() "markerRadius" must be non-negative, got ${config.markerRadius}.`)
+    }
+  } else if (config.chartKind === 'candlestick') {
+    if (raw.slices !== undefined || raw.rings !== undefined || raw.tasks !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "candlestick" cannot use "slices"/"rings"/"tasks" — use "categories"/"series" instead.`)
+    }
+    if (config.categories === undefined || config.categories.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "candlestick" needs a non-empty "categories" array.`)
+    }
+    if (config.series === undefined || config.series.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "candlestick" needs a non-empty "series" array.`)
+    }
+    config.series.forEach((s, i) => {
+      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
+      if (s.data.length !== config.categories.length) {
+        throw new Error(`[paginator] chart() series ${label} has ${s.data.length} candles, expected ${config.categories.length} (one per category).`)
+      }
+      s.data.forEach((c, ci) => {
+        if (c.low > Math.min(c.open, c.close)) {
+          throw new Error(`[paginator] chart() series ${label} candle ${ci} "low" (${c.low}) must be <= min(open, close) (${Math.min(c.open, c.close)}).`)
+        }
+        if (c.high < Math.max(c.open, c.close)) {
+          throw new Error(`[paginator] chart() series ${label} candle ${ci} "high" (${c.high}) must be >= max(open, close) (${Math.max(c.open, c.close)}).`)
+        }
+      })
+    })
+    if (config.candleWidth !== undefined && config.candleWidth < 0) {
+      throw new Error(`[paginator] chart() "candleWidth" must be non-negative, got ${config.candleWidth}.`)
+    }
+    if (config.wickWidth !== undefined && config.wickWidth < 0) {
+      throw new Error(`[paginator] chart() "wickWidth" must be non-negative, got ${config.wickWidth}.`)
     }
     const domain = config.view?.domain
     if (typeof domain === 'object' && domain.min !== undefined && domain.max !== undefined && domain.min >= domain.max) {
@@ -791,22 +1245,20 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
       throw new Error(`[paginator] chart() "view.padding" must be non-negative, got ${config.view.padding}.`)
     }
   } else {
-    if (raw.categories !== undefined || raw.series !== undefined) {
-      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" cannot use "categories"/"series" — use "slices" instead.`)
+    // chartKind === 'treemap'
+    if (raw.categories !== undefined || raw.series !== undefined || raw.slices !== undefined || raw.rings !== undefined || raw.tasks !== undefined) {
+      throw new Error(`[paginator] chart() with chartKind "treemap" cannot use "categories"/"series"/"slices"/"rings"/"tasks" — use "items" instead.`)
     }
-    if (config.slices === undefined || config.slices.length === 0) {
-      throw new Error(`[paginator] chart() with chartKind "${config.chartKind}" needs a non-empty "slices" array.`)
+    if (config.items === undefined || config.items.length === 0) {
+      throw new Error(`[paginator] chart() with chartKind "treemap" needs a non-empty "items" array.`)
     }
-    config.slices.forEach((s, i) => {
-      if (!Number.isFinite(s.value) || s.value < 0) {
-        throw new Error(`[paginator] chart() slice ${i} ("${s.label}") needs a non-negative finite "value", got ${s.value}.`)
+    config.items.forEach((item, i) => {
+      if (!Number.isFinite(item.value) || item.value < 0) {
+        throw new Error(`[paginator] chart() item ${i} ("${item.label}") needs a non-negative finite "value", got ${item.value}.`)
       }
     })
-    if (config.chartKind === 'donut' && config.donutInnerRadiusRatio !== undefined && (config.donutInnerRadiusRatio < 0 || config.donutInnerRadiusRatio >= 1)) {
-      throw new Error(`[paginator] chart() "donutInnerRadiusRatio" must be in [0, 1), got ${config.donutInnerRadiusRatio}.`)
-    }
-    if (config.sliceGap !== undefined && config.sliceGap < 0) {
-      throw new Error(`[paginator] chart() "sliceGap" must be non-negative, got ${config.sliceGap}.`)
+    if (config.itemGap !== undefined && config.itemGap < 0) {
+      throw new Error(`[paginator] chart() "itemGap" must be non-negative, got ${config.itemGap}.`)
     }
   }
 
