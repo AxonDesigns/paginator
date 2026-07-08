@@ -8,7 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist is the built library output — committed intentionally so this repo can be installed
+# directly as a git dependency (see package.json's "build" script).
+dist-demo
 dist-ssr
 *.local
 
