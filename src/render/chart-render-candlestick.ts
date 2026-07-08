@@ -16,7 +16,7 @@ import {
   INK_MUTED,
   MARK_SURFACE_GAP,
   candlestickGeometry,
-  estimateTextWidth,
+  estimateChartTextWidth,
   niceTickValues,
   resolveDomainFromExtent,
   textBaselineOffset,
@@ -46,7 +46,7 @@ export function renderCandlestickChart(svg: SVGSVGElement, node: CandlestickChar
   const tickColor = axis.tickColor ?? INK_MUTED
 
   const categoryLabelOffset = categoryFontSize + 8
-  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateTextWidth(formatTick(t), tickFontSize))) + 20) : 4
+  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateChartTextWidth(formatTick(t), tickFontSize))) + 20) : 4
   const bottomMargin = axisShow ? categoryLabelOffset + 6 : 4
 
   const plotLeft = plot.x + leftMargin
@@ -73,7 +73,7 @@ export function renderCandlestickChart(svg: SVGSVGElement, node: CandlestickChar
   }
 
   const bandWidth = categories.length > 0 ? plotWidth / categories.length : plotWidth
-  const labelEstWidth = Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize)), 1)
+  const labelEstWidth = Math.max(...categories.map(c => estimateChartTextWidth(c, categoryFontSize)), 1)
   const labelStep = axisShow ? Math.max(1, Math.ceil(labelEstWidth / Math.max(bandWidth, 1))) : Infinity
   if (axisShow) {
     categories.forEach((category, ci) => {

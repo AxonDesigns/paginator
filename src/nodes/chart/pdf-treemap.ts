@@ -4,7 +4,7 @@
 import type { TreemapChartNode } from '../../core/nodes.ts'
 import type { PdfRenderCtx } from '../../core/behavior.ts'
 import { resolvePdfColor } from '../../render/pdf-render.ts'
-import { CHART_FONT_FAMILY, MARK_SURFACE_GAP, SURFACE_COLOR, barPath, estimateTextWidth, resolveColor, squarifyTreemap } from '../../render/chart-geometry.ts'
+import { CHART_FONT_FAMILY, MARK_SURFACE_GAP, SURFACE_COLOR, barPath, estimateChartTextWidth, normalizeChartText, resolveColor, squarifyTreemap } from '../../render/chart-geometry.ts'
 import type { ChartBox } from '../../render/chart-geometry.ts'
 import { drawChartPath, drawChartText } from './pdf.ts'
 
@@ -27,9 +27,17 @@ export function drawTreemapChart(ctx: PdfRenderCtx, node: TreemapChartNode, plot
 
     drawChartPath(ctx, barPath(x, y, width, height, 'none'), colors[i]!, originX, originY)
 
-    const labelWidth = estimateTextWidth(item.label, labelFontSize)
-    if (labelWidth + 8 <= width && labelFontSize + 6 <= height) {
-      drawChartText(ctx, item.label, x + 4, y + labelFontSize + 2, { fontSize: labelFontSize, color: labelColor, anchor: 'start', bold: false, fontFamily }, originX, originY)
+    // Fit-check against the general ChartText line-splitting mechanism — see
+    // chart-render-treemap.ts's renderTreemapChart for the full rationale; drawChartText() itself
+    // now handles the actual multi-run/multi-line drawing in one call.
+    const label = node.formatLabel?.(item) ?? item.label
+    const lines = normalizeChartText(label, { fontSize: labelFontSize, color: '' })
+    const hasContent = lines.some(line => line.length > 0)
+    const lineHeight = Math.round(labelFontSize * 1.2)
+    const totalHeight = lines.length * lineHeight
+    const widestLineWidth = estimateChartTextWidth(label, labelFontSize)
+    if (hasContent && widestLineWidth + 8 <= width && totalHeight + 6 <= height) {
+      drawChartText(ctx, label, x + 4, y + labelFontSize + 2, { fontSize: labelFontSize, color: labelColor, anchor: 'start', bold: false, fontFamily }, originX, originY)
     }
   })
 }

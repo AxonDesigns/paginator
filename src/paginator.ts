@@ -16,6 +16,8 @@ import { paginate as corePaginate, type PaginatedResult } from './core/paginate.
 import { mount as coreMount, printDocument as corePrintDocument, renderPreview as coreRenderPreview } from './render/shadow-dom.ts'
 import type { RenderedNode } from './core/geometry.ts'
 import { generatePdf as coreGeneratePdf, type PdfMetadata } from './render/pdf-render.ts'
+import { generateDocx as coreGenerateDocx, type DocxMetadata } from './export/docx-export.ts'
+import { generateXlsx as coreGenerateXlsx, type XlsxMetadata } from './export/xlsx-export.ts'
 import { listRegisteredFonts as coreListRegisteredFonts, registerFont as coreRegisterFont, type FontRegistry, type FontStyle, type RegisteredFont } from './render/font-registry.ts'
 import { attachInteractions as coreAttachInteractions } from './interaction/attach-interactions.ts'
 import { buildHitRegistry as coreBuildHitRegistry, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList, type HitRegistry } from './interaction/hit-registry.ts'
@@ -71,6 +73,17 @@ export class Paginator {
 
   generatePdf(result: PaginatedResult, metadata?: PdfMetadata): Promise<Uint8Array> {
     return coreGeneratePdf(result, this.#fonts, metadata)
+  }
+
+  // Unlike generatePdf/mount, these take the pre-pagination PageDef directly rather than a
+  // PaginatedResult — Word/Excel reflow content themselves (see src/export/docx-export.ts's header
+  // comment), so there's no pixel-box pagination step to run first.
+  generateDocx(doc: PageDef, metadata?: DocxMetadata): Promise<Uint8Array> {
+    return coreGenerateDocx(doc, metadata)
+  }
+
+  generateXlsx(doc: PageDef, metadata?: XlsxMetadata): Promise<Uint8Array> {
+    return coreGenerateXlsx(doc, metadata)
   }
 
   openPdfInNewTab(bytes: Uint8Array): void {

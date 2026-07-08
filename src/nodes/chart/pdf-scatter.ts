@@ -11,7 +11,7 @@ import {
   INK_MUTED,
   MARKER_RADIUS,
   SURFACE_COLOR,
-  estimateTextWidth,
+  estimateChartTextWidth,
   niceTickValues,
   resolveBubbleRadius,
   resolveColor,
@@ -52,9 +52,9 @@ export function drawScatterChart(ctx: PdfRenderCtx, node: ScatterChartNode, plot
   const xTickColor = resolvePdfColor(xAxis.tickColor ?? INK_MUTED)
   const yTickColor = resolvePdfColor(yAxis.tickColor ?? INK_MUTED)
 
-  const leftMargin = yAxisShow ? Math.max(30, Math.max(...yTicks.map(t => estimateTextWidth(formatYTick(t), yTickFontSize))) + 20) : 4
+  const leftMargin = yAxisShow ? Math.max(30, Math.max(...yTicks.map(t => estimateChartTextWidth(formatYTick(t), yTickFontSize))) + 20) : 4
   const bottomMargin = xAxisShow ? xTickFontSize + 20 : 4
-  const rightPad = xAxisShow && xTicks.length > 0 ? estimateTextWidth(formatXTick(xTicks[xTicks.length - 1]!), xTickFontSize) / 2 + 4 : 8
+  const rightPad = xAxisShow && xTicks.length > 0 ? estimateChartTextWidth(formatXTick(xTicks[xTicks.length - 1]!), xTickFontSize) / 2 + 4 : 8
 
   const plotLeft = plot.x + leftMargin
   const plotRight = plot.x + plot.width - rightPad

@@ -346,6 +346,36 @@ export type ContainerNode = Interactive & SelfAlignable & {
   borderRadius?: number
 }
 
+// Per-run styling for chart text — every chart text role (title, series/slice/task/item labels,
+// categories, axis tick-label formatters, legend entries) accepts this. Mirrors `RichTextRun`'s
+// shape (mixed-style inline runs within a paragraph), but is a DELIBERATELY SEPARATE type: a
+// RichTextNode gets its inline run positioning from pretext's real text-shaping engine, while chart
+// text has always used a rough, unmeasured heuristic (`estimateTextWidth` in chart-geometry.ts)
+// precisely because chart layout must stay synchronous and pixel-identical between the on-screen
+// SVG renderer and the PDF exporter — reusing pretext's real measurement here isn't an option, so
+// this can't just be `RichTextRun`. Adds `opacity` (which `RichTextRun` doesn't have) since a
+// "smaller, lower-opacity subtext" run is the primary motivating case.
+export type ChartTextRun = {
+  /** May contain `'\n'` — forces a line break after this run, continuing the next run on a new
+   *  line (rather than needing a separate array entry per line). */
+  text: string
+  /** Falls back to the ambient default font size for that text role (e.g. the title's own
+   *  `fontSize`, `ChartAxisConfig.tickFontSize`) when this run omits it. */
+  fontSize?: number
+  /** Falls back to the ambient default color for that text role when this run omits it. */
+  color?: string
+  /** `0-1`. Default 1. */
+  opacity?: number
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+}
+
+/** A plain `string` means "one run, one line, ambient style" — every existing plain-string caller
+ *  keeps working unchanged. A `ChartTextRun[]` opts into per-run styling and/or explicit multi-line
+ *  (via `\n` inside any run's `text`). **Throws** if an empty array is given where a label is
+ *  required. */
+export type ChartText = string | ChartTextRun[]
+
 export type ChartKind = 'categorical' | 'radial' | 'scatter' | 'gantt' | 'radar' | 'candlestick' | 'treemap'
 
 export type ChartSeriesFillConfig = {
@@ -358,7 +388,7 @@ export type ChartSeriesFillConfig = {
 export type ChartSeriesKind = 'bar' | 'line' | 'points'
 
 export type ChartSeries = {
-  name?: string
+  name?: ChartText
   data: number[]
   color?: string
   /** How THIS series renders, independent of every other series in the same chart — freely mix
@@ -386,7 +416,7 @@ export type ChartSeries = {
    *  (points ARE markers, so this sizes them the same way a line's data-point markers are sized). */
   markerRadius?: number
 }
-export type ChartSlice = { label: string; value: number; color?: string }
+export type ChartSlice = { label: ChartText; value: number; color?: string }
 
 export type ChartAxisConfig = {
   /** Master toggle for y-axis ticks/labels AND x-axis category labels (bar/line only). Default true. */
@@ -394,7 +424,7 @@ export type ChartAxisConfig = {
   /** Independent of `show` — lets gridlines be turned off while ticks/labels stay. Default true. */
   gridlines?: boolean
   tickCount?: number // default 5
-  formatTick?: (value: number) => string
+  formatTick?: (value: number) => ChartText
   /** Font size (px) of the y-axis numeric tick labels. Independent of `categoryFontSize` since the
    *  two commonly want different weight (e.g. bigger category names, smaller tick numbers). Default 11. */
   tickFontSize?: number
@@ -439,7 +469,7 @@ export type ChartLegendConfig = {
   color?: string
 }
 
-export type ChartTitleConfig = { text: string; fontSize?: number; color?: string }
+export type ChartTitleConfig = { text: ChartText; fontSize?: number; color?: string }
 
 type ChartCommon = Interactive & SelfAlignable & {
   type: 'chart'
@@ -447,7 +477,7 @@ type ChartCommon = Interactive & SelfAlignable & {
   height?: number
   /** width / height. Used to derive whichever of width/height is missing, same as ImageNode. */
   aspectRatio?: number
-  title?: string | ChartTitleConfig
+  title?: ChartText | ChartTitleConfig
   axis?: ChartAxisConfig
   legend?: ChartLegendConfig
   /** Categorical palette override, cycled by index — falls back to a built-in default palette. */
@@ -466,7 +496,7 @@ type ChartCommon = Interactive & SelfAlignable & {
 export type CategoricalChartNode = ChartCommon & {
   chartKind: 'categorical'
   /** x-axis labels, one per data point in every series. */
-  categories: string[]
+  categories: ChartText[]
   /** One or more series, each independently `'bar'`/`'line'`/`'points'` via `ChartSeries.kind` —
    *  freely mix e.g. grouped/stacked bars with one or more line/points series sharing the same
    *  category x-axis and y-domain. */
@@ -554,7 +584,7 @@ export type ChartNumericAxisConfig = {
   /** Independent of `show` — lets gridlines be turned off while ticks/labels stay. Default true. */
   gridlines?: boolean
   tickCount?: number // default 5
-  formatTick?: (value: number) => string
+  formatTick?: (value: number) => ChartText
   tickFontSize?: number // default 11
   /** Axis baseline color. Default a neutral gray. */
   color?: string
@@ -574,7 +604,7 @@ export type ChartScatterPoint = {
   color?: string
 }
 
-export type ChartScatterSeries = { name?: string; points: ChartScatterPoint[]; color?: string }
+export type ChartScatterSeries = { name?: ChartText; points: ChartScatterPoint[]; color?: string }
 
 export type ChartSizeScaleConfig = {
   /** `'sqrt'` (default): the point's AREA, not its radius, is linearly proportional to `size` — the
@@ -610,7 +640,7 @@ export type ScatterChartNode = ChartCommon & {
 }
 
 export type ChartGanttTask = {
-  label: string
+  label: ChartText
   /** Plain numeric time offset — never a `Date`; this library does no date math anywhere (no
    *  aggregation, no calendar-aware tick generation). Pre-convert real dates to numeric offsets
    *  (e.g. days since a project start) and use `xAxis.formatTick` to render them back as dates. */
@@ -631,7 +661,14 @@ export type ChartGanttTask = {
   labelColor?: string
 }
 
-export type ChartGanttGroupStyle = { color?: string; background?: string }
+export type ChartGanttGroupStyle = {
+  color?: string
+  background?: string
+  /** Overrides the header BAND's own rendered text — independent of the `group` string used as
+   *  this record's key (which stays a plain identifier for lookup/contiguous-run comparison and is
+   *  never itself rich text). Falls back to rendering the group key string unchanged. */
+  label?: ChartText
+}
 
 export type GanttChartNode = ChartCommon & {
   chartKind: 'gantt'
@@ -672,7 +709,7 @@ export type GanttChartNode = ChartCommon & {
 }
 
 export type ChartRadarSeries = {
-  name?: string
+  name?: ChartText
   /** One value per category/spoke — same length requirement as `CategoricalChartNode.series[].data`
    *  (one entry per category, in the same order). No special negative-value handling: reuses the
    *  same zero/auto/explicit domain resolution as a categorical chart's y-domain, so a negative
@@ -691,7 +728,7 @@ export type RadarChartNode = ChartCommon & {
   chartKind: 'radar'
   /** Spokes, arranged evenly around the circle — 0°=top, sweeping clockwise, same convention the
    *  radial chart's own slice angles use. */
-  categories: string[]
+  categories: ChartText[]
   series: ChartRadarSeries[]
   /** Shared radial domain — every series' polygon is scaled against the SAME domain, same as a
    *  categorical chart's shared y-domain across its series. */
@@ -714,7 +751,7 @@ export type ChartCandle = {
 }
 
 export type ChartCandlestickSeries = {
-  name?: string
+  name?: ChartText
   /** One candle per category, same length requirement as `CategoricalChartNode.series[].data`. */
   data: ChartCandle[]
   /** Per-series override of `CandlestickChartNode.upColor`/`downColor`. */
@@ -724,7 +761,7 @@ export type ChartCandlestickSeries = {
 
 export type CandlestickChartNode = ChartCommon & {
   chartKind: 'candlestick'
-  categories: string[]
+  categories: ChartText[]
   series: ChartCandlestickSeries[]
   /** Same `ChartViewConfig` shape as everywhere else, but defaults to `'auto'` rather than `'zero'`
    *  when entirely omitted — same reasoning as `ScatterChartNode.xView`/`GanttChartNode.xView`: real
@@ -745,7 +782,7 @@ export type CandlestickChartNode = ChartCommon & {
   downColor?: string
 }
 
-export type ChartTreemapItem = { label: string; value: number; color?: string }
+export type ChartTreemapItem = { label: ChartText; value: number; color?: string }
 
 export type TreemapChartNode = ChartCommon & {
   chartKind: 'treemap'
@@ -763,10 +800,19 @@ export type TreemapChartNode = ChartCommon & {
    *  has no shared "baseline" edge the way a stacked bar does, so there's no flush-outer-edge
    *  exception to make). Default 2. **Throws** if negative. */
   itemGap?: number
-  /** px font size for each rectangle's own inline label. A rectangle too small to fit its label at
-   *  this size simply omits it — never overflows past the rectangle's own edge, never wraps.
-   *  Default 12. */
+  /** px font size for each rectangle's own inline label WHEN a run doesn't set its own `fontSize`.
+   *  A rectangle too small to fit its label at this size simply omits it — never overflows past the
+   *  rectangle's own edge, never wraps. Default 12. */
   labelFontSize?: number
+  /** Formats the text drawn inside each rectangle — same "caller-supplied formatting hook" pattern
+   *  as `ChartAxisConfig.formatTick`/`ChartNumericAxisConfig.formatTick` elsewhere in this file.
+   *  Receives the item itself (not just its `label`), so the formatted content can fold in `value`
+   *  too, and — via `ChartTextRun[]` — style the name and the value differently (e.g. a bigger bold
+   *  name run, a smaller lower-opacity value run below it via `\n`). The too-small-to-fit check is
+   *  measured against the formatted content's own widest line and total block height, not the raw
+   *  `label` — an empty result (or only blank lines) omits the label entirely, so returning `''`
+   *  to hide small items keeps working unchanged. Default: `item.label` unchanged. */
+  formatLabel?: (item: ChartTreemapItem) => ChartText
 }
 
 export type ChartNode =
@@ -1019,6 +1065,25 @@ export function container(config: Omit<ContainerNode, 'type' | 'child'>, child: 
   return { type: 'container', ...config, child }
 }
 
+// A plain-text preview of a `ChartText` value for use ONLY in chart()'s own error messages (never
+// for rendering) — a rich `ChartTextRun[]` has no single obvious "the text," so this concatenates
+// every run's own text in order, ignoring styling entirely.
+function chartTextPreview(content: ChartText | undefined): string {
+  if (content === undefined) return ''
+  if (typeof content === 'string') return content
+  return content.map(r => r.text).join('')
+}
+
+// A `ChartTextRun[]` with zero runs has nothing to render and no single sensible "the text" for
+// error messages either — thrown for every REQUIRED label field (optional `name?`/`title?` fields
+// simply render nothing when omitted entirely, so an empty array there is comparatively harmless
+// and left unvalidated, same leniency this codebase gives other optional cosmetic fields).
+function assertNonEmptyChartText(content: ChartText, fieldDescription: string): void {
+  if (Array.isArray(content) && content.length === 0) {
+    throw new Error(`[paginator] chart() ${fieldDescription} is an empty array — a ChartTextRun[] must have at least one run.`)
+  }
+}
+
 export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
   const hasHeight = config.height !== undefined
   const hasAspectRatio = config.aspectRatio !== undefined
@@ -1040,17 +1105,17 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
     if (config.categories === undefined || config.categories.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "categorical" needs a non-empty "categories" array.`)
     }
+    config.categories.forEach((c, ci) => assertNonEmptyChartText(c, `categories[${ci}]`))
     if (config.series === undefined || config.series.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "categorical" needs a non-empty "series" array.`)
     }
     config.series.forEach((s, i) => {
+      const namePreview = chartTextPreview(s.name)
+      const label = `${i}${namePreview ? ` ("${namePreview}")` : ''}`
       if (s.data.length !== config.categories.length) {
-        throw new Error(
-          `[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`,
-        )
+        throw new Error(`[paginator] chart() series ${label} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`)
       }
       const kind = s.kind ?? 'bar'
-      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
       if (s.fill !== undefined && kind !== 'line') {
         throw new Error(`[paginator] chart() series ${label} sets "fill", which only applies to a 'line'-kind series (this series is "${kind}").`)
       }
@@ -1092,8 +1157,9 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
         throw new Error(`[paginator] chart() ring ${ri} needs a non-empty "slices" array.`)
       }
       ring.slices.forEach((s, si) => {
+        assertNonEmptyChartText(s.label, `ring ${ri} slice ${si} "label"`)
         if (!Number.isFinite(s.value) || s.value < 0) {
-          throw new Error(`[paginator] chart() ring ${ri} slice ${si} ("${s.label}") needs a non-negative finite "value", got ${s.value}.`)
+          throw new Error(`[paginator] chart() ring ${ri} slice ${si} ("${chartTextPreview(s.label)}") needs a non-negative finite "value", got ${s.value}.`)
         }
       })
       if (ri === 0) {
@@ -1130,7 +1196,8 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
       throw new Error(`[paginator] chart() with chartKind "scatter" needs a non-empty "series" array.`)
     }
     config.series.forEach((s, i) => {
-      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
+      const namePreview = chartTextPreview(s.name)
+      const label = `${i}${namePreview ? ` ("${namePreview}")` : ''}`
       if (s.points === undefined || s.points.length === 0) {
         throw new Error(`[paginator] chart() series ${label} needs a non-empty "points" array.`)
       }
@@ -1163,8 +1230,9 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
       throw new Error(`[paginator] chart() with chartKind "gantt" needs a non-empty "tasks" array.`)
     }
     config.tasks.forEach((t, i) => {
+      assertNonEmptyChartText(t.label, `task ${i} "label"`)
       if (t.end < t.start) {
-        throw new Error(`[paginator] chart() task ${i} ("${t.label}") has "end" (${t.end}) before "start" (${t.start}).`)
+        throw new Error(`[paginator] chart() task ${i} ("${chartTextPreview(t.label)}") has "end" (${t.end}) before "start" (${t.start}).`)
       }
     })
     const domain = config.xView?.domain
@@ -1184,17 +1252,18 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
     if (config.categories === undefined || config.categories.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "radar" needs a non-empty "categories" array.`)
     }
+    config.categories.forEach((c, ci) => assertNonEmptyChartText(c, `categories[${ci}]`))
     if (config.series === undefined || config.series.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "radar" needs a non-empty "series" array.`)
     }
     config.series.forEach((s, i) => {
+      const namePreview = chartTextPreview(s.name)
+      const label = `${i}${namePreview ? ` ("${namePreview}")` : ''}`
       if (s.data.length !== config.categories.length) {
-        throw new Error(
-          `[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`,
-        )
+        throw new Error(`[paginator] chart() series ${label} has ${s.data.length} data points, expected ${config.categories.length} (one per category).`)
       }
       if (typeof s.fill === 'object' && s.fill.opacity !== undefined && (s.fill.opacity < 0 || s.fill.opacity > 1)) {
-        throw new Error(`[paginator] chart() series ${i}${s.name ? ` ("${s.name}")` : ''} "fill.opacity" must be in [0, 1], got ${s.fill.opacity}.`)
+        throw new Error(`[paginator] chart() series ${label} "fill.opacity" must be in [0, 1], got ${s.fill.opacity}.`)
       }
     })
     const domain = config.view?.domain
@@ -1214,11 +1283,13 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
     if (config.categories === undefined || config.categories.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "candlestick" needs a non-empty "categories" array.`)
     }
+    config.categories.forEach((c, ci) => assertNonEmptyChartText(c, `categories[${ci}]`))
     if (config.series === undefined || config.series.length === 0) {
       throw new Error(`[paginator] chart() with chartKind "candlestick" needs a non-empty "series" array.`)
     }
     config.series.forEach((s, i) => {
-      const label = `${i}${s.name ? ` ("${s.name}")` : ''}`
+      const namePreview = chartTextPreview(s.name)
+      const label = `${i}${namePreview ? ` ("${namePreview}")` : ''}`
       if (s.data.length !== config.categories.length) {
         throw new Error(`[paginator] chart() series ${label} has ${s.data.length} candles, expected ${config.categories.length} (one per category).`)
       }
@@ -1253,8 +1324,9 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
       throw new Error(`[paginator] chart() with chartKind "treemap" needs a non-empty "items" array.`)
     }
     config.items.forEach((item, i) => {
+      assertNonEmptyChartText(item.label, `item ${i} "label"`)
       if (!Number.isFinite(item.value) || item.value < 0) {
-        throw new Error(`[paginator] chart() item ${i} ("${item.label}") needs a non-negative finite "value", got ${item.value}.`)
+        throw new Error(`[paginator] chart() item ${i} ("${chartTextPreview(item.label)}") needs a non-negative finite "value", got ${item.value}.`)
       }
     })
     if (config.itemGap !== undefined && config.itemGap < 0) {

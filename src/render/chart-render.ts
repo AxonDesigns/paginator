@@ -28,15 +28,19 @@ import { renderCandlestickChart } from './chart-render-candlestick.ts'
 import { renderTreemapChart } from './chart-render-treemap.ts'
 import {
   CHART_FONT_FAMILY,
+  INK_PRIMARY,
   INK_SECONDARY,
-  estimateTextWidth,
+  estimateChartTextWidth,
   legendEntriesFor,
+  normalizeChartText,
   resolveShowLegend,
   resolveTitle,
   textBaselineOffset,
   truncateToWidth,
+  wrapChartTextToWidth,
 } from './chart-geometry.ts'
 import type { ChartBox, LegendEntry } from './chart-geometry.ts'
+import type { ChartText } from '../core/nodes.ts'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -50,16 +54,47 @@ export function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Recor
 // `fontSize` every call site passes in — setAttribute('fontSize', …) sets a nonstandard attribute
 // name the renderer silently ignores, so this is the one place that translates the ergonomic
 // camelCase call-site shape into the attribute names the SVG spec actually recognizes.
-export function svgText(content: string, x: number, y: number, attrs: Record<string, string | number> & { fontSize?: number; fontFamily?: string }): SVGTextElement {
-  const { fontSize, fontFamily, ...rest } = attrs
+//
+// `content` is `ChartText` — every chart text role accepts rich per-run styling and/or explicit
+// multi-line content (see `ChartTextRun` in nodes.ts and `normalizeChartText` in chart-geometry.ts).
+// The outer <text> element still carries `attrs`' own fontSize/fontFamily/fill/text-anchor/etc as
+// the AMBIENT default (unchanged from before this existed) — one <tspan> per LINE (`x` repeated on
+// every line so `text-anchor` centers/right-aligns each line independently around the same x, `dy`
+// advancing by the PREVIOUS line's own tallest run for standard leading-follows-the-line-above
+// behavior), containing one nested <tspan> per RUN carrying that run's own resolved font-size/fill/
+// opacity (always explicit — redundant with the ambient default is harmless) and font-weight/
+// font-style (only when that run set one, so an unset one still inherits the ambient default from
+// the outer <text> via normal SVG/CSS inheritance). Returns the same single <text> element as
+// always, so every existing `svg.appendChild(svgText(...))` call site needs no changes at all.
+export function svgText(content: ChartText, x: number, y: number, attrs: Record<string, string | number> & { fontSize?: number; fontFamily?: string; fill?: string }): SVGTextElement {
+  const { fontSize, fontFamily, fill, ...rest } = attrs
   const el = svgEl('text', {
     x,
     y,
     'font-family': fontFamily ?? CHART_FONT_FAMILY,
     ...(fontSize !== undefined ? { 'font-size': fontSize } : {}),
+    ...(fill !== undefined ? { fill } : {}),
     ...rest,
   })
-  el.textContent = content
+  const ambientFontSize = fontSize ?? 11
+  const ambientColor = fill ?? INK_PRIMARY
+  const lines = normalizeChartText(content, { fontSize: ambientFontSize, color: ambientColor })
+  const lineHeights = lines.map(line => Math.round(1.2 * Math.max(ambientFontSize, ...line.map(run => run.fontSize))))
+  lines.forEach((line, li) => {
+    const lineTspan = svgEl('tspan', { x, dy: li === 0 ? 0 : lineHeights[li - 1]! })
+    for (const run of line) {
+      const runTspan = svgEl('tspan', {
+        'font-size': run.fontSize,
+        fill: run.color,
+        opacity: run.opacity,
+        ...(run.fontWeight !== undefined ? { 'font-weight': run.fontWeight } : {}),
+        ...(run.fontStyle !== undefined ? { 'font-style': run.fontStyle } : {}),
+      })
+      runTspan.textContent = run.text
+      lineTspan.appendChild(runTspan)
+    }
+    el.appendChild(lineTspan)
+  })
   return el
 }
 
@@ -121,7 +156,7 @@ function renderLegend(svg: SVGSVGElement, entries: LegendEntry[], box: ChartBox,
   for (const entry of entries) {
     const labelMaxWidth = 90
     const label = truncateToWidth(entry.label, labelMaxWidth, fontSize)
-    const labelWidth = Math.min(labelMaxWidth, estimateTextWidth(label, fontSize))
+    const labelWidth = Math.min(labelMaxWidth, estimateChartTextWidth(label, fontSize))
     const entryWidth = swatch + 6 + labelWidth
     if (x + entryWidth > box.x + box.width) break // remaining entries dropped rather than overflowing the box
     svg.appendChild(svgEl('rect', { x, y: centerY - swatch / 2, width: swatch, height: swatch, rx: 2, fill: entry.color }))
@@ -141,8 +176,20 @@ export function renderChartSvg(node: ChartNode, width: number, height: number): 
 
   const title = resolveTitle(node)
   if (title !== null) {
-    const band = title.fontSize + 16
-    svg.appendChild(svgText(title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, fontFamily, fill: title.color, 'text-anchor': 'middle' }))
+    // Word-wrapped to the chart's own width (minus a small side margin) rather than the old fixed
+    // single-line band — a long title used to simply overflow the chart's left/right edges with no
+    // width check at all. Legitimate to size this band from wrapped content: title/legend/axis
+    // chrome sizing has never been part of paginate()'s synchronous layout (only the chart's OUTER
+    // box, from height/aspectRatio, is — see chart/layout.ts's header comment), so it's already
+    // recomputed on every render from the same heuristic in both this renderer and pdf.ts.
+    const wrappedLines = wrapChartTextToWidth(title.text, width - 16, title.fontSize, title.color)
+    const lineHeight = Math.round(title.fontSize * 1.2)
+    const band = wrappedLines.length * lineHeight + 10
+    wrappedLines.forEach((line, li) => {
+      svg.appendChild(
+        svgText(line, width / 2, top + title.fontSize + 4 + li * lineHeight, { fontSize: title.fontSize, fontFamily, fill: title.color, 'text-anchor': 'middle' }),
+      )
+    })
     top += band
   }
 

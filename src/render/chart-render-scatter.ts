@@ -16,7 +16,7 @@ import {
   INK_MUTED,
   MARKER_RADIUS,
   SURFACE_COLOR,
-  estimateTextWidth,
+  estimateChartTextWidth,
   niceTickValues,
   resolveBubbleRadius,
   resolveColor,
@@ -59,12 +59,12 @@ export function renderScatterChart(svg: SVGSVGElement, node: ScatterChartNode, p
   const xTickColor = xAxis.tickColor ?? INK_MUTED
   const yTickColor = yAxis.tickColor ?? INK_MUTED
 
-  const leftMargin = yAxisShow ? Math.max(30, Math.max(...yTicks.map(t => estimateTextWidth(formatYTick(t), yTickFontSize))) + 20) : 4
+  const leftMargin = yAxisShow ? Math.max(30, Math.max(...yTicks.map(t => estimateChartTextWidth(formatYTick(t), yTickFontSize))) + 20) : 4
   const bottomMargin = xAxisShow ? xTickFontSize + 20 : 4
   // Half the rightmost x-tick label's estimated width, so its CENTERED text doesn't clip the plot's
   // own right edge — categorical charts never needed this (their tick labels sit flush left of a
   // left-edge axis), but a numeric x-axis's ticks run all the way to the plot's own right edge.
-  const rightPad = xAxisShow && xTicks.length > 0 ? estimateTextWidth(formatXTick(xTicks[xTicks.length - 1]!), xTickFontSize) / 2 + 4 : 8
+  const rightPad = xAxisShow && xTicks.length > 0 ? estimateChartTextWidth(formatXTick(xTicks[xTicks.length - 1]!), xTickFontSize) / 2 + 4 : 8
 
   const plotLeft = plot.x + leftMargin
   const plotRight = plot.x + plot.width - rightPad

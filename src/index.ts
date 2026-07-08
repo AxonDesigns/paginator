@@ -38,6 +38,8 @@ export type {
   TableCell,
   TableBorderMode,
   TableGroupLevel,
+  ChartText,
+  ChartTextRun,
   ChartNode,
   CategoricalChartNode,
   RadialChartNode,
@@ -94,4 +96,6 @@ export type {
 } from './interaction/types.ts'
 export type { HitRegistry } from './interaction/hit-registry.ts'
 export type { PdfMetadata } from './render/pdf-render.ts'
+export type { DocxMetadata } from './export/docx-export.ts'
+export type { XlsxMetadata } from './export/xlsx-export.ts'
 export type { RegisteredFont, FontStyle } from './render/font-registry.ts'

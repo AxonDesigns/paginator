@@ -2,7 +2,7 @@
 // file's header comment). Mirrors src/render/chart-render-categorical.ts field-for-field on the SVG
 // side.
 
-import type { CategoricalChartNode, ChartSeries } from '../../core/nodes.ts'
+import type { CategoricalChartNode, ChartSeries, ChartText } from '../../core/nodes.ts'
 import type { PdfRenderCtx } from '../../core/behavior.ts'
 import { resolvePdfColor } from '../../render/pdf-render.ts'
 import {
@@ -18,7 +18,7 @@ import {
   areaFillGradientVector,
   areaPath,
   barPath,
-  estimateTextWidth,
+  estimateChartTextWidth,
   linePath,
   niceTickValues,
   resolveChartDomain,
@@ -91,7 +91,7 @@ export function drawCategoricalChart(ctx: PdfRenderCtx, node: CategoricalChartNo
 
   const categoryLabelOffset = categoryFontSize + 8
 
-  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateTextWidth(formatTick(t), tickFontSize))) + 20) : 4
+  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateChartTextWidth(formatTick(t), tickFontSize))) + 20) : 4
   const bottomMargin = axisShow ? categoryLabelOffset + 6 : 4
 
   const plotLeft = plot.x + leftMargin
@@ -118,7 +118,7 @@ export function drawCategoricalChart(ctx: PdfRenderCtx, node: CategoricalChartNo
   }
 
   const bandWidth = categories.length > 0 ? plotWidth / categories.length : plotWidth
-  const labelEstWidth = Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize)), 1)
+  const labelEstWidth = Math.max(...categories.map(c => estimateChartTextWidth(c, categoryFontSize)), 1)
   const labelStep = axisShow ? Math.max(1, Math.ceil(labelEstWidth / Math.max(bandWidth, 1))) : Number.POSITIVE_INFINITY
 
   if (axisShow) {
@@ -197,7 +197,7 @@ export function drawCategoricalChart(ctx: PdfRenderCtx, node: CategoricalChartNo
 }
 
 type CategoricalChartContext = {
-  categories: string[]
+  categories: ChartText[]
   series: ChartSeries[]
   colors: string[]
   stacked: boolean
@@ -207,7 +207,7 @@ type CategoricalChartContext = {
   axisShow: boolean
   gridlinesShow: boolean
   ticks: number[]
-  formatTick: (value: number) => string
+  formatTick: (value: number) => ChartText
   tickFontSize: number
   categoryFontSize: number
   tickBaselineOffset: number
@@ -224,7 +224,7 @@ function drawHorizontalCategoricalChart(ctx: PdfRenderCtx, node: CategoricalChar
   const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset, fontFamily, axisColor, gridlineColor, tickColor } =
     chartCtx
 
-  const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize))) + 16) : 4
+  const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateChartTextWidth(c, categoryFontSize))) + 16) : 4
   const bottomMargin = axisShow ? tickFontSize + 20 : 4
 
   const plotLeft = plot.x + leftMargin

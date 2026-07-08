@@ -15,7 +15,7 @@ import {
   table,
   text,
 } from './index.ts'
-import type { InteractionTarget, PaginatedResult, TableCell, TableColumn, TableRow } from './index.ts'
+import type { InteractionTarget, PageDef, PaginatedResult, TableCell, TableColumn, TableRow } from './index.ts'
 
 // Raw TrueType files in public/fonts/ — see public/fonts/README.md for provenance/license.
 // registerFont() also accepts .woff/.woff2 directly; these are .ttf simply because that's how they
@@ -711,7 +711,7 @@ const doc = definePage(
           height: 220,
           sliceGap: 1.5,
           innerRadiusRatio: 0.3,
-          title: 'Sunburst: Source × Device',
+          title: 'Sunburst: Traffic by Source & Device',
           rings: [
             {
               slices: [
@@ -735,7 +735,7 @@ const doc = definePage(
           legend: { show: false },
         }),
         text({
-          content: 'two rings, outer ring parentIndex-nested under the inner one',
+          content: 'two rings, outer ring parentIndex-nested under the inner one; long title auto-wraps instead of overflowing',
           fontFamily: UI_FONT,
           fontSize: 11,
           lineHeight: 14,
@@ -1083,7 +1083,7 @@ const doc = definePage(
     }),
     text({ content: 'green: close >= open, red: close < open — same domain "auto" default as scatter/gantt', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
     text({
-      content: `chartKind: "treemap" is the last new kind, and the odd one out: no axis, no domain, no ticks — the whole plot box IS the chart. Rectangle area is proportional to each item's value, packed via the standard squarified layout algorithm (Bruls/Huizing/van Wijk) to keep rectangles close to square instead of the thin slivers a naive left-to-right slice-and-dice would produce. Flat, single level only — a hierarchical drill-down treemap was considered and deliberately scoped out. A rectangle too small to fit its own inline label at labelFontSize simply omits it rather than overflowing past its own edge or wrapping.`,
+      content: `chartKind: "treemap" is the last new kind, and the odd one out: no axis, no domain, no ticks — the whole plot box IS the chart. Rectangle area is proportional to each item's value, packed via the standard squarified layout algorithm (Bruls/Huizing/van Wijk) to keep rectangles close to square instead of the thin slivers a naive left-to-right slice-and-dice would produce. Flat, single level only — a hierarchical drill-down treemap was considered and deliberately scoped out. formatLabel lets the caller format each rectangle's own content as rich ChartText — receiving the whole item, not just its label, so a name run and a value run can be styled independently (bigger/bolder name, smaller/faded value on the line below). A rectangle too small to fit its own (possibly multi-line) content at labelFontSize simply omits it rather than overflowing past its own edge or wrapping; formatLabel returning "" does the same on purpose, hiding the label for the smallest items below.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
       lineHeight: 20,
@@ -1092,6 +1092,13 @@ const doc = definePage(
       chartKind: 'treemap',
       height: 280,
       title: 'Disk Usage by Folder',
+      formatLabel(item) {
+        if (item.value < 10) return ''
+        return [
+          { text: `${item.label}\n`, fontSize: 11, fontWeight: 700 },
+          { text: `${item.value} MB`, fontSize: 9, opacity: 0.7 },
+        ]
+      },
       items: [
         { label: 'node_modules', value: 420 },
         { label: 'src', value: 85 },
@@ -1103,7 +1110,14 @@ const doc = definePage(
         { label: '.cache', value: 4 },
       ],
     }),
-    text({ content: 'area ∝ value, squarified layout — tiny items just go label-less', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+    text({
+      content: 'formatLabel: big bold name run + smaller, lower-opacity value run — area ∝ value, tiny items just go label-less',
+      fontFamily: UI_FONT,
+      fontSize: 11,
+      lineHeight: 14,
+      color: '#666666',
+      align: 'center',
+    }),
     text({ content: 'Interaction Events', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: interactionIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
@@ -1343,6 +1357,69 @@ function setupPdfButtons(pdfDoc: Paginator, result: PaginatedResult): void {
   })
 }
 
+function downloadBytes(bytes: Uint8Array, filename: string, mimeType: string): void {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeType }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+// Unlike PDF (openPdfInNewTab/showPdfDialog), browsers have no native inline viewer for .docx/.xlsx
+// — a synthetic anchor + Blob URL is the standard way to hand the browser a same-origin download.
+// generateDocx()/generateXlsx() take the raw PageDef directly (not a PaginatedResult) — see
+// paginator.ts's header comment on generateDocx: Word/Excel reflow their own content, so there's no
+// pixel-box pagination step to run first.
+// doc.footer interpolates the REAL pageNumber/totalPages — correct for PDF/DOM, which resolve it
+// once per actual page during paginate(). generateDocx() instead resolves header/footer content
+// ONCE with a placeholder {pageNumber:1,totalPages:1} (Word paginates the body itself), so reusing
+// that same footer verbatim would bake in the literal, wrong-past-page-1 text "Page 1 of 1". A
+// docx-only footer swaps in the `{{pageNumber}}`/`{{totalPages}}` sentinel instead, which
+// generateDocx() splices into live PAGE/NUMPAGES Word fields — see docx-export.ts's header comment.
+function docxFooter(): ReturnType<typeof text> {
+  return text({
+    content: 'Page {{pageNumber}} of {{totalPages}}',
+    fontFamily: UI_FONT,
+    fontSize: 10,
+    lineHeight: 13,
+    color: '#888888',
+    align: 'right',
+  })
+}
+
+function setupExportButtons(pdfDoc: Paginator, doc: PageDef): void {
+  const wordButton = demoButton('Export Word', 340)
+  wordButton.addEventListener('click', () => {
+    void (async () => {
+      wordButton.disabled = true
+      wordButton.textContent = 'Generating…'
+      try {
+        const bytes = await pdfDoc.generateDocx({ ...doc, footer: docxFooter }, { title: 'Paginator Demo' })
+        downloadBytes(bytes, 'paginator-demo.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+      } finally {
+        wordButton.disabled = false
+        wordButton.textContent = 'Export Word'
+      }
+    })()
+  })
+
+  const excelButton = demoButton('Export Excel', 470)
+  excelButton.addEventListener('click', () => {
+    void (async () => {
+      excelButton.disabled = true
+      excelButton.textContent = 'Generating…'
+      try {
+        const bytes = await pdfDoc.generateXlsx(doc, { title: 'Paginator Demo' })
+        downloadBytes(bytes, 'paginator-demo.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      } finally {
+        excelButton.disabled = false
+        excelButton.textContent = 'Export Excel'
+      }
+    })()
+  })
+}
+
 async function main(): Promise<void> {
   const pdfDoc = new Paginator()
 
@@ -1365,6 +1442,7 @@ async function main(): Promise<void> {
   setupInteractionDemo(pdfDoc, result, app)
   setupPrintButton(pdfDoc, app)
   setupPdfButtons(pdfDoc, result)
+  setupExportButtons(pdfDoc, doc)
 }
 
 void main()

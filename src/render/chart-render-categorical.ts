@@ -2,7 +2,7 @@
 // chart-render.ts (see that file's header comment for why chart-kind rendering lives in its own
 // per-family file). Mirrored field-for-field by src/nodes/chart/pdf-categorical.ts on the PDF side.
 
-import type { CategoricalChartNode, ChartAxisConfig, ChartSeries } from '../core/nodes.ts'
+import type { CategoricalChartNode, ChartAxisConfig, ChartSeries, ChartText } from '../core/nodes.ts'
 import {
   AXIS_COLOR,
   BAR_CORNER_RADIUS,
@@ -16,7 +16,7 @@ import {
   areaFillGradientVector,
   areaPath,
   barPath,
-  estimateTextWidth,
+  estimateChartTextWidth,
   linePath,
   niceTickValues,
   resolveChartDomain,
@@ -104,7 +104,7 @@ export function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChar
   // with categoryFontSize so a bigger label doesn't collide with the axis line above it.
   const categoryLabelOffset = categoryFontSize + 8
 
-  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateTextWidth(formatTick(t), tickFontSize))) + 20) : 4
+  const leftMargin = axisShow ? Math.max(30, Math.max(...ticks.map(t => estimateChartTextWidth(formatTick(t), tickFontSize))) + 20) : 4
   const bottomMargin = axisShow ? categoryLabelOffset + 6 : 4
 
   const plotLeft = plot.x + leftMargin
@@ -131,7 +131,7 @@ export function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChar
   }
 
   const bandWidth = categories.length > 0 ? plotWidth / categories.length : plotWidth
-  const labelEstWidth = Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize)), 1)
+  const labelEstWidth = Math.max(...categories.map(c => estimateChartTextWidth(c, categoryFontSize)), 1)
   const labelStep = axisShow ? Math.max(1, Math.ceil(labelEstWidth / Math.max(bandWidth, 1))) : Infinity
 
   if (axisShow) {
@@ -222,7 +222,7 @@ export function renderCategoricalChart(svg: SVGSVGElement, node: CategoricalChar
 }
 
 type CategoricalChartContext = {
-  categories: string[]
+  categories: ChartText[]
   series: ChartSeries[]
   colors: string[]
   stacked: boolean
@@ -232,7 +232,7 @@ type CategoricalChartContext = {
   axisShow: boolean
   gridlinesShow: boolean
   ticks: number[]
-  formatTick: (value: number) => string
+  formatTick: (value: number) => ChartText
   tickFontSize: number
   categoryFontSize: number
   tickBaselineOffset: number
@@ -250,7 +250,7 @@ function renderHorizontalCategoricalChart(svg: SVGSVGElement, node: CategoricalC
   const { categories, series, colors, stacked, dataMin, dataMax, barBaselineValue, axisShow, gridlinesShow, ticks, formatTick, tickFontSize, categoryFontSize, tickBaselineOffset, fontFamily, axisColor, gridlineColor, tickColor } =
     ctx
 
-  const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateTextWidth(c, categoryFontSize))) + 16) : 4
+  const leftMargin = axisShow ? Math.max(30, Math.max(...categories.map(c => estimateChartTextWidth(c, categoryFontSize))) + 16) : 4
   const bottomMargin = axisShow ? tickFontSize + 20 : 4
 
   const plotLeft = plot.x + leftMargin

@@ -13,7 +13,7 @@
 // throughout the renderers by never coloring TEXT with a series color (labels/ticks/legend text
 // always use an ink role; only swatches/marks/fills carry the series hue).
 
-import type { ChartCandle, ChartGanttGroupStyle, ChartGanttTask, ChartNode, ChartRingSlice, ChartSeries, ChartViewConfig } from '../core/nodes.ts'
+import type { ChartCandle, ChartGanttGroupStyle, ChartGanttTask, ChartNode, ChartRingSlice, ChartSeries, ChartText, ChartTextRun, ChartViewConfig } from '../core/nodes.ts'
 
 export const CHART_FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
@@ -81,10 +81,119 @@ export function textBaselineOffset(fontSize: number): number {
   return fontSize * 0.35
 }
 
-export function truncateToWidth(text: string, maxWidth: number, fontSize: number): string {
+// Rich (array-form) `ChartText` is returned unchanged — truncating a run-array to fit a legend
+// swatch row would need to decide which run to cut mid-way and which run's style the ellipsis
+// inherits, a real edge case with disproportionate complexity for the value it adds. Only the
+// plain-`string` case (the common one) actually truncates.
+export function truncateToWidth(text: ChartText, maxWidth: number, fontSize: number): ChartText {
+  if (typeof text !== 'string') return text
   if (estimateTextWidth(text, fontSize) <= maxWidth) return text
   const maxChars = Math.max(1, Math.floor(maxWidth / (fontSize * 0.58)) - 1)
   return text.length <= maxChars ? text : `${text.slice(0, maxChars)}…`
+}
+
+// Every chart text role (title, series/slice/task/item labels, categories, axis tick-label
+// formatters, legend entries) accepts `ChartText` — see `ChartTextRun`'s header comment in
+// nodes.ts for why this is a chart-specific rich-text mechanism rather than a reuse of
+// `RichTextRun`/`RichTextNode` (that node's inline run positioning depends on pretext's real
+// text-shaping engine; chart text has always used the rough `estimateTextWidth` heuristic instead,
+// since chart rendering must stay pixel-consistent between the SVG and PDF renderers).
+export type ResolvedChartTextRun = {
+  text: string
+  fontSize: number
+  color: string
+  opacity: number
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+}
+
+// Splits `content` into lines (a '\n' inside any run's `text` forces a break, continuing the next
+// part of that run — and every subsequent run — on a new line) and resolves every run's style
+// against the caller's ambient defaults (e.g. the title's own fontSize/color, or
+// `ChartAxisConfig.tickFontSize`/`tickColor`). The ONE place both renderers share for "what are the
+// lines, what does each run look like" — `svgText()`/`drawChartText()` each still do their OWN final
+// positioning (SVG via native `<tspan>` layout, PDF via pdfkit's real `widthOfString`), but can't
+// drift on the line/run breakdown feeding that positioning since they call this same function.
+// A run whose `text` is the empty string contributes nothing (not even a zero-width run) — this is
+// what lets e.g. `TreemapChartNode.formatLabel` return `''` to omit small items' labels entirely,
+// the same as it always could.
+export function normalizeChartText(content: ChartText, defaults: { fontSize: number; color: string }): ResolvedChartTextRun[][] {
+  const runs: readonly ChartTextRun[] = typeof content === 'string' ? [{ text: content }] : content
+  const lines: ResolvedChartTextRun[][] = [[]]
+  for (const run of runs) {
+    const style = {
+      fontSize: run.fontSize ?? defaults.fontSize,
+      color: run.color ?? defaults.color,
+      opacity: run.opacity ?? 1,
+      fontWeight: run.fontWeight,
+      fontStyle: run.fontStyle,
+    }
+    const parts = run.text.split('\n')
+    parts.forEach((part, pi) => {
+      if (pi > 0) lines.push([])
+      if (part.length > 0) lines[lines.length - 1]!.push({ ...style, text: part })
+    })
+  }
+  return lines
+}
+
+// Layout-sizing heuristic (margins, legend column width, category-label thinning) for a value
+// that's now potentially `ChartText` rather than a guaranteed plain string — same
+// `estimateTextWidth` heuristic as ever, applied per run and summed per line, widest line wins.
+// `baseFontSize` only matters as the fallback for runs that don't set their own `fontSize`.
+export function estimateChartTextWidth(content: ChartText, baseFontSize: number): number {
+  const lines = normalizeChartText(content, { fontSize: baseFontSize, color: '' })
+  return Math.max(0, ...lines.map(line => line.reduce((sum, run) => sum + estimateTextWidth(run.text, run.fontSize), 0)))
+}
+
+// Word-wraps `content` to fit within `maxWidth`, used for the chart title (see
+// `TreemapChartNode`-style too-small-to-fit checks elsewhere for a DIFFERENT, box-fit-driven use of
+// `normalizeChartText`/`estimateChartTextWidth` — this one actively reflows text instead of just
+// measuring it). Explicit line breaks (`\n` inside a run's text) are resolved first via
+// `normalizeChartText`; any resulting line whose estimated width still exceeds `maxWidth` is
+// greedily word-wrapped — each run's text split on spaces into style-tagged "words," packed onto a
+// line until the next word wouldn't fit, matching a standard greedy word-wrap. Built entirely on the
+// existing `estimateTextWidth` heuristic (never real measurement), so the SVG and PDF renderers —
+// which both call this — wrap at EXACTLY the same word; a single word wider than `maxWidth` on its
+// own still gets its own line rather than being split mid-word (no hyphenation).
+export function wrapChartTextToWidth(content: ChartText, maxWidth: number, baseFontSize: number, baseColor: string): ResolvedChartTextRun[][] {
+  // Unlike `estimateChartTextWidth` (which only ever returns a number, so a dummy color inside its
+  // own internal `normalizeChartText` call never escapes it), this function's OUTPUT is later drawn
+  // — so it must resolve every run against the REAL ambient color here. If it baked a placeholder
+  // instead, that placeholder would already be a definite (non-`undefined`) value by the time a
+  // renderer's own `normalizeChartText` call tried to apply ITS ambient default, silently
+  // overriding the real color with the placeholder instead of falling back to it.
+  const explicitLines = normalizeChartText(content, { fontSize: baseFontSize, color: baseColor })
+  const wrapped: ResolvedChartTextRun[][] = []
+  for (const line of explicitLines) {
+    const lineWidth = line.reduce((sum, run) => sum + estimateTextWidth(run.text, run.fontSize), 0)
+    if (lineWidth <= maxWidth) {
+      wrapped.push(line)
+      continue
+    }
+    const words: ResolvedChartTextRun[] = []
+    for (const run of line) {
+      for (const word of run.text.split(' ').filter(w => w.length > 0)) {
+        words.push({ ...run, text: word })
+      }
+    }
+    let current: ResolvedChartTextRun[] = []
+    let currentWidth = 0
+    for (const word of words) {
+      const wordWidth = estimateTextWidth(word.text, word.fontSize)
+      const spaceWidth = current.length > 0 ? estimateTextWidth(' ', word.fontSize) : 0
+      if (current.length > 0 && currentWidth + spaceWidth + wordWidth > maxWidth) {
+        wrapped.push(current)
+        current = []
+        currentWidth = 0
+      }
+      const leadingSpace = current.length > 0 ? ' ' : ''
+      current.push({ ...word, text: leadingSpace + word.text })
+      currentWidth += (current.length > 1 ? spaceWidth : 0) + wordWidth
+    }
+    if (current.length > 0) wrapped.push(current)
+  }
+  return wrapped.length > 0 ? wrapped : [[]]
 }
 
 export function resolveColor(explicit: string | undefined, overridePalette: string[] | undefined, index: number): string {
@@ -463,11 +572,13 @@ export function resolveRingRadii(ringCount: number, innerRadiusRatio: number, ou
 }
 
 export type ChartBox = { x: number; y: number; width: number; height: number }
-export type LegendEntry = { label: string; color: string }
+export type LegendEntry = { label: ChartText; color: string }
 
-export function resolveTitle(node: ChartNode): { text: string; fontSize: number; color: string } | null {
+export function resolveTitle(node: ChartNode): { text: ChartText; fontSize: number; color: string } | null {
   if (node.title === undefined) return null
-  if (typeof node.title === 'string') return { text: node.title, fontSize: 14, color: INK_PRIMARY }
+  // A bare `ChartText` (string OR a raw run array — the array form is itself valid `ChartText`,
+  // not `ChartTitleConfig`) is the shorthand; anything else is the `{ text, fontSize?, color? }` form.
+  if (typeof node.title === 'string' || Array.isArray(node.title)) return { text: node.title, fontSize: 14, color: INK_PRIMARY }
   return { text: node.title.text, fontSize: node.title.fontSize ?? 14, color: node.title.color ?? INK_PRIMARY }
 }
 
@@ -548,7 +659,7 @@ export function resolveDomainFromExtent(rawMin: number, rawMax: number, view: Ch
 // Shared by the SVG and PDF renderers, same as the other pure per-chart-kind geometry above
 // (stackedBarSegments, barPath, ...) — keeps the domain math itself in exactly one place rather
 // than duplicated field-for-field between the two renderers.
-export function resolveChartDomain(categories: string[], series: ChartSeries[], stacked: boolean, view: ChartViewConfig): { dataMin: number; dataMax: number } {
+export function resolveChartDomain(categories: ChartText[], series: ChartSeries[], stacked: boolean, view: ChartViewConfig): { dataMin: number; dataMax: number } {
   let rawMin: number
   let rawMax: number
   if (stacked) {
@@ -808,3 +919,4 @@ export function squarifyTreemap(items: readonly { value: number }[], box: ChartB
   })
   return result
 }
+

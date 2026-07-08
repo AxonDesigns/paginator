@@ -19,7 +19,7 @@ import '../src/nodes/chart/index.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from '../src/core/behavior.ts'
 import { chart, container, group, image, pageBreak, separator, table } from '../src/core/nodes.ts'
 import type { RenderedNode } from '../src/core/geometry.ts'
-import { squarifyTreemap } from '../src/render/chart-geometry.ts'
+import { estimateChartTextWidth, estimateTextWidth, normalizeChartText, squarifyTreemap, wrapChartTextToWidth } from '../src/render/chart-geometry.ts'
 
 describe('image', () => {
   test('measureHeight uses explicit height', () => {
@@ -435,6 +435,90 @@ describe('squarifyTreemap (chart-geometry.ts)', () => {
 
   test('empty items produces an empty result', () => {
     expect(squarifyTreemap([], box)).toEqual([])
+  })
+})
+
+describe('normalizeChartText (chart-geometry.ts)', () => {
+  test('a plain string resolves to one line, one run, at the ambient defaults', () => {
+    const lines = normalizeChartText('hello', { fontSize: 11, color: '#111' })
+    expect(lines).toEqual([[{ text: 'hello', fontSize: 11, color: '#111', opacity: 1, fontWeight: undefined, fontStyle: undefined }]])
+  })
+
+  test('a run without a "\\n" resolves to one line with that run\'s own style falling back to the ambient default', () => {
+    const lines = normalizeChartText([{ text: 'big', fontSize: 20, fontWeight: 700 }, { text: ' small', opacity: 0.6 }], { fontSize: 11, color: '#111' })
+    expect(lines.length).toBe(1)
+    expect(lines[0]).toEqual([
+      { text: 'big', fontSize: 20, color: '#111', opacity: 1, fontWeight: 700, fontStyle: undefined },
+      { text: ' small', fontSize: 11, color: '#111', opacity: 0.6, fontWeight: undefined, fontStyle: undefined },
+    ])
+  })
+
+  test('"\\n" inside a run forces a line break, continuing subsequent runs on the new line', () => {
+    const lines = normalizeChartText([{ text: 'node_modules\n' }, { text: '420 MB', opacity: 0.6 }], { fontSize: 12, color: '#fff' })
+    expect(lines.length).toBe(2)
+    expect(lines[0]!.map(r => r.text)).toEqual(['node_modules'])
+    expect(lines[1]!.map(r => r.text)).toEqual(['420 MB'])
+  })
+
+  test('a run whose text is only "\\n" produces a blank line with no runs', () => {
+    const lines = normalizeChartText([{ text: 'a\n\nb' }], { fontSize: 12, color: '#000' })
+    expect(lines.length).toBe(3)
+    expect(lines[1]).toEqual([])
+  })
+
+  test('an empty string produces a single blank line', () => {
+    expect(normalizeChartText('', { fontSize: 12, color: '#000' })).toEqual([[]])
+  })
+})
+
+describe('estimateChartTextWidth (chart-geometry.ts)', () => {
+  test('matches estimateTextWidth for a plain string', () => {
+    expect(estimateChartTextWidth('hello', 12)).toBeCloseTo(estimateTextWidth('hello', 12), 5)
+  })
+
+  test('sums per-run widths at each run\'s own font size, widest line wins', () => {
+    const width = estimateChartTextWidth([{ text: 'ab', fontSize: 20 }, { text: 'cd', fontSize: 10 }], 12)
+    expect(width).toBeCloseTo(estimateTextWidth('ab', 20) + estimateTextWidth('cd', 10), 5)
+  })
+
+  test('a multi-line value uses the widest line, not the sum of all lines', () => {
+    const width = estimateChartTextWidth([{ text: 'short\n' }, { text: 'a much longer second line' }], 12)
+    expect(width).toBeCloseTo(estimateTextWidth('a much longer second line', 12), 5)
+  })
+})
+
+describe('wrapChartTextToWidth (chart-geometry.ts)', () => {
+  test('a short title fits on one line unchanged', () => {
+    const lines = wrapChartTextToWidth('Short Title', 300, 14, '#000')
+    expect(lines.length).toBe(1)
+    expect(lines[0]!.map(r => r.text).join('')).toBe('Short Title')
+  })
+
+  test('a long title wraps onto multiple lines, each within maxWidth', () => {
+    const long = 'This Is A Deliberately Long Chart Title That Cannot Possibly Fit On One Line'
+    const lines = wrapChartTextToWidth(long, 150, 14, '#000')
+    expect(lines.length).toBeGreaterThan(1)
+    for (const line of lines) {
+      const lineWidth = line.reduce((sum, r) => sum + estimateTextWidth(r.text, r.fontSize), 0)
+      expect(lineWidth).toBeLessThanOrEqual(150)
+    }
+  })
+
+  test('reassembling every wrapped line reproduces the original words in order', () => {
+    const long = 'one two three four five six seven eight'
+    const lines = wrapChartTextToWidth(long, 80, 14, '#000')
+    const rejoined = lines
+      .map(line => line.map(r => r.text).join(''))
+      .join(' ')
+      .trim()
+    expect(rejoined.replace(/\s+/g, ' ')).toBe(long)
+  })
+
+  test('an explicit "\\n" still forces its own break independent of word-wrapping', () => {
+    const lines = wrapChartTextToWidth('Line One\nLine Two', 1000, 14, '#000')
+    expect(lines.length).toBe(2)
+    expect(lines[0]!.map(r => r.text).join('')).toBe('Line One')
+    expect(lines[1]!.map(r => r.text).join('')).toBe('Line Two')
   })
 })
 

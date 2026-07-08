@@ -5,7 +5,7 @@
 // src/nodes/chart/pdf-treemap.ts on the PDF side.
 
 import type { TreemapChartNode } from '../core/nodes.ts'
-import { CHART_FONT_FAMILY, MARK_SURFACE_GAP, SURFACE_COLOR, estimateTextWidth, resolveColor, squarifyTreemap } from './chart-geometry.ts'
+import { CHART_FONT_FAMILY, MARK_SURFACE_GAP, SURFACE_COLOR, estimateChartTextWidth, normalizeChartText, resolveColor, squarifyTreemap } from './chart-geometry.ts'
 import type { ChartBox } from './chart-geometry.ts'
 import { svgEl, svgText } from './chart-render.ts'
 
@@ -29,13 +29,23 @@ export function renderTreemapChart(svg: SVGSVGElement, node: TreemapChartNode, p
 
     svg.appendChild(svgEl('rect', { x, y, width, height, fill: colors[i]! }))
 
-    const labelWidth = estimateTextWidth(item.label, labelFontSize)
-    if (labelWidth + 8 <= width && labelFontSize + 6 <= height) {
+    // Fit-check against the general ChartText line-splitting mechanism (see ChartTextRun in
+    // nodes.ts): an empty/all-blank result (formatLabel returning '' to hide small items, same as
+    // ever) or a block too wide/tall for this rectangle simply omits the label — svgText() itself
+    // now handles the actual multi-run/multi-line DRAWING in one call, so this file only needs the
+    // fit decision, not its own line-splitting/positioning.
+    const label = node.formatLabel?.(item) ?? item.label
+    const lines = normalizeChartText(label, { fontSize: labelFontSize, color: '' })
+    const hasContent = lines.some(line => line.length > 0)
+    const lineHeight = Math.round(labelFontSize * 1.2)
+    const totalHeight = lines.length * lineHeight
+    const widestLineWidth = estimateChartTextWidth(label, labelFontSize)
+    if (hasContent && widestLineWidth + 8 <= width && totalHeight + 6 <= height) {
       // White label text on a colored fill — every other chart here only ever puts text on the
       // plain white plot surface, so this is a genuinely new situation; white reads acceptably
       // against this palette's mid-to-dark saturated swatches without a full contrast computation
       // this codebase has no other precedent for.
-      svg.appendChild(svgText(item.label, x + 4, y + labelFontSize + 2, { fontSize: labelFontSize, fontFamily, fill: SURFACE_COLOR, 'text-anchor': 'start' }))
+      svg.appendChild(svgText(label, x + 4, y + labelFontSize + 2, { fontSize: labelFontSize, fontFamily, fill: SURFACE_COLOR, 'text-anchor': 'start' }))
     }
   })
 }

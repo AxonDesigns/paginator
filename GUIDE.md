@@ -139,9 +139,9 @@ state; there's no instance-scoped equivalent to wrap without forking pretext its
 ## Public API reference (`src/index.ts`)
 
 `src/index.ts` exports the `Paginator` class — the operational pipeline (pagination, DOM rendering,
-interactions, PDF export) as instance methods — alongside a handful of free functions/types that
-carry no per-instance state: node builders, `ready()`, and pretext's own `setLocale`/`clearCache`
-passthroughs.
+interactions, PDF/Word/Excel export) as instance methods — alongside a handful of free functions/
+types that carry no per-instance state: node builders, `ready()`, and pretext's own `setLocale`/
+`clearCache` passthroughs.
 
 ### Document authoring
 | Export | Signature | Notes |
@@ -182,6 +182,12 @@ passthroughs.
 | `showPdfDialog` | `(bytes: Uint8Array, options?: { title?: string }) => { close(): void }` | Shows a modal `<dialog>` with an `<iframe>` displaying the PDF |
 | `listRegisteredFonts` | `() => RegisteredFont[]` | Inspects what's currently registered on this instance |
 
+### Word/Excel export (`Paginator` instance methods, see full section below)
+| Method | Signature | Notes |
+|---|---|---|
+| `generateDocx` | `(doc: PageDef, metadata?: DocxMetadata) => Promise<Uint8Array>` | Real, reflowable `.docx` from the pre-pagination `PageDef` directly (NOT a `PaginatedResult` — Word paginates its own content). Never throws on an unsupported node/environment — warns once and skips |
+| `generateXlsx` | `(doc: PageDef, metadata?: XlsxMetadata) => Promise<Uint8Array>` | `.xlsx` workbook, one worksheet per `table()` node found anywhere in `doc.body`. **Throws** if the document has no table |
+
 ### Interaction (`Paginator` instance methods, all opt-in, see full section below)
 | Method | Signature | Notes |
 |---|---|---|
@@ -193,7 +199,9 @@ passthroughs.
 
 None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
 write instance state — they're grouped onto `Paginator` for one consistent object-oriented surface,
-not because they need `this`.
+not because they need `this`. `generateDocx`/`generateXlsx` in particular are plain delegations to
+free functions in `src/export/` with no font registry or other instance state involved (Word/Excel
+embed no fonts of their own the way PDF does — see "Word/Excel export" below).
 
 ## Node type reference
 
@@ -381,13 +389,66 @@ geometry/color/text-estimate helper both renderers share lives in `src/render/ch
 this is what keeps the on-screen SVG and the exported PDF pixel-identical, since both call the exact
 same functions rather than two hand-synced implementations.
 
+#### Rich chart text (`ChartText` / `ChartTextRun`)
+
+Every chart text role — `title`, series/slice/task/item labels (`ChartSeries.name`,
+`ChartSlice.label`, `ChartGanttTask.label`, `ChartTreemapItem.label`, etc.), `categories`,
+axis tick-label formatters (`ChartAxisConfig.formatTick`/`ChartNumericAxisConfig.formatTick`), and
+legend entries derived from any of those — accepts `ChartText = string | ChartTextRun[]`, not just a
+plain string:
+
+```ts
+type ChartTextRun = {
+  text: string          // may contain '\n' — forces a line break, continuing subsequent runs on a new line
+  fontSize?: number      // falls back to the ambient default for that text role
+  color?: string         // falls back to the ambient default color for that role
+  opacity?: number       // 0-1, default 1
+  fontWeight?: number | string
+  fontStyle?: 'normal' | 'italic'
+}
+```
+
+A plain `string` (as ever) means "one run, one line, ambient style." An array opts into per-run
+styling and/or explicit multi-line content, e.g. a big bold name followed by a smaller, faded value:
+
+```ts
+formatLabel(item) {
+  return [
+    { text: item.label, fontSize: 16, fontWeight: 700 },
+    { text: `\n${item.value} MB`, fontSize: 11, opacity: 0.6 },
+  ]
+}
+```
+
+This mirrors `RichTextRun`'s shape (mixed-style inline runs) but is a **deliberately separate**
+mechanism, not a reuse of `RichTextNode`: rich text gets its inline run positioning from pretext's
+real text-shaping engine, while chart text has always used the rough `estimateTextWidth` heuristic
+instead, since chart rendering must stay pixel-consistent between the on-screen SVG and the exported
+PDF (see this file's own "fixed heuristic, never measured" rule above). `normalizeChartText()` (in
+`chart-geometry.ts`) is the one place both renderers resolve a `ChartText` value's lines/runs against
+ambient defaults; `svgText()`/`drawChartText()` then do their own final positioning (native `<tspan>`
+layout for SVG, pdfkit's real `widthOfString()` for PDF) — but both draw from the exact same
+line/run breakdown, so they can't drift. `fontStyle: 'italic'` only affects the SVG output — the PDF
+renderer's font resolution has no italic variant to switch to (unlike `TextNode`'s own font
+resolution), so it has no effect there. Truncation (used to fit a legend swatch row) only ever
+applies to the plain-`string` case — a rich (array-form) label is drawn as-is, never truncated.
+
+**Chart titles auto-wrap.** A `title` too wide for the chart's own box is word-wrapped onto
+multiple centered lines (using the same heuristic both renderers share, so they wrap at the exact
+same word) rather than overflowing the chart's edges — the title band's height grows to fit however
+many lines that takes. This is legitimate because title/legend/axis chrome sizing has never been
+part of `paginate()`'s synchronous layout (only the chart's OUTER box, from `height`/`aspectRatio`,
+is — see `src/nodes/chart/layout.ts`'s header comment) — it's already recomputed from scratch on
+every render in both renderers, so a content-dependent title band is no different in kind from the
+legend band that already varies with entry count.
+
 **Shared fields** (every `chartKind`):
 
 | Field | Type | Notes |
 |---|---|---|
 | `chartKind` | `'categorical' \| 'radial' \| 'scatter' \| 'gantt' \| 'radar' \| 'candlestick' \| 'treemap'` | Discriminant |
 | `width`, `height`, `aspectRatio` | `number?` | Same rule as `ImageNode`: needs `height` or `aspectRatio` |
-| `title` | `string \| { text: string; fontSize?; color? }` | Optional, centered above the chart |
+| `title` | `ChartText \| { text: ChartText; fontSize?; color? }` | Optional, centered above the chart, word-wrapped to fit — see "Rich chart text" above |
 | `fontFamily` | `string?` | Applies to every text role. Default a `system-ui` stack. On the PDF renderer, resolves through the SAME font registry `text()` nodes use (`registerFont()`) — an unregistered family falls back to Helvetica with the same one-time `console.warn` a `TextNode` gets |
 | `legend` | `{ show?; position?: 'right'\|'bottom'; fontSize?; color? }?` | Default: on for `radial` and for any series-based kind with more than one series; off for `gantt`/`treemap` (nothing meaningful to show — Gantt's color is per-task, a treemap labels every rectangle inline) and for a single series. `fontSize` (px, default 11) sizes legend entry labels. `color` overrides the default secondary-ink legend text color |
 | `colors` | `string[]?` | Categorical palette override, cycled by index; falls back to the built-in default palette |
@@ -404,7 +465,7 @@ own pass on top of the bars, never grouped or stacked with them.
 
 | Field | Type | Notes |
 |---|---|---|
-| `categories` | `string[]` | x-axis labels, one per data point in every series |
+| `categories` | `ChartText[]` | x-axis labels, one per data point in every series |
 | `series` | `ChartSeries[]` — `{ name?; data: number[]; color?; kind?: 'bar'\|'line'\|'points'; fill?; curve?; strokeWidth?; markerRadius? }` | `kind` defaults `'bar'`. `fill` (`'line'` only) shades the area between that series' line and the baseline with a linear gradient — `true` uses the series' own resolved color at 0.25 opacity, an object overrides `color`/`opacity`. **Throws** if `fill`/`strokeWidth` is set on a non-`'line'` series, or `curve`/`markerRadius` on a `'bar'` series, or `fill.opacity` is outside `[0, 1]`, or a `data` length doesn't match `categories.length` |
 | `orientation` | `'vertical' \| 'horizontal'?` | Default `'vertical'`. `'horizontal'` swaps the axes: categories run top-to-bottom, values run left-to-right — its own rendering path, mirroring the vertical one field-for-field (same reasoning as `group.ts`'s `layoutRow`/`layoutColumn` split) |
 | `barMode` | `'grouped' \| 'stacked'?` | Only meaningful among `'bar'`-kind series. `'grouped'` (default) places them side by side; `'stacked'` sums them into one bar per category — positive above zero, negative below, rounded "data-end" only on the outermost segment |
@@ -463,7 +524,7 @@ slices use), each series becomes one closed polygon connecting a vertex per spok
 
 | Field | Type | Notes |
 |---|---|---|
-| `categories` | `string[]` | The spokes |
+| `categories` | `ChartText[]` | The spokes |
 | `series` | `ChartRadarSeries[]` — `{ name?; data: number[]; color?; fill? }` | `data` — one value per category. Values CAN be negative: reuses the exact same zero/auto/explicit domain resolution as categorical's y-domain, so the domain's own MINIMUM (not a hard-coded 0) becomes the center. `fill` is a FLAT solid-color-at-opacity (unlike a line's gradient-to-baseline fade — a closed radial shape has no single edge that reads as "the baseline"). **Throws** if a `data` length mismatches `categories.length`, or `fill.opacity` is outside `[0, 1]` |
 | `view` | `ChartViewConfig?` | Shared radial domain across every series |
 | `axis` | `ChartAxisConfig?` | Reused (not `ChartNumericAxisConfig`) since radar genuinely has both a category axis (spokes) and a value axis (concentric rings) at once |
@@ -478,7 +539,7 @@ anywhere — every candle is caller-supplied, validated only for internal shape 
 
 | Field | Type | Notes |
 |---|---|---|
-| `categories` | `string[]` | x-axis labels |
+| `categories` | `ChartText[]` | x-axis labels |
 | `series` | `ChartCandlestickSeries[]` — `{ name?; data: ChartCandle[]; upColor?; downColor? }` | `ChartCandle = { open; high; low; close }`. **Throws** if `low > min(open, close)`, `high < max(open, close)`, or a `data` length mismatches `categories.length` |
 | `view` | `ChartViewConfig?` | Defaults to `'auto'`, same reasoning as scatter/gantt — real price data rarely sits near zero |
 | `axis` | `ChartAxisConfig?` | Same shape categorical uses |
@@ -495,6 +556,7 @@ The odd one out: no axis, no domain, no ticks at all — the whole plot box IS t
 | `items` | `ChartTreemapItem[]` — `{ label; value; color? }` | Flat, single level (no nested/hierarchical drill-down — deliberately scoped out). Rectangle area is proportional to `value`, packed via the standard squarified layout algorithm (Bruls/Huizing/van Wijk) to keep rectangles close to square rather than the thin slivers a naive slice-and-dice produces. A `value` of `0` is allowed (degenerates to a zero-area rectangle, contributing no visible mark). **Throws** if any `value` is negative or non-finite, or on an empty `items` array |
 | `itemGap` | `number?` | px gap between adjacent rectangles, inset uniformly on every rectangle's own edges (a treemap has no shared "baseline" edge the way a stacked bar does). Default 2. **Throws** if negative |
 | `labelFontSize` | `number?` | px font size for each rectangle's own inline label (drawn in white, directly on the fill). A rectangle too small to fit its label at this size simply omits it — never overflows or wraps. Default 12 |
+| `formatLabel` | `((item: ChartTreemapItem) => ChartText)?` | Formats the content drawn inside each rectangle — same caller-supplied-formatter pattern as `ChartAxisConfig.formatTick`, now returning full `ChartText` (see "Rich chart text" above) rather than a plain string, so a name run and a smaller/faded value run can be styled independently. Receives the whole item (not just `label`), so the formatted content can fold in `value` too. The too-small-to-fit check is measured against the resolved content's widest line and total block height; an empty (or all-blank) result omits the label entirely, same as returning `''` always has. Default: `item.label` unchanged |
 
 ### `TableNode` (`type: 'table'`)
 A fixed grid, not a semantically "correct" HTML table — no `thead` element, but `colSpan`/`rowSpan`
@@ -991,6 +1053,166 @@ common blob-URL download patterns accept). `showPdfDialog(bytes, options?)` show
 with an `<iframe>`, in the light DOM like the demo's Print button (page chrome, not paginated content
 — invariant #5 doesn't apply), and revokes its object URL on close.
 
+## Word/Excel export (`src/export/`)
+
+A **third, independent export path**, structurally unlike PDF: `pdfDoc.generateDocx(doc, metadata?)`
+and `pdfDoc.generateXlsx(doc, metadata?)` take the pre-pagination `PageDef` **directly** — not a
+`PaginatedResult` — because Word and Excel each do their own reflow/pagination (or, for Excel, have
+no pagination concept at all), so there is no pixel-box layout step to run first. This is a
+deliberate, permanent asymmetry with `generatePdf(result, ...)`, not an oversight. Both walk the same
+`Node` tree `paginate()` itself starts from, translating each node type into `docx`/`exceljs` library
+primitives instead of pixel positions — the semantic content, not a picture of the paginated pages.
+
+**Fidelity is semantic/reflowable, not pixel-perfect, by design.** Word gets real flowing paragraphs/
+tables that Word paginates itself; Excel gets a real spreadsheet grid. Neither tries to reproduce
+`PaginatedResult`'s exact page breaks/pixel boxes — that would fight against how both formats
+actually work (Word reflows; Excel has no page-box model at all). Where a pixel-model concept (a row's
+`gap`, a table's `cellPadding`) has no native equivalent in the target format, it's translated to the
+*closest* real primitive (see below) rather than dropped silently.
+
+File layout — a new top-level directory, not folded into `src/render/`, since these are standalone
+tree-walkers with no dependency on `src/core/behavior.ts`'s registry (see "Extension seam" below —
+a new custom node type does NOT need a docx/xlsx entry to keep working with `generatePdf`/`mount`):
+
+```
+src/export/
+  docx-export.ts    — generateDocx(): the Node -> `docx` library translator (see below)
+  xlsx-export.ts     — generateXlsx(): the Node -> ExcelJS translator (see below)
+  find-tables.ts       — findTables(): depth-first walk collecting every table() node in the
+                         semantic tree (recurses into group/container/table-cell content) — what
+                         generateXlsx() uses to find its worksheets
+  export-color.ts       — resolveExportColor()/toArgb(): a standalone, DOM-free CSS color resolver
+                          (#hex and rgb()/rgba() only — falls back to black + a warning for named
+                          colors/hsl()/hsla()) — deliberately NOT pdf-render.ts's resolvePdfColor,
+                          which needs OffscreenCanvas and would make xlsx-export.ts untestable
+                          under `bun test`
+  node-to-text.ts        — flattenNodeToText(): best-effort plain-text reduction for content a
+                          target genuinely can't hold structured (an xlsx cell; an unsupported
+                          node type)
+  table-grid.ts           — borderSides(): shared table-border grid math for BOTH exporters — a
+                            TableNode's rows/cells are already grid-aligned (no pixel geometry,
+                            unlike pdf-render.ts's interval-straddle math), so "does this cell's
+                            edge get a line" is pure row/col-index adjacency against the border mode
+  units.ts                 — pxToTwip()/pxToPt()/pxToExcelWidth()/pxToEmu(): unit conversions,
+                             deliberately NOT imported from pdf-render.ts (pulls in pdfkit's
+                             browser-standalone bundle at module scope) — small enough to duplicate
+                             rather than drag pdfkit into the docx/xlsx bundle
+```
+
+### Excel export (`generateXlsx`, via [ExcelJS](https://github.com/exceljs/exceljs))
+
+**Tables only, by design** — `findTables(doc.body)` collects every `table()` node anywhere in the
+document; everything else (headings, paragraphs, images, charts) is not represented in the workbook
+at all. **Throws** if the document has zero tables (a workbook with no sheets is an invalid file, not
+a harmless empty result). One worksheet per table, positionally named `"Table 1"`, `"Table 2"`, ….
+
+Reads `TableNode.rows` directly, same as the PDF/DOM table renderers — `.groups`/`.stripe` are
+already fully desugared into a flat `rows` array by `table()`'s own builder (`core/nodes.ts`), so this
+file never reimplements grouping/totals/striping. Column widths reuse the exact same
+`resolveColumnWidths()` the PDF/DOM table renderers use (exported from `src/nodes/table/index.ts`),
+converted px -> Excel's character-width unit (`≈ px / 7`, a documented approximation — Excel's own
+unit is font-metric-based, not pixel-exact). `colSpan`/`rowSpan` -> `worksheet.mergeCells(...)`,
+using `cell.__resolvedCol` exactly like the PDF/DOM renderers do. Text/richText cell content becomes
+real ExcelJS rich-text cell values (preserving per-run bold/italic/color/underline/strike); anything
+structurally nested (a group/container/table nested in a cell) falls back to `flattenNodeToText()`
+with a one-time warning, since a spreadsheet cell can't host nested flex layout.
+
+**Bundler-agnostic `Buffer` handling.** ExcelJS needs a global `Buffer` for its zip/xlsx encoding —
+Bun (which runs `bun test`) implements it natively, but a browser bundle doesn't. Rather than a
+Vite-specific polyfill plugin, `xlsx-export.ts` imports the plain `buffer` npm package (works
+unmodified under any bundler) and shims `globalThis.Buffer` only if missing — no `vite.config.ts`
+needed, and switching bundlers later requires no changes.
+
+### Word export (`generateDocx`, via [`docx`](https://docx.js.org))
+
+| Node type | Translation |
+|---|---|
+| `text`/`richText` | A `Paragraph` of `TextRun`s; a link run (`RichTextRun.href`) becomes a real `ExternalHyperlink` |
+| `group` (column) | Children's blocks flattened in sequence — real vertical stacking, no trick needed |
+| `group` (row) | An invisible (all-borders-`NONE`) single-row `Table`, one cell per child, widths from the same `resolveFlexWidths()` two-pass model `group.ts`'s own `layoutRow` uses — the standard reflowable-Word "cells side by side" trick |
+| `container` | Same trick, a 1×1 table — its one cell carries `background`/`border`/`padding`, since a Paragraph can't. No `borderRadius` equivalent |
+| `table` | A real `Table` — see below |
+| `image` | Fetched via `fetch()` (works for URLs and `data:` URIs alike) and embedded as an `ImageRun`. An SVG-sourced `image()` is skipped with a warning (not yet rasterized) |
+| `chart` | Rasterized — see below |
+| `pageBreak` | `new PageBreak()` — a direct native equivalent, no faking needed |
+| `separator` | A `Paragraph` with only a bottom border, its own line pinned to an exact height (see "gap" below) |
+| `svg` | Skipped with a one-time warning (not yet implemented — rasterizing raw SVG markup, like `chart` already does, is the natural next step) |
+
+**`gap` becomes a real spacer, not silently dropped.** A column group's `gap` has no meaning once
+every child becomes an independent `Paragraph`/`Table` in a flat Word body (OOXML has no "gap between
+siblings" concept, and a `Table` has no spacing-before/after property to set on itself) — so
+`columnGroupToBlocks()` inserts an empty spacer `Paragraph` between consecutive children, its line
+pinned to an *exact* twip value (`LineRuleType.EXACT`) regardless of font size. This is also why a
+bare `separator()` with no explicit `margin` now shows real surrounding space where it previously
+showed none — the parent's `gap` used to be silently dropped rather than degrading to *some* spacing.
+A row group's `gap` becomes a right-margin trimmed from each non-last cell's own content area instead
+(column widths are resolved against the FULL width, not width-minus-gap, so the table still spans it).
+
+**`table()` cell translation** reads `node.rows` directly (same principle as xlsx). Cell *placement*
+needs no manual merge-range math, unlike xlsx: the `docx` library's own `Table` constructor
+auto-inserts `vMerge` "continue" cells for any `rowSpan > 1` cell into the following physical row(s),
+given rows whose `children` list only the cells that START there — exactly the implicit-flow shape
+`TableRow.cells` already has. Border *sides* still need grid awareness (top/bottom/left/right
+adjacency via `table-grid.ts`'s `borderSides()`, shared with xlsx), since that's about which edges get
+a line, independent of how placement resolves. `cellPadding`/`column.padding`/`cell.padding` resolve
+with the same precedence `table/layout.ts`'s `layoutCell` uses (`cell ?? column ?? table`) and become
+docx `margins` (a `TableCell`'s direct analog of padding). **Known limitation**: `docx` copies a
+rowSpan cell's `borders` verbatim onto every auto-inserted continuation cell, so a "this cell's merged
+block ends here" bottom border can repeat at every physical row inside the span rather than only its
+true bottom edge — rare (colSpan/rowSpan + a full/horizontal border mode together), accepted as a
+known cosmetic limitation. Cell content goes through the exact same node-to-blocks recursion as
+everything else in the document (a group/container/table nested in a cell gets real paragraph breaks
+and real per-run styling, not a flattened single-style string).
+
+**Page-number sentinel convention.** `PageDef.header`/`footer` are resolved ONCE, with a placeholder
+`{ pageNumber: 1, totalPages: 1 }` context (same convention `core/nodes.ts` already documents for
+`headerHeight`/`footerHeight` auto-computation) — since Word paginates the body itself, a literal
+page number baked in at export time would be wrong past page 1. To get a LIVE page number in Word,
+put the literal substrings `'{{pageNumber}}'`/`'{{totalPages}}'` in header/footer text; `generateDocx`
+splices these into docx's own `PageNumber.CURRENT`/`PageNumber.TOTAL_PAGES` fields (rendered as real
+`PAGE`/`NUMPAGES` field codes). Header/footer text that doesn't use the sentinel renders as literal,
+computed-once text — correct for a static label, wrong (frozen at "1") for an actual running count.
+The demo's own footer (`src/main.ts`) intentionally keeps its real-`pageNumber`-interpolating PDF/DOM
+footer separate from a sentinel-based `docxFooter()` used only for the `generateDocx()` call, since
+the same `PageDef.footer` function drives both the correctly-per-page PDF/DOM output and the
+once-resolved Word output.
+
+**Chart rendering reuses `chart-render.ts`'s existing DOM/SVG renderer** (`renderChartSvg()`) — the
+same code the on-screen preview draws with, needing no chart-specific drawing logic of its own,
+covering all 7 chart kinds through that one entry point. The returned `<svg>` is serialized to a
+string, rasterized via canvas into a PNG (at `CHART_RASTER_SCALE` = 2× the logical display size for
+crisper output, the same "export at 2x" convention `generatePdf`'s own image embedding uses — see
+"Images" above), then embedded exactly like a regular `image()` node. **`createImageBitmap()` on an
+SVG `Blob` is unreliable** (fails with "the source image could not be decoded" even for trivially
+valid SVG, confirmed in headless Chromium) — loading through a plain `<img>` with a `data:` URI
+first, THEN drawing that onto the canvas, is the broadly-supported path used instead. Needs a real DOM
+(`document.createElementNS`, used inside `renderChartSvg`) in addition to `OffscreenCanvas` —
+unavailable under `bun test` — so this degrades gracefully: warns once and skips in that environment,
+but works in any real browser (verified: extracted and visually inspected embedded chart PNGs from a
+real exported `.docx`).
+
+**Explicitly NOT applied, by design:** `PageDef.background` (no clean Word equivalent — skipped with
+a one-time warning) and `PageDef.border` (a page border WAS implemented at one point via docx's
+`pageBorderTop/Right/Bottom/Left`, then deliberately removed — it's resolved once against a
+placeholder page count that has no relationship to however many pages Word actually reflows the
+content into, so keeping it would have been quietly wrong for any multi-page document). `PageDef.
+watermark` rasterization is implemented but currently **disabled** in `docx-export.ts` (the call site
+in `generateDocx()` and the watermark section are commented out, along with their now-unused imports)
+— the code follows the same "rasterize via canvas, embed as a floating behind-text image in the
+document header" approach as chart rendering, tiling via the same `resolveWatermarkInstances()` the
+PDF/DOM renderers already share; re-enabling it means uncommenting the import block, the watermark
+section, and the `watermarkRuns` line in `generateDocx()` together.
+
+**Testability.** Both exporters avoid `measureNodeHeight`/pretext/canvas entirely — they read
+`TextNode.content`/`RichTextRun.runs` as plain data, never measure it — so most of both files run
+under `bun test` with no browser required (see `test/xlsx-export.test.ts`/`test/docx-export.test.ts`).
+`generateXlsx()`'s output round-trips through ExcelJS's own reader for structural assertions;
+`generateDocx()`'s output (a standard OOXML zip) is unzipped and asserted on via `word/document.xml`
+substring checks, since `docx` has no object-model "load back" API. The two genuinely browser-only
+paths — chart rasterization and `ImageNode`'s `fetch()` for non-`data:` sources — degrade to a
+one-time warning + skip rather than throwing, so a document containing them still exports successfully
+under `bun test`; real rendering is verified separately in an actual browser (Playwright).
+
 ## Interaction system (`src/interaction/`)
 
 Everything here is **opt-in and off by default** — a document with no `interactive`/`draggable`/
@@ -1064,7 +1286,8 @@ see invariant #4 for why a raw DOM element reference wouldn't work here.
 Every node type — measurement, splitting, DOM rendering, and PDF drawing — lives together in
 `src/nodes/`, one module (or, for the two largest types, one folder) per type, each registering
 itself with `src/core/behavior.ts`'s registry as an import side effect. See "Extension seam" below
-for the full contract; this section is just the map of where everything lives.
+for the full contract; this section is just the map of where everything lives. `src/export/`
+(Word/Excel) is the one exception to the registry pattern — see "Word/Excel export" above for why.
 
 ```
 src/
@@ -1189,17 +1412,30 @@ src/
     hit-registry.ts                   — buildHitRegistry(), hitTest(), hitTestDroppable(), toTypeList()
     attach-interactions.ts             — attachInteractions(): pointer event state machine (hover/
                                           click/drag/drop, threshold, dragTypes, overDropTarget)
+  export/                             — Word/Excel export (see "Word/Excel export" above) —
+                                         standalone Node-tree walkers, no dependency on
+                                         core/behavior.ts's registry
+    docx-export.ts                    — generateDocx(): Node -> `docx` library primitives
+    xlsx-export.ts                     — generateXlsx(): Node -> ExcelJS primitives (tables only)
+    find-tables.ts                      — findTables(): depth-first table() collector for xlsx
+    export-color.ts                      — resolveExportColor()/toArgb(): standalone DOM-free color
+                                           resolution (#hex/rgb() only)
+    node-to-text.ts                       — flattenNodeToText(): best-effort plain-text fallback
+    table-grid.ts                          — borderSides(): shared table-border grid math
+    units.ts                                — pxToTwip()/pxToPt()/pxToExcelWidth()/pxToEmu()
   ready.ts                             — ready() (awaits document.fonts.ready)
   paginator.ts                          — Paginator class: the public facade. Owns a per-instance
                                            font registry (Map) and exposes paginate()/mount()/
                                            renderPreview()/printDocument()/attachInteractions()/the
-                                           hit-registry functions/generatePdf()/registerFont()/
-                                           listRegisteredFonts()/openPdfInNewTab()/showPdfDialog() as
-                                           instance methods, delegating to the (unchanged) functions
-                                           in core/render/interaction. Only registerFont/
+                                           hit-registry functions/generatePdf()/generateDocx()/
+                                           generateXlsx()/registerFont()/listRegisteredFonts()/
+                                           openPdfInNewTab()/showPdfDialog() as instance methods,
+                                           delegating to the (unchanged) functions in
+                                           core/render/interaction/export. Only registerFont/
                                            listRegisteredFonts/generatePdf actually touch instance
-                                           state — everything else is grouped here for one
-                                           consistent surface (see "Multiple Paginator instances")
+                                           state — everything else (including generateDocx/
+                                           generateXlsx) is grouped here for one consistent surface
+                                           (see "Multiple Paginator instances")
   index.ts                              — public API surface (only file most consumers should import
                                            from): node builders + types, ready(), setLocale/
                                            clearCache (pretext's own globals), and Paginator. Its
@@ -1226,7 +1462,10 @@ combined WITH column grouping (by category) in the same table — proving the tw
 a fourth table demonstrating per-cell `border`, per-column `padding`/`verticalAlign`, and `stripe`
 zebra striping, chart theming (`axis`/`legend` colors, a custom `fontFamily`, `barCornerRadius`/
 `lineStrokeWidth`/`markerRadius`), and the full interaction system (bubble-up, specific-child-wins,
-drag preview, typed drag-and-drop with live valid/invalid highlighting).
+drag preview, typed drag-and-drop with live valid/invalid highlighting). "Open PDF"/"Preview PDF"
+buttons exercise `generatePdf()`; "Export Word"/"Export Excel" buttons exercise `generateDocx()`/
+`generateXlsx()` (the Word export swaps in a sentinel-based `docxFooter()` for its live page-number
+field — see "Word/Excel export" above — rather than reusing the PDF/DOM footer's real-number one).
 Reading it top to bottom is a good way to see every API in realistic use.
 
 ## Extension seam — adding a new node type
@@ -1358,6 +1597,22 @@ type, splittable or not — this is the entire point of the registry pattern.
   graph on the DOM side and per-pixel raster work in `rasterizeImageToPng` on the PDF side.
 - No rotation or transform support anywhere in the node model — e.g. a diagonal watermark isn't
   buildable; `PageDef.background` covers a solid-color page background, nothing rotated on top of it.
+- Word/Excel export (`src/export/`, see full section above): `generateXlsx()` is tables-only —
+  headings/paragraphs/images/charts elsewhere in the document aren't represented in the workbook at
+  all, and **throws** if the document has zero tables. `generateDocx()` doesn't support `svg` nodes
+  or an SVG-sourced `image()` (both skipped with a warning), doesn't apply `PageDef.background`/
+  `border` (skipped/removed — see "Word/Excel export" above for why border was deliberately removed
+  after being implemented), and currently ships with `PageDef.watermark` rendering **disabled**
+  (implemented, but commented out in `docx-export.ts`). Chart rasterization needs a real DOM +
+  `OffscreenCanvas` (unavailable under `bun test`) — degrades to a warning + skip rather than
+  throwing. A `rowSpan` cell's border can incorrectly repeat at every physical row it spans (docx
+  copies `borders` verbatim onto every auto-inserted continuation cell) rather than only its true
+  bottom edge — rare (needs colSpan/rowSpan + a full/horizontal border mode together). Excel cell
+  `padding` has no real equivalent (spreadsheets have no box-model padding concept) and is
+  approximated via `alignment.indent` at best. Both exporters' color resolution (`export-color.ts`)
+  only understands `#hex`/`rgb()`/`rgba()` — named CSS colors and `hsl()`/`hsla()` fall back to black
+  with a warning (narrower than `generatePdf`'s `resolvePdfColor`, which resolves any valid CSS color
+  via the browser's own parser — see "PDF export" above).
 
 ## Common pitfalls (bugs caught during development — don't reintroduce)
 

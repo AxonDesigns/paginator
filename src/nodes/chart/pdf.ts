@@ -18,17 +18,21 @@ import type { RenderedNode } from '../../core/geometry.ts'
 import type { PdfRenderCtx } from '../../core/behavior.ts'
 import { PX_TO_PT, pxToPt, resolvePdfColor } from '../../render/pdf-render.ts'
 import { resolveChartFontName } from '../../render/pdf-fonts.ts'
+import { normalizeFontWeight } from '../../render/font-registry.ts'
 import {
   CHART_FONT_FAMILY,
   INK_SECONDARY,
-  estimateTextWidth,
+  estimateChartTextWidth,
   legendEntriesFor,
+  normalizeChartText,
   resolveShowLegend,
   resolveTitle,
   textBaselineOffset,
   truncateToWidth,
+  wrapChartTextToWidth,
 } from '../../render/chart-geometry.ts'
 import type { ChartBox, LegendEntry } from '../../render/chart-geometry.ts'
+import type { ChartText } from '../../core/nodes.ts'
 import { drawCategoricalChart } from './pdf-categorical.ts'
 import { drawRadialChart } from './pdf-radial.ts'
 import { drawScatterChart } from './pdf-scatter.ts'
@@ -116,23 +120,67 @@ export function drawChartPath(ctx: PdfRenderCtx, d: string, color: string, origi
 // exactly right here too, with no half-leading/ascent math needed; only the text-anchor emulation
 // pdfkit's text() lacks natively (start/middle/end, via measuring width and shifting x — same
 // manual-alignment approach positionLines() itself uses for body text).
+//
+// `text` is `ChartText` — same rich per-run styling / explicit multi-line content `svgText()`
+// supports (see that function's own header comment and `ChartTextRun` in nodes.ts). Unlike the SVG
+// side (which lets the browser's native <tspan> layout position same-line runs), this measures
+// each run's width with pdfkit's own REAL `doc.widthOfString()` — exact, not the heuristic — since
+// that's already the natural, available primitive here, same as `positionLines()`'s own manual
+// text-anchor alignment elsewhere in this codebase. A run's `fontWeight` maps to pdfkit's
+// bold/not-bold font resolution via the same `normalizeFontWeight` threshold `pdf-fonts.ts` uses
+// elsewhere; `fontStyle: 'italic'` has no PDF-side effect — `resolveChartFontName` has no italic
+// variant to resolve to (unlike `TextNode`'s own font resolution), so it only ever renders as
+// italic in the on-screen SVG. Opacity is applied via `save()`/`fillOpacity()`/`restore()` around
+// just that one run's `.text()` call so it can never leak into whatever draws next.
 export function drawChartText(
   ctx: PdfRenderCtx,
-  text: string,
+  text: ChartText,
   localX: number,
   localY: number,
   opts: { fontSize: number; color: string; anchor: 'start' | 'middle' | 'end'; bold: boolean; fontFamily: string },
   originX: number,
   originY: number,
 ): void {
-  const fontName = resolveChartFontName(ctx.pdf, opts.fontFamily, opts.bold)
-  const fontSizePt = pxToPt(opts.fontSize)
   const doc = ctx.pdf.doc
-  doc.font(fontName).fontSize(fontSizePt)
-  const widthPt = doc.widthOfString(text)
-  const dx = opts.anchor === 'middle' ? -widthPt / 2 : opts.anchor === 'end' ? -widthPt : 0
-  const { x, y } = chartToPagePoint(originX, originY, localX, localY)
-  doc.fillColor(opts.color).text(text, x + dx, y, { lineBreak: false, baseline: 0 })
+  const lines = normalizeChartText(text, { fontSize: opts.fontSize, color: opts.color })
+  const { x: baseX, y: baseY } = chartToPagePoint(originX, originY, localX, localY)
+  let lineY = baseY
+  let previousLineHeightPt = 0
+  lines.forEach((line, li) => {
+    if (li > 0) lineY += previousLineHeightPt
+
+    const measured = line.map(run => {
+      const isBold = run.fontWeight !== undefined ? normalizeFontWeight(run.fontWeight) >= 700 : opts.bold
+      const fontName = resolveChartFontName(ctx.pdf, opts.fontFamily, isBold)
+      const fontSizePt = pxToPt(run.fontSize)
+      doc.font(fontName).fontSize(fontSizePt)
+      return { run, fontName, fontSizePt, widthPt: doc.widthOfString(run.text) }
+    })
+    const totalWidthPt = measured.reduce((sum, m) => sum + m.widthPt, 0)
+    const startDx = opts.anchor === 'middle' ? -totalWidthPt / 2 : opts.anchor === 'end' ? -totalWidthPt : 0
+
+    let cursorX = baseX + startDx
+    for (const { run, fontName, fontSizePt, widthPt } of measured) {
+      // `resolvePdfColor` is idempotent on an already-resolved hex string (the common case, where
+      // `run.color` fell back to `opts.color` — itself already resolved by every call site before
+      // reaching here), and is what actually DOES the resolving for the new, not-yet-resolved case:
+      // an author-specified per-run `ChartTextRun.color` override, which no caller has ever had the
+      // chance to pre-resolve since individual runs are opaque to them.
+      doc.font(fontName).fontSize(fontSizePt).fillColor(resolvePdfColor(run.color))
+      if (run.opacity !== 1) {
+        doc.save()
+        doc.fillOpacity(run.opacity)
+        doc.text(run.text, cursorX, lineY, { lineBreak: false, baseline: 0 })
+        doc.restore()
+      } else {
+        doc.text(run.text, cursorX, lineY, { lineBreak: false, baseline: 0 })
+      }
+      cursorX += widthPt
+    }
+
+    const maxFontSizePx = Math.max(opts.fontSize, ...line.map(run => run.fontSize))
+    previousLineHeightPt = pxToPt(Math.round(maxFontSizePx * 1.2))
+  })
 }
 
 export function drawChartLegend(
@@ -168,7 +216,7 @@ export function drawChartLegend(
   for (const entry of entries) {
     const labelMaxWidth = 90
     const label = truncateToWidth(entry.label, labelMaxWidth, fontSize)
-    const labelWidth = Math.min(labelMaxWidth, estimateTextWidth(label, fontSize))
+    const labelWidth = Math.min(labelMaxWidth, estimateChartTextWidth(label, fontSize))
     const entryWidth = swatch + 6 + labelWidth
     if (x + entryWidth > box.x + box.width) break
     const rect = { x: pxToPt(originX + x), y: pxToPt(originY + centerY - swatch / 2), width: pxToPt(swatch), height: pxToPt(swatch) }
@@ -198,8 +246,25 @@ export function drawChartNode(rendered: Rendered, x: number, y: number, ctx: Pdf
 
   const title = resolveTitle(node)
   if (title !== null) {
-    const band = title.fontSize + 16
-    drawChartText(ctx, title.text, width / 2, top + title.fontSize + 4, { fontSize: title.fontSize, fontFamily, color: resolvePdfColor(title.color), anchor: 'middle', bold: false }, originX, originY)
+    // Word-wrapped exactly like chart-render.ts's renderChartSvg — see that function's header
+    // comment for the full rationale (title chrome sizing was never part of paginate()'s
+    // synchronous layout, so a content-dependent band height here is legitimate and, critically,
+    // computed from the SAME wrapChartTextToWidth heuristic both renderers share, so they wrap at
+    // the exact same word and land on the exact same band height).
+    const wrappedLines = wrapChartTextToWidth(title.text, width - 16, title.fontSize, title.color)
+    const lineHeight = Math.round(title.fontSize * 1.2)
+    const band = wrappedLines.length * lineHeight + 10
+    wrappedLines.forEach((line, li) => {
+      drawChartText(
+        ctx,
+        line,
+        width / 2,
+        top + title.fontSize + 4 + li * lineHeight,
+        { fontSize: title.fontSize, fontFamily, color: resolvePdfColor(title.color), anchor: 'middle', bold: false },
+        originX,
+        originY,
+      )
+    })
     top += band
   }
 
