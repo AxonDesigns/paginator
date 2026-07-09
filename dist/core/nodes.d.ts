@@ -122,6 +122,15 @@ export type Interactive = {
      * id) for whichever node it's handed, without maintaining a side-table keyed by node identity.
      */
     metadata?: Record<string, unknown>;
+    /**
+     * Stable caller-defined identifier for this node — never validated or interpreted by paginator
+     * itself (no uniqueness enforced; that's the caller's responsibility, same as `metadata`).
+     * Round-trips through layout/split/pagination the same way `metadata` does. Look it up after
+     * pagination via `Paginator.findById(registry, id)`. Because splitting clones a node's
+     * continuation onto each new page, and because callers may reuse an id on purpose, `findById`
+     * always returns an array — one entry per matching page/fragment, in page order.
+     */
+    id?: string;
 };
 type GroupCommon = Interactive & SelfAlignable & {
     type: 'group';

@@ -13,6 +13,14 @@ export type HitRegistry = {
 };
 export declare function buildHitRegistry(result: PaginatedResult): HitRegistry;
 /**
+ * Finds every node whose `id` matches, across every page — unlike hitTest()/hitTestDroppable()
+ * this isn't geometric, it's an identity lookup. Returns one InteractionTarget per matching
+ * page/fragment (registry.pages iterates in page order), or [] if nothing matches. A node split
+ * across pages by pagination clones its continuation onto each page (see nodes.ts's `id` doc), so
+ * a single authored node with an id can legitimately produce multiple entries here.
+ */
+export declare function findById(registry: HitRegistry, id: string): InteractionTarget[];
+/**
  * Finds the deepest geometric match at (x, y) on the given page, then walks back up toward the
  * root looking for the nearest node (self-or-ancestor) with `interactive: true`. Returns null if
  * nothing at that point is interactive, or if the point isn't over any rendered content at all.

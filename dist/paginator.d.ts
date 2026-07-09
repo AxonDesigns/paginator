@@ -24,6 +24,7 @@ export declare class Paginator {
     buildHitRegistry(result: PaginatedResult): HitRegistry;
     hitTest(registry: HitRegistry, pageNumber: number, x: number, y: number): InteractionTarget | null;
     hitTestDroppable(registry: HitRegistry, pageNumber: number, x: number, y: number, dragTypes?: string[]): InteractionTarget | null;
+    findById(registry: HitRegistry, id: string): InteractionTarget[];
     toTypeList(value: string | string[] | undefined): string[];
     generatePdf(result: PaginatedResult, metadata?: PdfMetadata): Promise<Uint8Array>;
     generateDocx(doc: PageDef, metadata?: DocxMetadata): Promise<Uint8Array>;

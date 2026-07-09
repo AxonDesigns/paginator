@@ -17,7 +17,7 @@ import { generateDocx as coreGenerateDocx } from "./export/docx-export.js";
 import { generateXlsx as coreGenerateXlsx } from "./export/xlsx-export.js";
 import { listRegisteredFonts as coreListRegisteredFonts, registerFont as coreRegisterFont } from "./render/font-registry.js";
 import { attachInteractions as coreAttachInteractions } from "./interaction/attach-interactions.js";
-import { buildHitRegistry as coreBuildHitRegistry, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList } from "./interaction/hit-registry.js";
+import { buildHitRegistry as coreBuildHitRegistry, findById as coreFindById, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList, } from "./interaction/hit-registry.js";
 import { openPdfInNewTab as coreOpenPdfInNewTab, showPdfDialog as coreShowPdfDialog } from "./render/pdf-view.js";
 export class Paginator {
     #fonts = new Map();
@@ -50,6 +50,9 @@ export class Paginator {
     }
     hitTestDroppable(registry, pageNumber, x, y, dragTypes = []) {
         return coreHitTestDroppable(registry, pageNumber, x, y, dragTypes);
+    }
+    findById(registry, id) {
+        return coreFindById(registry, id);
     }
     toTypeList(value) {
         return coreToTypeList(value);

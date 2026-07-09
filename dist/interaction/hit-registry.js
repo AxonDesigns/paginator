@@ -94,6 +94,26 @@ function findAlongPath(path, predicate) {
     }
     return null;
 }
+function collectMatches(entries, id, out) {
+    for (const entry of entries) {
+        if (entry.rendered.node.id === id)
+            out.push(entry);
+        collectMatches(entry.children, id, out);
+    }
+}
+/**
+ * Finds every node whose `id` matches, across every page — unlike hitTest()/hitTestDroppable()
+ * this isn't geometric, it's an identity lookup. Returns one InteractionTarget per matching
+ * page/fragment (registry.pages iterates in page order), or [] if nothing matches. A node split
+ * across pages by pagination clones its continuation onto each page (see nodes.ts's `id` doc), so
+ * a single authored node with an id can legitimately produce multiple entries here.
+ */
+export function findById(registry, id) {
+    const matches = [];
+    for (const entries of registry.pages.values())
+        collectMatches(entries, id, matches);
+    return matches.map(toTarget);
+}
 /**
  * Finds the deepest geometric match at (x, y) on the given page, then walks back up toward the
  * root looking for the nearest node (self-or-ancestor) with `interactive: true`. Returns null if
