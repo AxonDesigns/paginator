@@ -151,6 +151,13 @@ export type Interactive = {
    * `droppable` alone, so existing droppable nodes are unaffected until you opt in.
    */
   accepts?: string[]
+  /**
+   * Arbitrary caller-defined data — never read or interpreted by paginator itself. Round-trips
+   * unchanged through layout/split/pagination (available on `InteractionTarget.node`), so an
+   * interaction handler (hover/click/drag/drop) can recover app-specific context (e.g. a record
+   * id) for whichever node it's handed, without maintaining a side-table keyed by node identity.
+   */
+  metadata?: Record<string, unknown>
 }
 
 type GroupCommon = Interactive & SelfAlignable & {

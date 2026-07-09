@@ -206,8 +206,9 @@ embed no fonts of their own the way PDF does — see "Word/Excel export" below).
 ## Node type reference
 
 Every node type below also carries the shared `Interactive` fields: `interactive?`, `draggable?`,
-`droppable?`, `dragType?: string | string[]`, `accepts?: string[]` — all `undefined`/off by
-default. See the "Interaction system" section for their semantics.
+`droppable?`, `dragType?: string | string[]`, `accepts?: string[]`, `metadata?: Record<string,
+unknown>` — all `undefined`/off by default. See the "Interaction system" section for their
+semantics.
 
 ### `PageDef`
 | Field | Type | Notes |
@@ -1227,6 +1228,7 @@ hit registry.
 | `droppable?: boolean` | being a valid drop landing zone | Fully independent of `interactive`/`draggable` — a plain non-interactive container can be a drop zone |
 | `dragType?: string \| string[]` | which `accepts` lists this drag matches | Only meaningful with `draggable: true`. Unset = wildcard, matches any zone regardless of that zone's `accepts` |
 | `accepts?: string[]` | which drag types this zone matches | Only meaningful with `droppable: true`. Unset = accepts anything, including untyped drags |
+| `metadata?: Record<string, unknown>` | nothing — never read by paginator itself | Arbitrary caller data, along for the ride on `node`. Read it back off `InteractionTarget.node.metadata` in any event handler to recover app-specific context (e.g. a record id) without a side-table keyed by node identity |
 
 ### Bubble-up resolution — the core mechanism
 `hitTest()`/`hitTestDroppable()` (`src/interaction/hit-registry.ts`) find the deepest geometric
