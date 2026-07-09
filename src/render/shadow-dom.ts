@@ -184,7 +184,7 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
       height: `${pageSize.height}px`,
       boxShadow: SCREEN_PAGE_SHADOW,
       ...(page.border !== null
-        ? { border: `${page.border.thickness ?? 1}px solid ${page.border.color ?? '#000000'}` }
+        ? { border: `${page.border.thickness ?? 1}px ${page.border.style ?? 'solid'} ${page.border.color ?? '#000000'}` }
         : {}),
     })
     pageEl.dataset.pageNumber = String(page.pageNumber)

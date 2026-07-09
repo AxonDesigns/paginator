@@ -3,7 +3,7 @@
 import type { RenderedNode, RenderedTableCell, RenderedTableRow } from '../../core/geometry.ts'
 import { renderNodeDom } from '../../core/behavior.ts'
 import type { DomRenderCtx } from '../../core/behavior.ts'
-import type { TableNode } from '../../core/nodes.ts'
+import type { LineStyle, TableNode } from '../../core/nodes.ts'
 import { styledDiv } from '../../render/shadow-dom.ts'
 import { BORDER_EPSILON, subtractIntervals } from '../../render/interval-utils.ts'
 import { resolveColumnWidths } from './layout.ts'
@@ -23,6 +23,24 @@ type Rendered = Extract<RenderedNode, { type: 'table' }>
 // geometry.ts's `translateRendered` table branch, which shifts `rows[].box` by the same delta as the
 // table's own box, in parallel — never nested). Adding it again on top of `y` (which already
 // includes the table's own box offset) would double-count that offset.
+// 'solid' fills a rect directly (exact geometry, matches every segment's own straddle-avoided
+// extent flush). 'dashed'/'dotted' use a single-side `border` instead (native CSS border-style
+// keywords), same technique as separator.ts's own renderDom.
+function gridSegmentDiv(orientation: 'horizontal' | 'vertical', lineCoord: number, segStart: number, segEnd: number, thickness: number, color: string, style: LineStyle): HTMLDivElement {
+  if (orientation === 'horizontal') {
+    return styledDiv(
+      style === 'solid'
+        ? { left: `${segStart}px`, top: `${lineCoord}px`, width: `${segEnd - segStart}px`, height: `${thickness}px`, background: color }
+        : { left: `${segStart}px`, top: `${lineCoord}px`, width: `${segEnd - segStart}px`, height: '0', borderTopWidth: `${thickness}px`, borderTopStyle: style, borderTopColor: color },
+    )
+  }
+  return styledDiv(
+    style === 'solid'
+      ? { left: `${lineCoord}px`, top: `${segStart}px`, width: `${thickness}px`, height: `${segEnd - segStart}px`, background: color }
+      : { left: `${lineCoord}px`, top: `${segStart}px`, width: '0', height: `${segEnd - segStart}px`, borderLeftWidth: `${thickness}px`, borderLeftStyle: style, borderLeftColor: color },
+  )
+}
+
 function renderTableBorders(
   node: TableNode,
   rendered: Rendered,
@@ -38,6 +56,7 @@ function renderTableBorders(
   const mode = node.border.mode ?? 'all'
   const thickness = node.border.thickness ?? 1
   const color = node.border.color ?? '#000000'
+  const style = node.border.style ?? 'solid'
 
   const outerH = mode === 'all' || mode === 'outer' || mode === 'horizontal'
   const innerH = mode === 'all' || mode === 'horizontal'
@@ -81,9 +100,7 @@ function renderTableBorders(
   for (const lineY of hYs) {
     const straddling = cellBoxes.filter(b => b.top < lineY - BORDER_EPSILON && lineY + BORDER_EPSILON < b.bottom)
     const segments = subtractIntervals([tableLeft, tableRight], straddling.map(b => [b.left, b.right] as const))
-    for (const [segStart, segEnd] of segments) {
-      container.appendChild(styledDiv({ left: `${segStart}px`, top: `${lineY}px`, width: `${segEnd - segStart}px`, height: `${thickness}px`, background: color }))
-    }
+    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('horizontal', lineY, segStart, segEnd, thickness, color, style))
   }
 
   const vXs: number[] = []
@@ -99,9 +116,7 @@ function renderTableBorders(
     // inner/outer branch is needed here.
     const headerHoles = tableLeft < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < tableRight ? headerRowVRanges : []
     const segments = subtractIntervals([tableTop, tableBottom], [...straddling.map(b => [b.top, b.bottom] as const), ...headerHoles])
-    for (const [segStart, segEnd] of segments) {
-      container.appendChild(styledDiv({ left: `${lineX}px`, top: `${segStart}px`, width: `${thickness}px`, height: `${segEnd - segStart}px`, background: color }))
-    }
+    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('vertical', lineX, segStart, segEnd, thickness, color, style))
   }
 }
 
@@ -113,7 +128,7 @@ function renderTableBorders(
 export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
   const node = rendered.node
   const { originX, originY, container } = ctx
-  const colWidths = resolveColumnWidths(node.columns, rendered.box.width)
+  const colWidths = resolveColumnWidths(node, rendered.box.width)
   const colX: number[] = []
   let acc = 0
   for (const w of colWidths) {
@@ -155,7 +170,7 @@ export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: D
           top: `${originY + cell.box.y}px`,
           width: `${cell.box.width}px`,
           height: `${cell.box.height}px`,
-          border: `${cell.border.thickness ?? 1}px solid ${cell.border.color ?? '#000000'}`,
+          border: `${cell.border.thickness ?? 1}px ${cell.border.style ?? 'solid'} ${cell.border.color ?? '#000000'}`,
         }),
       )
     }

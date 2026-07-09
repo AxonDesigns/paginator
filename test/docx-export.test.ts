@@ -100,6 +100,17 @@ describe('generateDocx', () => {
     expect(xml).toContain('w:line="45" w:lineRule="exact"')
   })
 
+  test('separator style maps to the matching docx border style', async () => {
+    const dashedXml = await documentXml(await generateDocx(definePage(PAGE, separator({ style: 'dashed' }))))
+    expect(dashedXml).toContain('w:val="dashed"')
+
+    const dottedXml = await documentXml(await generateDocx(definePage(PAGE, separator({ style: 'dotted' }))))
+    expect(dottedXml).toContain('w:val="dotted"')
+
+    const defaultXml = await documentXml(await generateDocx(definePage(PAGE, separator())))
+    expect(defaultXml).toContain('w:val="single"')
+  })
+
   test('page background is skipped with a warning; page border is not applied at all', async () => {
     const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
     const warnings: string[] = []
@@ -220,6 +231,41 @@ describe('generateDocx', () => {
     }
   })
 
+  // generateDocx() deliberately avoids the DOM/pretext measurement path that a real 'shrink' width
+  // needs (see src/export/docx-export.ts's resolveColumnWidthsPx/rowChildSizing) — verify it degrades
+  // the same way chart/svg do: warn once, keep rendering (as an equal flex-grow share) rather than
+  // producing a NaN width or throwing.
+  test('flex: "shrink" (row child) and width: "shrink" (table column) fall back to an equal flex-grow share, with a warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const doc = definePage(
+        PAGE,
+        group({ direction: 'column' }, [
+          group({ direction: 'row' }, [
+            text({ content: 'Left', fontFamily: 'Arial', fontSize: 12, flex: 'shrink' }),
+            text({ content: 'Right', fontFamily: 'Arial', fontSize: 12 }),
+          ]),
+          table({
+            columns: [{ width: 'shrink' }, {}],
+            rows: [{ cells: [{ content: text({ content: 'A', fontFamily: 'Arial', fontSize: 12 }) }, { content: text({ content: 'B', fontFamily: 'Arial', fontSize: 12 }) }] }],
+          }),
+        ]),
+      )
+      const xml = await documentXml(await generateDocx(doc))
+      expect(xml).toContain('Left')
+      expect(xml).toContain('Right')
+      expect(xml).toContain('A')
+      expect(xml).toContain('B')
+      expect(warnings.some(w => w.includes("'shrink' sizing"))).toBe(true)
+    } finally {
+      console.warn = warnSpy
+    }
+  })
+
   test('table() renders rows/cells, and a rowSpan cell produces vMerge restart/continue', async () => {
     const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
     const rows: TableRow[] = rowGroup(['x'], [
@@ -233,6 +279,26 @@ describe('generateDocx', () => {
     expect(xml).toContain('span')
     expect(xml).toContain('>a<'.replace('>', '>')) // sanity: cell text present
     expect(xml).toContain('b')
+  })
+
+  test('TableNode.border.style maps to the matching docx border style for every grid line', async () => {
+    const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
+    const rows: TableRow[] = [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] }]
+    const doc = definePage(PAGE, table({ columns, rows, border: { mode: 'all', style: 'dotted' } }))
+    const xml = await documentXml(await generateDocx(doc))
+    expect(xml).toContain('w:val="dotted"')
+    expect(xml).not.toContain('w:val="single"')
+  })
+
+  test('TableCell.border.style overrides the table-wide border style for just that cell', async () => {
+    const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
+    const rows: TableRow[] = [
+      { cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }), border: { style: 'dashed' } }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] },
+    ]
+    const doc = definePage(PAGE, table({ columns, rows, border: { mode: 'all' } }))
+    const xml = await documentXml(await generateDocx(doc))
+    expect(xml).toContain('w:val="dashed"')
+    expect(xml).toContain('w:val="single"') // the rest of the grid stays the table-wide default
   })
 
   test('a nested group inside a table cell gets real paragraph breaks and per-run styling, not flattened text', async () => {

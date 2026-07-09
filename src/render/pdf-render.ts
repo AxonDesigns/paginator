@@ -29,7 +29,7 @@
 
 import PDFDocument from 'pdfkit/js/pdfkit.standalone.js'
 import type { PaginatedResult } from '../core/paginate.ts'
-import type { ImageNode, ObjectFit, Watermark } from '../core/nodes.ts'
+import type { ImageNode, LineStyle, ObjectFit, Watermark } from '../core/nodes.ts'
 import { drawPdfNode } from '../core/behavior.ts'
 import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { measureTextWidthPx } from './text-measure.ts'
@@ -55,6 +55,24 @@ export type PdfContext = {
 
 export function toPdfRect(xPx: number, yPx: number, wPx: number, hPx: number): { x: number; y: number; width: number; height: number } {
   return { x: pxToPt(xPx), y: pxToPt(yPx), width: pxToPt(wPx), height: pxToPt(hPx) }
+}
+
+// pdfkit has no native border-style keyword (unlike CSS's `border-style: dashed/dotted`), so every
+// line/border drawing site in this codebase approximates 'dashed'/'dotted' the same way: stroke
+// instead of fill, with a dash pattern ('dotted' additionally uses round caps so each dash reads as
+// a circular dot rather than a short segment). Shared here rather than duplicated per node type
+// (separator/table border/container border/page border all call this) so the three styles stay
+// visually consistent everywhere a LineStyle appears. Mutates `doc`'s current line-dash/cap state —
+// always pair with `resetLineStyle()` once the bordered shape has been stroked, so the next unrelated
+// stroke in the same document (which may not go through this helper at all) isn't left dashed.
+export function applyLineStyle(doc: PDFKit.PDFDocument, style: LineStyle | undefined, thicknessPt: number): void {
+  if (style === 'dotted') doc.dash(0.01, { space: thicknessPt * 2 }).lineCap('round')
+  else if (style === 'dashed') doc.dash(thicknessPt * 3, { space: thicknessPt * 2 }).lineCap('butt')
+  else doc.undash().lineCap('butt')
+}
+
+export function resetLineStyle(doc: PDFKit.PDFDocument): void {
+  doc.undash().lineCap('butt')
 }
 
 // Every color in this codebase's node types is a plain CSS `string` with no enforced format.
@@ -425,10 +443,12 @@ export async function generatePdf(result: PaginatedResult, fonts: FontRegistry, 
       // matching CSS's border-box model (mount()'s border sits fully inside the page element).
       const thicknessPt = pxToPt(pdfPage.border.thickness ?? 1)
       const halfThicknessPt = thicknessPt / 2
+      applyLineStyle(doc, pdfPage.border.style, thicknessPt)
       doc
         .rect(halfThicknessPt, halfThicknessPt, pageWidthPt - thicknessPt, pageHeightPt - thicknessPt)
         .lineWidth(thicknessPt)
         .stroke(resolvePdfColor(pdfPage.border.color ?? '#000000'))
+      resetLineStyle(doc)
     }
   }
 

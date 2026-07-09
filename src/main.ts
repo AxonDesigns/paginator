@@ -89,7 +89,7 @@ function headerCaption(content: string): ReturnType<typeof text> {
 }
 
 const tableColumns: TableColumn[] = [
-  { width: '40px', align: 'end', content: headerCaption('#') },
+  { width: 'shrink', align: 'end', content: headerCaption('#') },
   { width: 3, content: headerCaption('Item') },
   { width: '64px', align: 'end', content: headerCaption('Qty') },
   { width: '84px', align: 'end', background: '#fbfbfb', content: headerCaption('Price') },
@@ -142,7 +142,7 @@ const demoTable = table({
   columns: tableColumns,
   rows: tableDataRows(),
   cellPadding: 8,
-  border: { mode: 'all', thickness: 1, color: '#dddddd' },
+  border: { mode: 'all', thickness: 1, color: '#dddddd', style: "dashed" },
   headerBackground: '#eef1f6',
 })
 
@@ -408,18 +408,26 @@ const doc = definePage(
       }),
   },
   group({ direction: 'column', gap: 16 }, [
-    text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30 }),
-    separator({ thickness: 1, margin: 0, color: '#dddddd' }),
+    group({
+      direction: "row",
+      mainAlign: "center",
+      alignSelf: "stretch"
+    }, [
+      text({ content: 'Title', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30, flex: 'shrink' }),
+      separator({ thickness: 1, margin: 4, color: '#dddddd' }),
+      text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30, flex: 'shrink' })
+    ]),
+    separator({ thickness: 1, margin: 0, color: '#dddddd', style: "dashed" }),
     text({ content: longParagraph1, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     group({ direction: 'row', mainAlign: 'space-between', crossAlign: 'stretch', gap: 12 }, [
       // Fixed (px) flex opts these out of the row's default equal-column sizing, so they hug
       // their own content width and let `space-between` spread the leftover space between them —
       // the same look the row had before explicit sizing existed, now expressed explicitly.
-      text({ content: 'Prepared by: Jane Doe', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: '150px' }),
+      text({ content: 'Prepared by: Jane Doe', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: 'shrink' }),
       separator({ margin: 4, color: '#cccccc' }),
-      text({ content: 'Date: 2026-07-01', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: '120px' }),
+      text({ content: 'Date: 2026-07-01', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: 'shrink' }),
       separator({ thickness: 1, color: '#cccccc' }),
-      text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: '#2a7a2a', flex: '100px' }),
+      text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: '#2a7a2a', flex: 'shrink' }),
     ]),
     text({ content: longParagraph2, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     group({ direction: 'row', gap: 16 }, [

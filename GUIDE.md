@@ -219,7 +219,7 @@ semantics.
 | `headerHeight` / `footerHeight` | `number?` | Explicit override; skips auto-measurement |
 | `headerGap` / `footerGap` | `number?` | Default 0 |
 | `background` | `string \| ((ctx: { pageNumber, totalPages }) => string \| undefined \| null)?` | Solid page background color. Default white. Resolved once per page in `paginate()`, exactly like `header`/`footer`/`watermark` — same callback shape, so e.g. only the cover page can have a colored background; the callback may return `undefined`/`null` to opt a page out entirely. Threaded through `PaginatedPage.background`, drawn by both `mount()` and `generatePdf()` |
-| `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder \| undefined \| null)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`, including the opt-out return. No `borderRadius` (a page is never clipped/cropped) |
+| `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder \| undefined \| null)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`, including the opt-out return. No `borderRadius` (a page is never clipped/cropped). `ContainerBorder.style` (`LineStyle`, default `'solid'`) works here too |
 | `watermark` | `Watermark \| ((ctx: { pageNumber, totalPages }) => Watermark \| undefined \| null)?` | Decorative overlay drawn on every page. The callback may return `undefined`/`null` to skip the watermark on a given page (e.g. only page 1). See below |
 | `body` | `Node` | Usually a column `group` |
 
@@ -295,6 +295,7 @@ definePage(
 | `thickness` | `number?` | Default 1 |
 | `color` | `string?` | Default `#000000` |
 | `margin` | `number?` | Default 0 — reserved on each side along the parent's **main axis** |
+| `style` | `LineStyle?` (`'solid' \| 'dashed' \| 'dotted'`) | Default `'solid'`. The same `LineStyle` vocabulary is shared by `ContainerBorder` (`ContainerNode.border`, `TableCell.border`, `PageDef.border`) and `TableNode.border` — one set of keywords everywhere a line/border is drawn. On screen, drawn via a single-side CSS `border` (native `border-style` keywords) rather than a filled rectangle. In `generatePdf()`, `'dashed'`/`'dotted'` stroke the centerline with a pdfkit dash pattern via the shared `applyLineStyle()`/`resetLineStyle()` helpers (`src/render/pdf-render.ts`) — `'dotted'` additionally uses round line caps to read as circular dots — instead of filling the inset rect; `'solid'` still fills directly. In `generateDocx()`, maps to `BorderStyle.DASHED`/`BorderStyle.DOTTED` (Word's own border-style keywords) via the shared `docxBorderStyle()` helper |
 
 Dual orientation, no explicit flag needed: renders as a horizontal rule (spans full cross width,
 `thickness+2*margin` tall) as a column child; as a vertical divider (stretches to full row height,
@@ -367,7 +368,7 @@ those don't need their own such fields.
 | `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 | `padding` | `number \| { top, right, bottom, left }?` | Insets `child` from whatever width/height the box resolved to |
 | `background` | `string?` | |
-| `border` | `{ thickness?; color? }?` | A plain rectangle at the container's own edge — no straddle-avoidance needed (unlike table borders), since there's no internal grid to share edges with |
+| `border` | `ContainerBorder = { thickness?; color?; style?: LineStyle }?` | A plain rectangle at the container's own edge — no straddle-avoidance needed (unlike table borders), since there's no internal grid to share edges with. `style` (`'solid'` default, `'dashed'`/`'dotted'`) — see `SeparatorNode.style`'s doc for the rendering approximation both non-solid styles share across every line/border in this codebase |
 | `borderRadius` | `number?` | Rounds the container's own box (background + border) — does NOT clip `child`'s own content to match (e.g. wrapping an image needs `ImageNode.borderRadius` too if you want the image itself rounded, not just the box behind it) |
 
 Splittability delegates entirely to `child` (splittable iff `child` is splittable, exactly like
@@ -565,15 +566,15 @@ cell merging is supported; see "Cell spans" below.
 
 | Field | Type | Notes |
 |---|---|---|
-| `columns` | `{ width?: FlexSize; background?: string; align?: CrossAlign; padding?: number; verticalAlign?: 'start'\|'center'\|'end'; content?: Node }[]` | `width` uses the *same* fixed-px/flex-weight model as row-child sizing below. `padding`/`verticalAlign` are per-column DEFAULTS for every cell in that column (see precedence below) — `verticalAlign` in particular is the only way to align the auto-generated header row (from `content`), since that row has no other mechanism to set it. `content` — a header caption for this column; see "Column header captions" below. Always exactly what you authored — no other feature (grouping included) ever strips or reshapes this array |
+| `columns` | `{ width?: FlexSize; background?: string; align?: CrossAlign; padding?: number; verticalAlign?: 'start'\|'center'\|'end'; content?: Node }[]` | `width` uses the *same* fixed-px/flex-weight/`'shrink'` model as row-child sizing below — `width: 'shrink'` sizes the column to the widest colSpan-1 cell's own natural width across every row (own padding included), the same `naturalWidth()`/`childCrossWidthInColumn` mechanism a shrink-wrapped row/column child uses, just maxed over the whole column instead of one subtree (`columnNaturalWidth()` in `src/nodes/table/layout.ts`). `generateDocx()` can't compute it (see Row flex sizing below) and falls back to an equal flex-grow weight with a one-time warning; `generateXlsx()` computes it correctly, since it reuses this same real layout function. `padding`/`verticalAlign` are per-column DEFAULTS for every cell in that column (see precedence below) — `verticalAlign` in particular is the only way to align the auto-generated header row (from `content`), since that row has no other mechanism to set it. `content` — a header caption for this column; see "Column header captions" below. Always exactly what you authored — no other feature (grouping included) ever strips or reshapes this array |
 | `rows` | `TableRow[]` — `{ kind?: 'cells'; cells: TableCell[]; groupValues?: string[]; background?: string; verticalAlign?: 'start'\|'center'\|'end' }` or `{ kind: 'header'; depth: number; content?: Node; cells?: TableCell[]; background?: string; repeat?: boolean }` | `cells.length` must equal `columns.length` for every non-header row (implicit-flow authoring changes this when spans are in play — see "Cell spans"). `groupValues` — see "Column grouping". The `header` variant is either a full-width single-`content` bar, or colSpan-aware, column-grid-aligned `cells` (exactly one of the two is set) — see "Column grouping" |
-| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; padding?: number; border?: { thickness?; color? }; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `padding` overrides `column.padding`/`TableNode.cellPadding` for this one cell. `border` draws a complete rectangle around just this cell's own box, independent of (and drawn on top of) the table-wide `border` modes below — since it's a full rect rather than a shared-edge line, two adjacent bordered cells show a double-thickness line between them (deliberately simpler, not a bug); no `borderRadius` (a rounded corner on one cell in a shared grid has no well-defined meaning next to its square neighbors). `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
+| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; padding?: number; border?: ContainerBorder; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `padding` overrides `column.padding`/`TableNode.cellPadding` for this one cell. `border` draws a complete rectangle around just this cell's own box, independent of (and drawn on top of) the table-wide `border` modes below — since it's a full rect rather than a shared-edge line, two adjacent bordered cells show a double-thickness line between them (deliberately simpler, not a bug); no `borderRadius` (a rounded corner on one cell in a shared grid has no well-defined meaning next to its square neighbors). `border.style` (`LineStyle`, default `'solid'`) is independent of, and can differ from, the table-wide `TableNode.border.style`. `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
 | `groups` | `TableGroupLevel[]?` | Report-style row grouping levels, ordered outermost -> innermost — see "Column grouping" |
 | `headerRows` | `number?` | Leading row count repeated at the top of every continuation page this table spans. Freely composable with `groups`; mutually exclusive with `column.content` (see "Column header captions") |
 | `headerBackground` | `string?` | Background for the single auto-generated header row (from `column.content`). Ignored if no column defines `content`, or if you author header row(s) manually via `headerRows` instead (set `background` on that row directly) |
 | `repeatHeaderRow` | `boolean?` | Default `true`. Whether the table's own `headerRows` prefix repeats on every continuation page, or appears only once at the very top |
 | `repeatGroupHeaders` | `boolean?` | Default `true`. Table-wide default for `TableGroupLevel.repeat` on every grouping level that doesn't set its own — see "Column grouping" |
-| `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color? }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges. No `borderRadius` — rounding corners across a whole grid of cells with shared edges (without disturbing the inner grid lines) has no existing primitive to build on; not supported |
+| `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color?; style?: LineStyle }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present; `style` (default `'solid'`) applies to every grid line this mode draws. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges — a `'dashed'`/`'dotted'` line segment strokes its own centerline instead of filling (same approximation `SeparatorNode.style` uses), still avoiding the double-thickness straddle. No `borderRadius` — rounding corners across a whole grid of cells with shared edges (without disturbing the inner grid lines) has no existing primitive to build on; not supported |
 | `cellPadding` | `number?` | Default 0. Table-wide default, overridable per column (`column.padding`) or per cell (`cell.padding`) — see precedence below |
 | `stripe` | `{ even?: string; odd?: string }?` | Alternating row background, desugared entirely at `table()` build time into per-row `background` (`src/nodes/table/layout.ts` never knows striping happened, same architecture "Column grouping" already uses). Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a column-grouping header/divider bar — and never overrides a row that already sets its own `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even) |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
@@ -749,21 +750,43 @@ Row-height distribution when a `rowSpan` cell's content is taller than the rows 
 sum to: the entire deficit is added to the **last** row in the span, not distributed proportionally
 — see Known Limitations.
 
-## Row flex sizing (`FlexSize = number | \`${number}px\``)
+## Row flex sizing (`FlexSize = number | \`${number}px\` | 'shrink'`)
 
 A ROW group's direct children are sized by a two-pass model, same mechanics as CSS `flex-grow`:
-1. Fixed-size children (any child with `flex: 'Npx'`, plus separators, which are always
-   fixed at `thickness + 2*margin`) claim their exact width first. `ImageNode`/`SvgNode`/
-   `ChartNode`/`ContainerNode` also claim a fixed width here from their own `width` field whenever
-   `flex` is left unset — the same value that already governs their size in a column/shrink-wrap
-   context works unchanged as a row child too, so `flex: 'Npx'` is only needed to override `width`
-   or to opt into flex-grow weighting for these four types.
+1. Fixed-size children — any child with `flex: 'Npx'` or `flex: 'shrink'`, plus separators, which
+   are always fixed at `thickness + 2*margin` — claim their exact width first.
+   - `flex: 'Npx'` claims exactly `N` authored pixels.
+   - `flex: 'shrink'` claims its own natural/shrink-wrap width instead of an authored pixel value —
+     the same `naturalWidth()`/`measureNaturalWidth` mechanism a column child uses to hug its
+     content (a nested row reuses its own "has a flexible child?" rule to decide whether IT has a
+     natural width at all; a nested column reuses `childCrossWidthInColumn`'s max-of-children). Works
+     on any node type that registers a `naturalWidth` (`TextNode`, `RichTextNode`, `ImageNode`,
+     `SvgNode`, `ContainerNode`, `GroupNode`) — see `shrinkWrapWidth()` in `src/nodes/group.ts`. This
+     is how you get CSS-`inline-block`-style siblings that hug their own content instead of splitting
+     the row into equal (or px-authored) columns, so `mainAlign: 'center'`/`'space-between'` on the
+     row has real free space to distribute (see rule 3 below) — e.g. two headline `text()` nodes in a
+     row both need `flex: 'shrink'` for `mainAlign: 'center'` to visually center them as a unit
+     (`src/main.ts`'s title row).
+   - `ImageNode`/`SvgNode`/`ChartNode`/`ContainerNode` also claim a fixed width here from their own
+     `width` field whenever `flex` is left unset — the same value that already governs their size in
+     a column/shrink-wrap context works unchanged as a row child too, so `flex: 'Npx'`/`'shrink'` is
+     only needed to override `width` or to opt into flex-grow weighting for these four types.
 2. Remaining width is divided among flexible children (`flex: N` or unset, which defaults to
    weight `1`) proportional to their weight.
 
 `mainAlign` (`space-between` etc.) only has an effect when **no** child is flexible — flexible
 children already consume all remaining space by construction, exactly like CSS (`flex-grow` eats
-free space before `justify-content` ever sees any).
+free space before `justify-content` ever sees any). `flex: 'shrink'` children count as fixed-size
+for this rule, same as `flex: 'Npx'`, so a row that's entirely `'shrink'`/`'Npx'`/separator children
+leaves free space for `mainAlign` to distribute.
+
+`TableColumn.width` reuses the same `FlexSize` type/px/weight/`'shrink'` model — `width: 'shrink'`
+sizes the column to the widest colSpan-1 cell's natural width across every row instead of one
+subtree (see the `TableNode.columns` row in "Node type reference" above for exactly how it's
+computed and its one edge case, colSpan>1 cells). `generateDocx()` can't compute a `'shrink'` width
+for either a row child's `flex` or a `TableColumn.width` — it deliberately avoids pulling in the
+DOM/pretext measurement path (see the module header comment in `src/export/docx-export.ts`) — and
+falls back to an equal flex-grow weight in both cases, with a one-time console warning.
 
 Column children never use `flex` for width — their cross-axis width comes from `crossAlign`
 (`'stretch'` = full column width, otherwise shrink-to-fit via pretext's `measureNaturalWidth`). A

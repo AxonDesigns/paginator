@@ -18,7 +18,7 @@ import { drawPdfNode, isSplittable, layoutNodeFull, measureNodeHeight, registerN
 import type { DomRenderCtx, PdfRenderCtx, SplitOutcome } from '../core/behavior.ts'
 import type { ContainerNode, Margins } from '../core/nodes.ts'
 import { styledDiv } from '../render/shadow-dom.ts'
-import { pxToPt, resolvePdfColor, toPdfRect } from '../render/pdf-render.ts'
+import { applyLineStyle, pxToPt, resetLineStyle, resolvePdfColor, toPdfRect } from '../render/pdf-render.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'container' }>
 
@@ -83,7 +83,7 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
     height: `${rendered.box.height}px`,
   }
   if (node.background !== undefined) style.background = node.background
-  if (node.border !== undefined) style.border = `${node.border.thickness ?? 1}px solid ${node.border.color ?? '#000000'}`
+  if (node.border !== undefined) style.border = `${node.border.thickness ?? 1}px ${node.border.style ?? 'solid'} ${node.border.color ?? '#000000'}`
   if (node.borderRadius !== undefined) style.borderRadius = `${node.borderRadius}px`
   ctx.container.appendChild(styledDiv(style))
   // Same convention as group/table: rendered.child.box is already resolved relative to this SAME
@@ -103,7 +103,9 @@ async function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderC
   }
   if (node.border !== undefined) {
     const thicknessPt = pxToPt(node.border.thickness ?? 1)
+    applyLineStyle(doc, node.border.style, thicknessPt)
     doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).lineWidth(thicknessPt).stroke(resolvePdfColor(node.border.color ?? '#000000'))
+    resetLineStyle(doc)
   }
   // Same origin convention as group/table (NOT the chart module's own-origin exception) — see
   // shadow-dom.ts's renderContainerNode-era rationale, preserved here.

@@ -81,7 +81,7 @@ export type TextAlign = 'left' | 'center' | 'right';
 export type SelfAlignable = {
     alignSelf?: CrossAlign;
 };
-export type FlexSize = number | `${number}px`;
+export type FlexSize = number | `${number}px` | 'shrink';
 export type Interactive = {
     interactive?: boolean;
     /**
@@ -115,6 +115,13 @@ export type Interactive = {
      * `droppable` alone, so existing droppable nodes are unaffected until you opt in.
      */
     accepts?: string[];
+    /**
+     * Arbitrary caller-defined data — never read or interpreted by paginator itself. Round-trips
+     * unchanged through layout/split/pagination (available on `InteractionTarget.node`), so an
+     * interaction handler (hover/click/drag/drop) can recover app-specific context (e.g. a record
+     * id) for whichever node it's handed, without maintaining a side-table keyed by node identity.
+     */
+    metadata?: Record<string, unknown>;
 };
 type GroupCommon = Interactive & SelfAlignable & {
     type: 'group';
@@ -214,6 +221,8 @@ export type SeparatorNode = Interactive & {
     color?: string;
     /** px reserved on each side along the parent's main axis */
     margin?: number;
+    /** Line style. Default 'solid' */
+    style?: LineStyle;
 };
 export type PageBreakNode = Interactive & {
     type: 'page-break';
@@ -268,9 +277,14 @@ export type SvgNode = Interactive & SelfAlignable & {
      *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
     flex?: FlexSize;
 };
+/** Shared by every line/border-drawing field in this file (SeparatorNode.style, ContainerBorder,
+ *  TableNode.border) — one line-style vocabulary so a document author never has to remember a
+ *  different set of keywords per node type. */
+export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export type ContainerBorder = {
     thickness?: number;
     color?: string;
+    style?: LineStyle;
 };
 export type ContainerNode = Interactive & SelfAlignable & {
     type: 'container';
@@ -883,11 +897,14 @@ export type TableNode = Interactive & {
      *  that level, or this, opts out). */
     repeatGroupHeaders?: boolean;
     /** Omitted entirely = no borders (same as `{mode: 'none'}`). `mode` defaults to 'all' when the
-     *  object is present but `mode` isn't specified. */
+     *  object is present but `mode` isn't specified. `style` defaults to `'solid'` — see
+     *  `LineStyle`; applies to every grid line this mode draws, table-wide (an individual cell's own
+     *  `TableCell.border` sets its own style independently via `ContainerBorder.style`). */
     border?: {
         mode?: TableBorderMode;
         thickness?: number;
         color?: string;
+        style?: LineStyle;
     };
     cellPadding?: number;
     /** Alternating row background, desugared entirely at table() build time into per-row

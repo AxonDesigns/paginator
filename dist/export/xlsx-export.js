@@ -151,7 +151,7 @@ function writeCell(sheet, excelRow, cell, arrayIndex, rowBackground, rowVertical
 }
 function writeTableSheet(sheet, table, contentWidthPx) {
     const columnCount = table.columns.length;
-    const colWidthsPx = resolveColumnWidths(table.columns, contentWidthPx);
+    const colWidthsPx = resolveColumnWidths(table, contentWidthPx);
     sheet.columns = colWidthsPx.map(w => ({ width: pxToExcelWidth(w) }));
     const totalRows = table.rows.length;
     const mode = table.border?.mode ?? (table.border !== undefined ? 'all' : 'none');

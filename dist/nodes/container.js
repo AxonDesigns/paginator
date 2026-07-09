@@ -14,7 +14,7 @@
 import { translateRendered } from "../core/geometry.js";
 import { drawPdfNode, isSplittable, layoutNodeFull, measureNodeHeight, registerNode, renderNodeDom, splitNode } from "../core/behavior.js";
 import { styledDiv } from "../render/shadow-dom.js";
-import { pxToPt, resolvePdfColor, toPdfRect } from "../render/pdf-render.js";
+import { applyLineStyle, pxToPt, resetLineStyle, resolvePdfColor, toPdfRect } from "../render/pdf-render.js";
 function resolvePadding(padding) {
     if (padding === undefined)
         return { top: 0, right: 0, bottom: 0, left: 0 };
@@ -78,7 +78,7 @@ function renderDom(rendered, x, y, ctx) {
     if (node.background !== undefined)
         style.background = node.background;
     if (node.border !== undefined)
-        style.border = `${node.border.thickness ?? 1}px solid ${node.border.color ?? '#000000'}`;
+        style.border = `${node.border.thickness ?? 1}px ${node.border.style ?? 'solid'} ${node.border.color ?? '#000000'}`;
     if (node.borderRadius !== undefined)
         style.borderRadius = `${node.borderRadius}px`;
     ctx.container.appendChild(styledDiv(style));
@@ -97,7 +97,9 @@ async function drawPdf(rendered, x, y, ctx) {
     }
     if (node.border !== undefined) {
         const thicknessPt = pxToPt(node.border.thickness ?? 1);
+        applyLineStyle(doc, node.border.style, thicknessPt);
         doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).lineWidth(thicknessPt).stroke(resolvePdfColor(node.border.color ?? '#000000'));
+        resetLineStyle(doc);
     }
     // Same origin convention as group/table (NOT the chart module's own-origin exception) — see
     // shadow-dom.ts's renderContainerNode-era rationale, preserved here.

@@ -34,15 +34,50 @@ function requireContent(cell) {
     return cell.content;
 }
 // --- Column width resolution (same two-pass flex-grow model as row-child width division) ---
-function resolveColumnSizing(column) {
+// A column's 'shrink' width (see FlexSize in nodes.ts) is the max natural/shrink-wrap width across
+// every colSpan-1 cell in that column (own resolved padding included) — the same
+// childCrossWidthInColumn() mechanism a column CHILD of a row/column group uses to hug its content,
+// just maxed over every row's cell instead of a single subtree. A colSpan>1 cell doesn't contribute
+// to any one column — there's no unambiguous way to attribute a spanning cell's width to one of the
+// columns it spans (mirroring the simplification resolveCellSpans() already makes elsewhere for
+// spans) — so a column whose only cells all span >1 column falls back to 0 (effectively invisible
+// unless some other column's content forces the table wider). A `'header'` row's `.content` form
+// (full-width group bar, not per-column) never contributes either; its `.cells` form does, same as
+// an ordinary data row.
+function columnNaturalWidth(column, columnIndex, rows, cellPadding, boundWidth) {
+    let max = 0;
+    for (const row of rows) {
+        const cells = row.cells;
+        if (cells === undefined)
+            continue;
+        cells.forEach((cell, i) => {
+            const resolvedCol = cell.__resolvedCol ?? i;
+            if (resolvedCol !== columnIndex || (cell.colSpan ?? 1) !== 1)
+                return;
+            const padding = cell.padding ?? column.padding ?? cellPadding;
+            const availableWidth = Math.max(0, boundWidth - 2 * padding);
+            const natural = childCrossWidthInColumn(requireContent(cell), availableWidth);
+            max = Math.max(max, natural + 2 * padding);
+        });
+    }
+    return max;
+}
+function resolveColumnSizing(column, columnIndex, rows, cellPadding, boundWidth) {
     const flex = column.width;
+    if (flex === 'shrink')
+        return { kind: 'fixed', size: columnNaturalWidth(column, columnIndex, rows, cellPadding, boundWidth) };
     if (typeof flex === 'string')
         return { kind: 'fixed', size: Number.parseFloat(flex) };
     return { kind: 'flex', weight: flex ?? 1 };
 }
-// Exported for table/dom.ts's and table/pdf.ts's border-line positions.
-export function resolveColumnWidths(columns, width) {
-    return resolveFlexWidths(columns.map(resolveColumnSizing), width);
+// Exported for table/dom.ts's and table/pdf.ts's border-line positions, and for the xlsx exporter
+// (which reuses this real implementation — unlike generateDocx()'s deliberately DOM/pretext-free
+// reimplementation, resolveColumnWidthsPx() in docx-export.ts, which can't compute a 'shrink' width
+// and falls back to an equal flex-grow weight instead, with a one-time console warning).
+export function resolveColumnWidths(node, width) {
+    const cellPadding = node.cellPadding ?? 0;
+    const sizing = node.columns.map((c, i) => resolveColumnSizing(c, i, node.rows, cellPadding, width));
+    return resolveFlexWidths(sizing, width);
 }
 function sumRange(values, start, end) {
     let sum = 0;
@@ -209,19 +244,19 @@ function isAtomicWithNext(row) {
     return row.kind !== 'header' && (row.__atomicWithNext ?? false);
 }
 export function measureTableHeight(node, width) {
-    const colWidths = resolveColumnWidths(node.columns, width);
+    const colWidths = resolveColumnWidths(node, width);
     const cellPadding = node.cellPadding ?? 0;
     return resolveRowHeights(node.rows, node.columns, colWidths, cellPadding).reduce((a, b) => a + b, 0);
 }
 export function layoutTable(node, width) {
-    const colWidths = resolveColumnWidths(node.columns, width);
+    const colWidths = resolveColumnWidths(node, width);
     const cellPadding = node.cellPadding ?? 0;
     const rows = layoutRows(node.rows, node.columns, colWidths, cellPadding);
     const height = rows.reduce((acc, r) => acc + r.box.height, 0);
     return { type: 'table', box: { x: 0, y: 0, width, height }, node, rows };
 }
 export function splitTable(node, width, availableHeight) {
-    const colWidths = resolveColumnWidths(node.columns, width);
+    const colWidths = resolveColumnWidths(node, width);
     const cellPadding = node.cellPadding ?? 0;
     const headerRows = node.headerRows ?? 0;
     const headerBlock = node.rows.slice(0, headerRows);

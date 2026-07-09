@@ -5,12 +5,40 @@
 import type { RenderedNode, RenderedTableCell, RenderedTableRow } from '../../core/geometry.ts'
 import { drawPdfNode } from '../../core/behavior.ts'
 import type { PdfRenderCtx } from '../../core/behavior.ts'
-import type { TableNode } from '../../core/nodes.ts'
-import { pxToPt, resolvePdfColor, toPdfRect } from '../../render/pdf-render.ts'
+import type { LineStyle, TableNode } from '../../core/nodes.ts'
+import { applyLineStyle, pxToPt, resetLineStyle, resolvePdfColor, toPdfRect } from '../../render/pdf-render.ts'
 import { BORDER_EPSILON, subtractIntervals } from '../../render/interval-utils.ts'
 import { resolveColumnWidths } from './layout.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'table' }>
+
+// 'solid' fills a rect directly (exact geometry, matches every segment's own straddle-avoided
+// extent flush). 'dashed'/'dotted' can't be filled — no gaps — so they stroke the segment's
+// centerline instead, same technique as separator.ts's own drawPdf.
+function drawGridSegment(
+  doc: PDFKit.PDFDocument,
+  orientation: 'horizontal' | 'vertical',
+  lineCoord: number,
+  segStart: number,
+  segEnd: number,
+  thickness: number,
+  color: string,
+  style: LineStyle,
+): void {
+  if (style === 'solid') {
+    const rect = orientation === 'horizontal' ? toPdfRect(segStart, lineCoord, segEnd - segStart, thickness) : toPdfRect(lineCoord, segStart, thickness, segEnd - segStart)
+    doc.rect(rect.x, rect.y, rect.width, rect.height).fill(color)
+    return
+  }
+  const thicknessPt = pxToPt(thickness)
+  const mid = lineCoord + thickness / 2
+  const start = orientation === 'horizontal' ? { x: pxToPt(segStart), y: pxToPt(mid) } : { x: pxToPt(mid), y: pxToPt(segStart) }
+  const end = orientation === 'horizontal' ? { x: pxToPt(segEnd), y: pxToPt(mid) } : { x: pxToPt(mid), y: pxToPt(segEnd) }
+  doc.lineWidth(thicknessPt)
+  applyLineStyle(doc, style, thicknessPt)
+  doc.moveTo(start.x, start.y).lineTo(end.x, end.y).stroke(color)
+  resetLineStyle(doc)
+}
 
 function drawTableBorders(
   ctx: PdfRenderCtx,
@@ -27,6 +55,7 @@ function drawTableBorders(
   const mode = node.border.mode ?? 'all'
   const thickness = node.border.thickness ?? 1
   const color = resolvePdfColor(node.border.color ?? '#000000')
+  const style = node.border.style ?? 'solid'
   const doc = ctx.pdf.doc
 
   const outerH = mode === 'all' || mode === 'outer' || mode === 'horizontal'
@@ -64,10 +93,7 @@ function drawTableBorders(
   for (const lineY of hYs) {
     const straddling = cellBoxes.filter(b => b.top < lineY - BORDER_EPSILON && lineY + BORDER_EPSILON < b.bottom)
     const segments = subtractIntervals([tableLeft, tableRight], straddling.map(b => [b.left, b.right] as const))
-    for (const [segStart, segEnd] of segments) {
-      const rect = toPdfRect(segStart, lineY, segEnd - segStart, thickness)
-      doc.rect(rect.x, rect.y, rect.width, rect.height).fill(color)
-    }
+    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'horizontal', lineY, segStart, segEnd, thickness, color, style)
   }
 
   const vXs: number[] = []
@@ -79,10 +105,7 @@ function drawTableBorders(
     const straddling = cellBoxes.filter(b => b.left < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < b.right)
     const headerHoles = tableLeft < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < tableRight ? headerRowVRanges : []
     const segments = subtractIntervals([tableTop, tableBottom], [...straddling.map(b => [b.top, b.bottom] as const), ...headerHoles])
-    for (const [segStart, segEnd] of segments) {
-      const rect = toPdfRect(lineX, segStart, thickness, segEnd - segStart)
-      doc.rect(rect.x, rect.y, rect.width, rect.height).fill(color)
-    }
+    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'vertical', lineX, segStart, segEnd, thickness, color, style)
   }
 }
 
@@ -90,7 +113,7 @@ export async function drawTableNode(rendered: Rendered, x: number, y: number, ct
   const node = rendered.node
   const { originX, originY } = ctx
   const doc = ctx.pdf.doc
-  const colWidths = resolveColumnWidths(node.columns, rendered.box.width)
+  const colWidths = resolveColumnWidths(node, rendered.box.width)
   const colX: number[] = []
   let acc = 0
   for (const w of colWidths) {
@@ -113,7 +136,10 @@ export async function drawTableNode(rendered: Rendered, x: number, y: number, ct
     for (const cell of cells) {
       if (cell.border === undefined) continue
       const rect = toPdfRect(originX + cell.box.x, originY + cell.box.y, cell.box.width, cell.box.height)
-      doc.rect(rect.x, rect.y, rect.width, rect.height).lineWidth(pxToPt(cell.border.thickness ?? 1)).stroke(resolvePdfColor(cell.border.color ?? '#000000'))
+      const thicknessPt = pxToPt(cell.border.thickness ?? 1)
+      applyLineStyle(doc, cell.border.style, thicknessPt)
+      doc.rect(rect.x, rect.y, rect.width, rect.height).lineWidth(thicknessPt).stroke(resolvePdfColor(cell.border.color ?? '#000000'))
+      resetLineStyle(doc)
     }
   }
 

@@ -32,6 +32,13 @@ function warnChartUnsupportedOnce() {
     warnedChartUnsupported = true;
     console.warn('[paginator] generateDocx(): chart rendering needs a browser (DOM + OffscreenCanvas) to rasterize — skipping in this environment.');
 }
+let warnedShrinkUnsupported = false;
+function warnShrinkUnsupportedOnce() {
+    if (warnedShrinkUnsupported)
+        return;
+    warnedShrinkUnsupported = true;
+    console.warn('[paginator] generateDocx(): \'shrink\' sizing (a row child\'s flex or a TableColumn\'s width) needs the DOM/pretext measurement this exporter deliberately avoids pulling in — falling back to an equal flex-grow weight.');
+}
 let warnedPageBackground = false;
 function warnPageBackgroundOnce() {
     if (warnedPageBackground)
@@ -59,6 +66,10 @@ function rowChildSizing(node) {
     if (node.type === 'page-break')
         return { kind: 'fixed', size: 0 };
     const flex = 'flex' in node ? node.flex : undefined;
+    if (flex === 'shrink') {
+        warnShrinkUnsupportedOnce();
+        return { kind: 'flex', weight: 1 };
+    }
     if (flex === undefined && 'width' in node && node.width !== undefined)
         return { kind: 'fixed', size: node.width };
     if (typeof flex === 'string')
@@ -130,7 +141,7 @@ function separatorParagraph(node) {
         // run size) on top of whatever margin/gap surrounds it, reading as an extra blank line next to
         // what should just be a thin rule.
         spacing: { before: pxToTwip(margin), after: pxToTwip(margin), line: pxToTwip(Math.max(node.thickness ?? 1, 1)), lineRule: LineRuleType.EXACT },
-        border: { bottom: { style: BorderStyle.SINGLE, size, color: resolveExportColor(node.color ?? '#000000') } },
+        border: { bottom: { style: docxBorderStyle(node.style), size, color: resolveExportColor(node.color ?? '#000000') } },
     });
 }
 function imageTypeFromMime(mime) {
@@ -247,8 +258,11 @@ async function chartNodeParagraph(node, availableWidthPx) {
 // --- Border/shading helpers shared by the table(), row-as-table, and container-as-table paths ---
 const NONE_BORDER = { style: BorderStyle.NONE };
 const NO_CELL_BORDERS = { top: NONE_BORDER, bottom: NONE_BORDER, left: NONE_BORDER, right: NONE_BORDER };
-function borderOption(thicknessPx, color) {
-    return { style: BorderStyle.SINGLE, size: Math.min(96, Math.max(2, Math.round(thicknessPx * 6))), color: resolveExportColor(color) };
+function docxBorderStyle(style) {
+    return style === 'dashed' ? BorderStyle.DASHED : style === 'dotted' ? BorderStyle.DOTTED : BorderStyle.SINGLE;
+}
+function borderOption(thicknessPx, color, style = BorderStyle.SINGLE) {
+    return { style, size: Math.min(96, Math.max(2, Math.round(thicknessPx * 6))), color: resolveExportColor(color) };
 }
 function cellBorders(sides, style) {
     return {
@@ -338,7 +352,7 @@ async function rowGroupToTable(node, widthPx) {
         const isLast = i === node.children.length - 1;
         const blocks = child.type === 'separator' ? [] : await nodeToBlocks(child, width);
         const borders = child.type === 'separator'
-            ? { ...NO_CELL_BORDERS, right: borderOption(separatorMainSize(child), child.color ?? '#000000') }
+            ? { ...NO_CELL_BORDERS, right: borderOption(separatorMainSize(child), child.color ?? '#000000', docxBorderStyle(child.style)) }
             : NO_CELL_BORDERS;
         return new DocxTableCell({
             children: blocks.length > 0 ? blocks : [new Paragraph({})],
@@ -364,7 +378,7 @@ async function containerToTable(node, widthPx) {
     const padding = typeof node.padding === 'number' ? { top: node.padding, right: node.padding, bottom: node.padding, left: node.padding } : (node.padding ?? { top: 0, right: 0, bottom: 0, left: 0 });
     const innerWidth = Math.max(0, width - padding.left - padding.right);
     const blocks = await nodeToBlocks(node.child, innerWidth);
-    const border = node.border !== undefined ? borderOption(node.border.thickness ?? 1, node.border.color ?? '#000000') : NONE_BORDER;
+    const border = node.border !== undefined ? borderOption(node.border.thickness ?? 1, node.border.color ?? '#000000', docxBorderStyle(node.border.style)) : NONE_BORDER;
     const cell = new DocxTableCell({
         children: blocks.length > 0 ? blocks : [new Paragraph({})],
         width: { size: pxToTwip(width), type: WidthType.DXA },
@@ -396,7 +410,7 @@ async function tableNodeToTable(node, widthPx) {
     const columnCount = node.columns.length;
     const totalRows = node.rows.length;
     const mode = node.border === undefined ? 'none' : (node.border.mode ?? 'all');
-    const tableBorderOption = borderOption(node.border?.thickness ?? 1, node.border?.color ?? '#000000');
+    const tableBorderOption = borderOption(node.border?.thickness ?? 1, node.border?.color ?? '#000000', docxBorderStyle(node.border?.style));
     const colWidthsPx = resolveColumnWidthsPx(node, widthPx);
     const colWidthsTwip = colWidthsPx.map(pxToTwip);
     const tableCellPadding = node.cellPadding ?? 0;
@@ -448,7 +462,9 @@ async function docxRow(cells, row, r, totalRows, columnCount, colWidthsPx, mode,
         const rowEnd = r + rowSpan - 1;
         const widthPx = colWidthsPx.slice(colStart, colEnd + 1).reduce((a, b) => a + b, 0);
         const sides = borderSides(mode, r, rowEnd, colStart, colEnd, totalRows, columnCount);
-        const borders = cell.border !== undefined ? cellBorders({ top: true, bottom: true, left: true, right: true }, borderOption(cell.border.thickness ?? 1, cell.border.color ?? '#000000')) : cellBorders(sides, tableBorderOption);
+        const borders = cell.border !== undefined
+            ? cellBorders({ top: true, bottom: true, left: true, right: true }, borderOption(cell.border.thickness ?? 1, cell.border.color ?? '#000000', docxBorderStyle(cell.border.style)))
+            : cellBorders(sides, tableBorderOption);
         const padding = cell.padding ?? columns[colStart]?.padding ?? tableCellPadding;
         const blocks = cell.content !== undefined ? await nodeToBlocks(cell.content, Math.max(0, widthPx - 2 * padding)) : [];
         return new DocxTableCell({
@@ -467,6 +483,10 @@ async function docxRow(cells, row, r, totalRows, columnCount, colWidthsPx, mode,
 function resolveColumnWidthsPx(node, widthPx) {
     const sizing = node.columns.map(column => {
         const width = column.width;
+        if (width === 'shrink') {
+            warnShrinkUnsupportedOnce();
+            return { kind: 'flex', weight: 1 };
+        }
         if (typeof width === 'string')
             return { kind: 'fixed', size: Number.parseFloat(width) };
         return { kind: 'flex', weight: width ?? 1 };

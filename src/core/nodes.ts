@@ -110,8 +110,10 @@ export type SelfAlignable = { alignSelf?: CrossAlign }
 // Main-axis sizing hint for a ROW group's direct children (row width division only — column
 // children keep intrinsic/content-driven height always, since pagination depends on that). A
 // plain number is a flex-grow-style weight (default 1, so children are equal-width columns by
-// default); a `"Npx"` string is a fixed size that opts out of flexing entirely.
-export type FlexSize = number | `${number}px`
+// default); a `"Npx"` string is a fixed size that opts out of flexing entirely; `'shrink'` is also
+// a fixed size, but computed from the child's own natural/shrink-wrap width (same mechanism as
+// column shrink-wrap sizing) instead of an authored pixel value — see "Row flex sizing" in GUIDE.md.
+export type FlexSize = number | `${number}px` | 'shrink'
 
 // Off by default — no node responds to hover/click/drag unless explicitly opted in. Not inherited:
 // a group being interactive does not make its children interactive, and vice versa. attachInteractions()
@@ -263,6 +265,8 @@ export type SeparatorNode = Interactive & {
   color?: string
   /** px reserved on each side along the parent's main axis */
   margin?: number
+  /** Line style. Default 'solid' */
+  style?: LineStyle
 }
 
 // A flow-control marker, not visible content: forces the pagination cursor to the top of the next
@@ -325,7 +329,12 @@ export type SvgNode = Interactive & SelfAlignable & {
   flex?: FlexSize
 }
 
-export type ContainerBorder = { thickness?: number; color?: string }
+/** Shared by every line/border-drawing field in this file (SeparatorNode.style, ContainerBorder,
+ *  TableNode.border) — one line-style vocabulary so a document author never has to remember a
+ *  different set of keywords per node type. */
+export type LineStyle = 'solid' | 'dashed' | 'dotted'
+
+export type ContainerBorder = { thickness?: number; color?: string; style?: LineStyle }
 
 // A single-child decorative wrapper (Flutter's Container) — the paint group deliberately never
 // has: background/border/borderRadius/padding. Unlike group, it never lays out multiple children;
@@ -995,8 +1004,10 @@ export type TableNode = Interactive & {
    *  that level, or this, opts out). */
   repeatGroupHeaders?: boolean
   /** Omitted entirely = no borders (same as `{mode: 'none'}`). `mode` defaults to 'all' when the
-   *  object is present but `mode` isn't specified. */
-  border?: { mode?: TableBorderMode; thickness?: number; color?: string }
+   *  object is present but `mode` isn't specified. `style` defaults to `'solid'` — see
+   *  `LineStyle`; applies to every grid line this mode draws, table-wide (an individual cell's own
+   *  `TableCell.border` sets its own style independently via `ContainerBorder.style`). */
+  border?: { mode?: TableBorderMode; thickness?: number; color?: string; style?: LineStyle }
   cellPadding?: number // default 0, reserved on all 4 sides inside every cell box
   /** Alternating row background, desugared entirely at table() build time into per-row
    *  `background` (table-layout.ts never knows striping happened, same architecture as `groups`).

@@ -1,5 +1,5 @@
 import type { PaginatedResult } from '../core/paginate.js';
-import type { ImageNode, ObjectFit } from '../core/nodes.js';
+import type { ImageNode, LineStyle, ObjectFit } from '../core/nodes.js';
 import type { FontRegistry, RegisteredFont } from './font-registry.js';
 export type PdfMetadata = {
     title?: string;
@@ -28,6 +28,8 @@ export declare function toPdfRect(xPx: number, yPx: number, wPx: number, hPx: nu
     width: number;
     height: number;
 };
+export declare function applyLineStyle(doc: PDFKit.PDFDocument, style: LineStyle | undefined, thicknessPt: number): void;
+export declare function resetLineStyle(doc: PDFKit.PDFDocument): void;
 export declare function resolvePdfColor(css: string): string;
 export declare function resolveObjectFitRects(mode: ObjectFit, iw: number, ih: number, bw: number, bh: number): {
     sx: number;

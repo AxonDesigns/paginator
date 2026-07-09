@@ -18,7 +18,7 @@ import '../src/nodes/table/index.ts'
 import '../src/nodes/chart/index.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from '../src/core/behavior.ts'
 import { chart, container, group, image, pageBreak, separator, table } from '../src/core/nodes.ts'
-import type { RenderedNode } from '../src/core/geometry.ts'
+import type { RenderedNode, RenderedTableRow } from '../src/core/geometry.ts'
 import { estimateChartTextWidth, estimateTextWidth, normalizeChartText, squarifyTreemap, wrapChartTextToWidth } from '../src/render/chart-geometry.ts'
 
 describe('image', () => {
@@ -48,6 +48,10 @@ describe('separator', () => {
 
   test('is not splittable', () => {
     expect(isSplittable(separator())).toBe(false)
+  })
+
+  test('style does not affect measureHeight (thickness/margin still drive main-axis size)', () => {
+    expect(measureNodeHeight(separator({ thickness: 3, margin: 5, style: 'dotted' }), 100)).toBe(13)
   })
 })
 
@@ -591,6 +595,32 @@ describe('group (row)', () => {
     expect(isSplittable(plain)).toBe(false)
     expect(isSplittable(splittable)).toBe(true)
   })
+
+  test('flex: "shrink" claims a child\'s own natural width instead of an equal flex-grow share', () => {
+    const node = group({ direction: 'row' }, [
+      image({ src: 'a.png', width: 40, height: 10, flex: 'shrink' }),
+      // an image's own `width` claims a FIXED row-slot size when `flex` is left unset (see "Row
+      // flex sizing" in GUIDE.md) — `flex: 1` here forces it flexible instead, to prove 'shrink'
+      // opts ITS sibling out of that same default equal-share behavior.
+      image({ src: 'b.png', width: 10, height: 10, flex: 1 }),
+    ])
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(40)
+    expect(rendered.children[1]!.box.width).toBe(160)
+  })
+
+  test('flex: "shrink" children count as fixed-size, so mainAlign: "center" has free space to center them', () => {
+    const node = group({ direction: 'row', mainAlign: 'center' }, [
+      image({ src: 'a.png', width: 40, height: 10, flex: 'shrink' }),
+      image({ src: 'b.png', width: 20, height: 10, flex: 'shrink' }),
+    ])
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
+    // total content width 60px inside a 200px row -> 70px leading offset to center it
+    expect(rendered.children[0]!.box.x).toBe(70)
+    expect(rendered.children[0]!.box.width).toBe(40)
+    expect(rendered.children[1]!.box.x).toBe(110)
+    expect(rendered.children[1]!.box.width).toBe(20)
+  })
 })
 
 describe('table', () => {
@@ -618,6 +648,49 @@ describe('table', () => {
     const rendered = outcome!.rendered as Extract<RenderedNode, { type: 'table' }>
     expect(rendered.rows).toHaveLength(2)
     expect((outcome!.rest as { rows: unknown[] }).rows).toHaveLength(3)
+  })
+
+  test('column width: "shrink" sizes to the widest colSpan-1 cell in that column; a flex sibling takes the rest', () => {
+    const node = table({
+      columns: [{ width: 'shrink' }, { width: 'shrink' }, {}],
+      cellPadding: 4,
+      rows: [
+        {
+          cells: [
+            { content: image({ src: 'a.png', width: 40, height: 10 }) },
+            { content: image({ src: 'b.png', width: 90, height: 10 }) },
+            { content: image({ src: 'c.png', width: 10, height: 10 }) },
+          ],
+        },
+        {
+          cells: [
+            { content: image({ src: 'd.png', width: 20, height: 10 }) },
+            { content: image({ src: 'e.png', width: 200, height: 10 }) }, // widest in column 1
+            { content: image({ src: 'f.png', width: 10, height: 10 }) },
+          ],
+        },
+      ],
+    })
+    const rendered = layoutNodeFull(node, 600) as Extract<RenderedNode, { type: 'table' }>
+    const row0 = rendered.rows[0] as Extract<RenderedTableRow, { kind: 'cells' }>
+    // col 0: widest cell content is 40px + 2*4 padding = 48; col 1: 200 + 8 = 208; col 2 (flex) takes the 344px remainder.
+    expect(row0.cells[0]!.box.width).toBe(48)
+    expect(row0.cells[1]!.box.width).toBe(208)
+    expect(row0.cells[2]!.box.width).toBe(344)
+  })
+
+  test('column width: "shrink" ignores colSpan>1 cells when measuring a column\'s natural width', () => {
+    const node = table({
+      columns: [{ width: 'shrink' }, {}],
+      rows: [
+        { cells: [{ content: image({ src: 'a.png', width: 999, height: 10 }), colSpan: 2 }] },
+        { cells: [{ content: image({ src: 'b.png', width: 30, height: 10 }) }, { content: image({ src: 'c.png', width: 10, height: 10 }) }] },
+      ],
+    })
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'table' }>
+    const row1 = rendered.rows[1] as Extract<RenderedTableRow, { kind: 'cells' }>
+    // the colSpan-2 cell on row 0 never contributes to column 0's shrink width — only the 30px cell does.
+    expect(row1.cells[0]!.box.width).toBe(30)
   })
 
   test('headerRows repeat on the continuation table', () => {

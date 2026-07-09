@@ -52,15 +52,29 @@ function layoutGroupNode(node: GroupNode, width: number): Rendered {
   return { type: 'group', box: { x: 0, y: 0, width, height: result.contentHeight }, node, children }
 }
 
-// --- Row main-axis sizing: fixed (px flex) vs flexible (numeric weight, default 1) ---
+// --- Row main-axis sizing: fixed (px flex, or 'shrink') vs flexible (numeric weight, default 1) ---
 
-function resolveRowChildSizing(node: Node): RowChildSizing {
-  if (node.type === 'separator') return { kind: 'fixed', size: separatorMainSize(node) }
-  if (node.type === 'page-break') return { kind: 'fixed', size: 0 } // inert as a row column — see nodes.ts
+// Fixed-vs-flex classification only — doesn't need an available width, since 'shrink' is fixed
+// regardless of what its resolved pixel size turns out to be. Kept separate from
+// resolveRowChildSizing() so rowHasFlexChild() (called from shrinkWrapWidth() while resolving some
+// OTHER 'shrink' child's size) never has to thread a width through just to answer "fixed or flex?".
+function rowChildKind(node: Node): RowChildSizing['kind'] {
+  if (node.type === 'separator' || node.type === 'page-break') return 'fixed' // page-break inert as a row column — see nodes.ts
   const flex = node.flex
+  if (flex === 'shrink') return 'fixed'
   // `width` doubles as this node's row-slot size when `flex` is left unset — the same value that
   // already governs its size in a column/shrink-wrap context now works unchanged as a row child too,
   // so `flex: 'Npx'` is only needed to override `width` or to opt into flex-grow weighting.
+  if (flex === undefined && 'width' in node && node.width !== undefined) return 'fixed'
+  if (typeof flex === 'string') return 'fixed'
+  return 'flex'
+}
+
+function resolveRowChildSizing(node: Node, availableWidth: number): RowChildSizing {
+  if (node.type === 'separator') return { kind: 'fixed', size: separatorMainSize(node) }
+  if (node.type === 'page-break') return { kind: 'fixed', size: 0 }
+  const flex = node.flex
+  if (flex === 'shrink') return { kind: 'fixed', size: shrinkWrapWidth(node, availableWidth) }
   if (flex === undefined && 'width' in node && node.width !== undefined) return { kind: 'fixed', size: node.width }
   if (typeof flex === 'string') return { kind: 'fixed', size: Number.parseFloat(flex) }
   return { kind: 'flex', weight: flex ?? 1 }
@@ -78,8 +92,8 @@ function childAlignSelf(node: Node): CrossAlign | undefined {
 // columns would redistribute to fill the gap and the column grid would drift out of alignment
 // with the same row's rendering on the previous page. Reproducing the ORIGINAL sizing (fixed px,
 // or the same flex weight) rather than defaulting to flex: 1 is what keeps the width identical.
-function emptyContinuationFor(node: Node): GroupNode {
-  const sizing = resolveRowChildSizing(node)
+function emptyContinuationFor(node: Node, width: number): GroupNode {
+  const sizing = resolveRowChildSizing(node, width)
   const flex: FlexSize = sizing.kind === 'fixed' ? `${sizing.size}px` : sizing.weight
   return { type: 'group', direction: 'column', flex, children: [] }
 }
@@ -89,13 +103,13 @@ function emptyContinuationFor(node: Node): GroupNode {
 // child has no natural size of its own — flexible children always expand to fill whatever width
 // they're offered — so such a row "wants" the full width offered to it, not a content-derived sum.
 function rowHasFlexChild(node: GroupNode): boolean {
-  return node.children.some(c => resolveRowChildSizing(c).kind === 'flex')
+  return node.children.some(c => rowChildKind(c) === 'flex')
 }
 
 function sumFixedRowWidth(node: GroupNode, width: number): number {
   const gap = node.gap ?? 0
   const sum = node.children.reduce((acc, c) => {
-    const sizing = resolveRowChildSizing(c)
+    const sizing = resolveRowChildSizing(c, width)
     return acc + (sizing.kind === 'fixed' ? sizing.size : 0)
   }, 0)
   return Math.min(sum + gap * Math.max(0, node.children.length - 1), width)
@@ -104,13 +118,11 @@ function sumFixedRowWidth(node: GroupNode, width: number): number {
 // --- Cross/main width contribution helpers (shrink-wrap sizing for NESTED subtrees only — the
 // direct children of an actual row's own layout are sized by the flex algorithm in layoutRow) ---
 
-// Exported because table/layout.ts also needs it, for shrink-wrap cell content width when a cell's
-// horizontal alignment isn't 'stretch'.
-export function childCrossWidthInColumn(node: Node, width: number): number {
-  // An explicit per-child override (see SelfAlignable in nodes.ts) always wins over every type's own
-  // shrink-wrap logic below — the same short-circuit an ancestor's `crossAlign: 'stretch'` already
-  // gets one level up, just scoped to this one child instead of every sibling.
-  if (childAlignSelf(node) === 'stretch') return width
+// The actual shrink-wrap computation, shared by childCrossWidthInColumn() (a column's cross-axis
+// width for a nested child) and resolveRowChildSizing()'s 'shrink' case (a row's main-axis width for
+// a child opting out of flex-grow) — both questions reduce to "how wide does this subtree want to be,
+// unconstrained by a stretching ancestor?".
+function shrinkWrapWidth(node: Node, width: number): number {
   if (node.type === 'group') {
     if (node.direction === 'row') {
       return rowHasFlexChild(node) ? width : sumFixedRowWidth(node, width)
@@ -126,6 +138,16 @@ export function childCrossWidthInColumn(node: Node, width: number): number {
   // Every other type's shrink-wrap width (or "wants the full width", the default when a type
   // registers no `naturalWidth`) — see behavior.ts's naturalWidth() dispatcher.
   return naturalWidth(node, width)
+}
+
+// Exported because table/layout.ts also needs it, for shrink-wrap cell content width when a cell's
+// horizontal alignment isn't 'stretch'.
+export function childCrossWidthInColumn(node: Node, width: number): number {
+  // An explicit per-child override (see SelfAlignable in nodes.ts) always wins over every type's own
+  // shrink-wrap logic below — the same short-circuit an ancestor's `crossAlign: 'stretch'` already
+  // gets one level up, just scoped to this one child instead of every sibling.
+  if (childAlignSelf(node) === 'stretch') return width
+  return shrinkWrapWidth(node, width)
 }
 
 // --- Main-axis free-space distribution (shared shape between row and column) ---
@@ -202,7 +224,7 @@ export function layoutRow(node: GroupNode, width: number): DirectionLayoutResult
   // Two-pass sizing: fixed-size children (separators, and any px `flex`) claim their exact size
   // first; whatever width remains is divided among flexible children (default flex: 1, i.e. equal
   // columns) proportional to their weight — the same two-pass model CSS flex-grow uses.
-  const sizing = node.children.map(resolveRowChildSizing)
+  const sizing = node.children.map(c => resolveRowChildSizing(c, width - totalGap))
   const totalFlexWeight = sizing.reduce((acc, s) => acc + (s.kind === 'flex' ? s.weight : 0), 0)
   const widths = resolveFlexWidths(sizing, width - totalGap)
 
@@ -338,7 +360,7 @@ function rowGroupSplit(node: GroupNode, width: number, availableHeight: number):
       // siblings redistribute into its space on the continuation page.
       fitted.push(layoutResolvedChild(child.node, box, 'row'))
       rowConsumedHeight = Math.max(rowConsumedHeight, box.height)
-      restChildren.push(emptyContinuationFor(child.node))
+      restChildren.push(emptyContinuationFor(child.node, width))
       continue
     }
 
@@ -351,7 +373,7 @@ function rowGroupSplit(node: GroupNode, width: number, availableHeight: number):
           restChildren.push(childSplit.rest)
           anyoneContinues = true
         } else {
-          restChildren.push(emptyContinuationFor(child.node))
+          restChildren.push(emptyContinuationFor(child.node, width))
         }
         continue
       }

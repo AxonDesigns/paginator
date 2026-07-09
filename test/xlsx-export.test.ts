@@ -4,7 +4,7 @@
 // structural + styling correctness with no browser required.
 import { describe, expect, test } from 'bun:test'
 import ExcelJS from 'exceljs'
-import { container, definePage, group, richText, rowGroup, table, text } from '../src/core/nodes.ts'
+import { container, definePage, group, image, richText, rowGroup, table, text } from '../src/core/nodes.ts'
 import type { TableColumn, TableRow } from '../src/core/nodes.ts'
 import { generateXlsx } from '../src/export/xlsx-export.ts'
 
@@ -64,6 +64,28 @@ describe('generateXlsx', () => {
     const doc = definePage(PAGE, outer)
     const workbook = await loadWorkbook(await generateXlsx(doc))
     expect(workbook.worksheets).toHaveLength(2)
+  })
+
+  // Uses image() cells rather than text() deliberately — a 'shrink' column reuses the SAME real
+  // resolveColumnWidths() layoutTable does (unlike generateDocx()'s DOM/pretext-free
+  // reimplementation), so text content here would pull in pretext's canvas-based measurement, which
+  // this file's own header comment already flags as unavailable under `bun test`.
+  test('column width: "shrink" sizes an Excel column to its widest colSpan-1 cell', async () => {
+    const t = table({
+      columns: [{ width: 'shrink' }, { width: 'shrink' }],
+      rows: [
+        { cells: [{ content: image({ src: 'a.png', width: 40, height: 10 }) }, { content: image({ src: 'b.png', width: 200, height: 10 }) }] },
+        { cells: [{ content: image({ src: 'c.png', width: 10, height: 10 }) }, { content: image({ src: 'd.png', width: 20, height: 10 }) }] },
+      ],
+    })
+    const doc = definePage(PAGE, t)
+    const workbook = await loadWorkbook(await generateXlsx(doc))
+    const columns = workbook.worksheets[0]!.columns
+    // Excel column width is in character units (px/7, floored at 4) — column 1's widest cell (200px)
+    // should come out visibly wider than column 0's (40px), proportional to their pixel widths.
+    expect(columns[1]!.width!).toBeGreaterThan(columns[0]!.width!)
+    expect(columns[0]!.width!).toBeCloseTo(40 / 7, 0)
+    expect(columns[1]!.width!).toBeCloseTo(200 / 7, 0)
   })
 
   test('column grouping (header/totals) and stripe desugar into plain rows the exporter reads directly', async () => {

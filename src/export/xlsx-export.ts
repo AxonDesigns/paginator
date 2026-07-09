@@ -175,7 +175,7 @@ function writeCell(
 
 function writeTableSheet(sheet: ExcelJS.Worksheet, table: TableNode, contentWidthPx: number): void {
   const columnCount = table.columns.length
-  const colWidthsPx = resolveColumnWidths(table.columns, contentWidthPx)
+  const colWidthsPx = resolveColumnWidths(table, contentWidthPx)
   sheet.columns = colWidthsPx.map(w => ({ width: pxToExcelWidth(w) }))
 
   const totalRows = table.rows.length
