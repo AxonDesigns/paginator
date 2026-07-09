@@ -54,6 +54,7 @@ export type RenderedNode = {
     type: 'separator';
     box: Box;
     node: SeparatorNode;
+    orientation: 'horizontal' | 'vertical';
 } | {
     type: 'group';
     box: Box;

@@ -409,14 +409,14 @@ const doc = definePage(
   },
   group({ direction: 'column', gap: 16 }, [
     text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30 }),
-    separator({ thickness: 1, color: '#dddddd' }),
+    separator({ thickness: 1, margin: 0, color: '#dddddd' }),
     text({ content: longParagraph1, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     group({ direction: 'row', mainAlign: 'space-between', crossAlign: 'stretch', gap: 12 }, [
       // Fixed (px) flex opts these out of the row's default equal-column sizing, so they hug
       // their own content width and let `space-between` spread the leftover space between them —
       // the same look the row had before explicit sizing existed, now expressed explicitly.
       text({ content: 'Prepared by: Jane Doe', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: '150px' }),
-      separator({ thickness: 1, color: '#cccccc' }),
+      separator({ margin: 4, color: '#cccccc' }),
       text({ content: 'Date: 2026-07-01', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: '120px' }),
       separator({ thickness: 1, color: '#cccccc' }),
       text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: '#2a7a2a', flex: '100px' }),

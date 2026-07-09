@@ -25,7 +25,11 @@ export type RenderedTableRow =
 export type RenderedNode =
   | { type: 'text'; box: Box; node: TextNode; lines: PositionedLine[] }
   | { type: 'richText'; box: Box; node: RichTextNode; lines: PositionedRichLine[] }
-  | { type: 'separator'; box: Box; node: SeparatorNode }
+  // `orientation` tells the renderer which axis holds `thickness + 2*margin` so it can inset the
+  // painted line by `margin` on that axis alone — 'horizontal' for a column child (rule spans full
+  // width, thickness+margin along height), 'vertical' for a row child (divider spans full height,
+  // thickness+margin along width). See separator.ts's top-of-file comment for the two cases.
+  | { type: 'separator'; box: Box; node: SeparatorNode; orientation: 'horizontal' | 'vertical' }
   | { type: 'group'; box: Box; node: GroupNode; children: RenderedNode[] }
   | { type: 'page-break'; box: Box; node: PageBreakNode }
   | { type: 'image'; box: Box; node: ImageNode }

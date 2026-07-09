@@ -21,14 +21,14 @@ const EPSILON = 0.01;
 // so calling it here for a ROW separator would silently discard the row's stretched height. Use
 // the already-resolved box directly instead; there's no further "internal content" to compute for
 // a separator the way there is for text lines or nested group children.
-function layoutResolvedChild(node, box) {
+function layoutResolvedChild(node, box, parentDirection) {
     if (node.type === 'separator')
-        return { type: 'separator', box, node };
+        return { type: 'separator', box, node, orientation: parentDirection === 'row' ? 'vertical' : 'horizontal' };
     return translateRendered(layoutNodeFull(node, box.width), box.x, box.y);
 }
 function layoutGroupNode(node, width) {
     const result = node.direction === 'row' ? layoutRow(node, width) : layoutColumn(node, width);
-    const children = result.children.map(c => layoutResolvedChild(c.node, c.box));
+    const children = result.children.map(c => layoutResolvedChild(c.node, c.box, node.direction === 'row' ? 'row' : 'column'));
     return { type: 'group', box: { x: 0, y: 0, width, height: result.contentHeight }, node, children };
 }
 // --- Row main-axis sizing: fixed (px flex) vs flexible (numeric weight, default 1) ---
@@ -238,7 +238,7 @@ function columnGroupSplit(node, width, availableHeight) {
             continue;
         }
         if (!cutMade && childBottom <= availableHeight + EPSILON && !subtreeHasPageBreak(child.node)) {
-            fitted.push(layoutResolvedChild(child.node, child.box));
+            fitted.push(layoutResolvedChild(child.node, child.box, 'column'));
             consumedHeight = childBottom;
             continue;
         }
@@ -290,7 +290,7 @@ function rowGroupSplit(node, width, availableHeight) {
             // Whole column fits — finished. Still record a same-width placeholder in restChildren (used
             // only if some OTHER column keeps the row alive) so this slot doesn't collapse and let
             // siblings redistribute into its space on the continuation page.
-            fitted.push(layoutResolvedChild(child.node, box));
+            fitted.push(layoutResolvedChild(child.node, box, 'row'));
             rowConsumedHeight = Math.max(rowConsumedHeight, box.height);
             restChildren.push(emptyContinuationFor(child.node));
             continue;
