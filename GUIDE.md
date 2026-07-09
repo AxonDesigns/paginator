@@ -195,6 +195,7 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | `buildHitRegistry` | `(result: PaginatedResult) => HitRegistry` | Pure data, no DOM; what `attachInteractions` builds internally |
 | `hitTest` | `(registry, pageNumber, x, y) => InteractionTarget \| null` | Resolves via `interactive: true`, bubble-up |
 | `hitTestDroppable` | `(registry, pageNumber, x, y, dragTypes?: string[]) => InteractionTarget \| null` | Resolves via `droppable: true` + `accepts` filter, bubble-up |
+| `findById` | `(registry: HitRegistry, id: string) => InteractionTarget[]` | Identity lookup, not geometric — one entry per matching page/fragment, in page order |
 | `toTypeList` | `(value: string \| string[] \| undefined) => string[]` | Normalizes `dragType`/`accepts` shorthand |
 
 None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
@@ -206,9 +207,9 @@ embed no fonts of their own the way PDF does — see "Word/Excel export" below).
 ## Node type reference
 
 Every node type below also carries the shared `Interactive` fields: `interactive?`, `draggable?`,
-`droppable?`, `dragType?: string | string[]`, `accepts?: string[]`, `metadata?: Record<string,
-unknown>` — all `undefined`/off by default. See the "Interaction system" section for their
-semantics.
+`droppable?`, `dragType?: string | string[]`, `accepts?: string[]`, `id?: string`, `metadata?:
+Record<string, unknown>` — all `undefined`/off by default. See the "Interaction system" section
+for their semantics.
 
 ### `PageDef`
 | Field | Type | Notes |
@@ -1252,6 +1253,7 @@ hit registry.
 | `dragType?: string \| string[]` | which `accepts` lists this drag matches | Only meaningful with `draggable: true`. Unset = wildcard, matches any zone regardless of that zone's `accepts` |
 | `accepts?: string[]` | which drag types this zone matches | Only meaningful with `droppable: true`. Unset = accepts anything, including untyped drags |
 | `metadata?: Record<string, unknown>` | nothing — never read by paginator itself | Arbitrary caller data, along for the ride on `node`. Read it back off `InteractionTarget.node.metadata` in any event handler to recover app-specific context (e.g. a record id) without a side-table keyed by node identity |
+| `id?: string` | nothing directly — resolved via `findById()` | No uniqueness enforced (caller's responsibility). Splitting clones a node's continuation onto each new page, so one authored node with an `id` can produce several matches; `findById()` always returns an array, ordered by page |
 
 ### Bubble-up resolution — the core mechanism
 `hitTest()`/`hitTestDroppable()` (`src/interaction/hit-registry.ts`) find the deepest geometric
@@ -1270,6 +1272,11 @@ first node satisfying the relevant predicate (`interactive === true`, or
   hover/click/drag/drop target — resolved before the table itself is ever considered, with zero
   table-specific interaction API. A plain (non-interactive) cell's click bubbles up through the
   table the same way a plain group child's does.
+
+`findById()` is the non-geometric counterpart: instead of resolving a point, it walks the whole
+registry looking for nodes whose `id` matches, independent of `interactive`/`droppable`. Useful for
+things like a table of contents — build the registry once, then look up an authored `id` to find
+which page(s)/box(es) it landed on.
 
 ### Events (`InteractionEventMap`, via `controller.on(type, handler)`)
 | Event | Fires when | Key fields beyond `target`/`sourceEvent` |
@@ -1434,7 +1441,7 @@ src/
                                            chrome-out, decoupled from generatePdf() itself
   interaction/
     types.ts                         — InteractionTarget, all event payload types, InteractionController
-    hit-registry.ts                   — buildHitRegistry(), hitTest(), hitTestDroppable(), toTypeList()
+    hit-registry.ts                   — buildHitRegistry(), hitTest(), hitTestDroppable(), findById(), toTypeList()
     attach-interactions.ts             — attachInteractions(): pointer event state machine (hover/
                                           click/drag/drop, threshold, dragTypes, overDropTarget)
   export/                             — Word/Excel export (see "Word/Excel export" above) —

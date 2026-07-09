@@ -20,7 +20,14 @@ import { generateDocx as coreGenerateDocx, type DocxMetadata } from './export/do
 import { generateXlsx as coreGenerateXlsx, type XlsxMetadata } from './export/xlsx-export.ts'
 import { listRegisteredFonts as coreListRegisteredFonts, registerFont as coreRegisterFont, type FontRegistry, type FontStyle, type RegisteredFont } from './render/font-registry.ts'
 import { attachInteractions as coreAttachInteractions } from './interaction/attach-interactions.ts'
-import { buildHitRegistry as coreBuildHitRegistry, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList, type HitRegistry } from './interaction/hit-registry.ts'
+import {
+  buildHitRegistry as coreBuildHitRegistry,
+  findById as coreFindById,
+  hitTest as coreHitTest,
+  hitTestDroppable as coreHitTestDroppable,
+  toTypeList as coreToTypeList,
+  type HitRegistry,
+} from './interaction/hit-registry.ts'
 import type { AttachInteractionsOptions, InteractionController, InteractionTarget } from './interaction/types.ts'
 import { openPdfInNewTab as coreOpenPdfInNewTab, showPdfDialog as coreShowPdfDialog } from './render/pdf-view.ts'
 
@@ -65,6 +72,10 @@ export class Paginator {
 
   hitTestDroppable(registry: HitRegistry, pageNumber: number, x: number, y: number, dragTypes: string[] = []): InteractionTarget | null {
     return coreHitTestDroppable(registry, pageNumber, x, y, dragTypes)
+  }
+
+  findById(registry: HitRegistry, id: string): InteractionTarget[] {
+    return coreFindById(registry, id)
   }
 
   toTypeList(value: string | string[] | undefined): string[] {
