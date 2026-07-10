@@ -1307,15 +1307,27 @@ function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: 
 // Lives outside the shadow root (light DOM), so it's free to use a class name + external CSS
 // (`.no-print` in style.css) instead of the inline-styles-only rule that governs the paginated
 // document itself — that rule exists to isolate the document from host CSS, not this demo chrome.
-function demoButton(label: string, rightOffsetPx: number): HTMLButtonElement {
-  const button = document.createElement('button')
-  button.textContent = label
-  button.className = 'no-print'
-  Object.assign(button.style, {
+// Fixed in the viewport, not the document, and appended directly to <body> — this is demo chrome,
+// not part of the paginated content pdfDoc.mount() renders into #app.
+function createToolbar(): HTMLDivElement {
+  const toolbar = document.createElement('div')
+  toolbar.className = 'no-print'
+  Object.assign(toolbar.style, {
     position: 'fixed',
     top: '16px',
-    right: `${rightOffsetPx}px`,
+    right: '16px',
     zIndex: '1000',
+    display: 'flex',
+    gap: '12px',
+  })
+  document.body.appendChild(toolbar)
+  return toolbar
+}
+
+function demoButton(toolbar: HTMLDivElement, label: string): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.textContent = label
+  Object.assign(button.style, {
     padding: '10px 18px',
     fontFamily: UI_FONT,
     fontSize: '14px',
@@ -1327,12 +1339,12 @@ function demoButton(label: string, rightOffsetPx: number): HTMLButtonElement {
     cursor: 'pointer',
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
   })
-  document.body.appendChild(button)
+  toolbar.appendChild(button)
   return button
 }
 
-function setupPrintButton(pdfDoc: Paginator, host: HTMLDivElement): void {
-  const button = demoButton('Print', 16)
+function setupPrintButton(toolbar: HTMLDivElement, pdfDoc: Paginator, host: HTMLDivElement): void {
+  const button = demoButton(toolbar, 'Print')
   button.addEventListener('click', () => pdfDoc.printDocument(host))
 }
 
@@ -1340,8 +1352,8 @@ function setupPrintButton(pdfDoc: Paginator, host: HTMLDivElement): void {
 // header comment. Both buttons regenerate on each click rather than caching the bytes, since this is
 // a demo of the API surface, not a perf-sensitive app; a real integration would generate once and
 // reuse the bytes for both actions if the user might invoke either.
-function setupPdfButtons(pdfDoc: Paginator, result: PaginatedResult): void {
-  const openButton = demoButton('Open PDF', 108)
+function setupPdfButtons(toolbar: HTMLDivElement, pdfDoc: Paginator, result: PaginatedResult): void {
+  const openButton = demoButton(toolbar, 'Open PDF')
   openButton.addEventListener('click', () => {
     void (async () => {
       openButton.disabled = true
@@ -1355,7 +1367,7 @@ function setupPdfButtons(pdfDoc: Paginator, result: PaginatedResult): void {
     })()
   })
 
-  const previewButton = demoButton('Preview PDF', 220)
+  const previewButton = demoButton(toolbar, 'Preview PDF')
   previewButton.addEventListener('click', () => {
     void (async () => {
       previewButton.disabled = true
@@ -1401,8 +1413,8 @@ function docxFooter(): ReturnType<typeof text> {
   })
 }
 
-function setupExportButtons(pdfDoc: Paginator, doc: PageDef): void {
-  const wordButton = demoButton('Export Word', 340)
+function setupExportButtons(toolbar: HTMLDivElement, pdfDoc: Paginator, doc: PageDef): void {
+  const wordButton = demoButton(toolbar, 'Export Word')
   wordButton.addEventListener('click', () => {
     void (async () => {
       wordButton.disabled = true
@@ -1417,7 +1429,7 @@ function setupExportButtons(pdfDoc: Paginator, doc: PageDef): void {
     })()
   })
 
-  const excelButton = demoButton('Export Excel', 470)
+  const excelButton = demoButton(toolbar, 'Export Excel')
   excelButton.addEventListener('click', () => {
     void (async () => {
       excelButton.disabled = true
@@ -1453,9 +1465,10 @@ async function main(): Promise<void> {
   if (app === null) throw new Error('#app not found')
   pdfDoc.mount(result, app)
   setupInteractionDemo(pdfDoc, result, app)
-  setupPrintButton(pdfDoc, app)
-  setupPdfButtons(pdfDoc, result)
-  setupExportButtons(pdfDoc, doc)
+  const toolbar = createToolbar()
+  setupPrintButton(toolbar, pdfDoc, app)
+  setupPdfButtons(toolbar, pdfDoc, result)
+  setupExportButtons(toolbar, pdfDoc, doc)
 }
 
 void main()
