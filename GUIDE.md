@@ -55,6 +55,11 @@ instances.
    `attachInteractions` does its own pure-data ancestor walk instead of relying on `event.target`
    bubbling), and cloning a single DOM element does **not** capture a group's full visual content
    (this is why `renderPreview()` re-renders from `RenderedNode` data instead of cloning DOM).
+   `Container`/`Table` with `borderRadius` set are a narrow, deliberate exception: their content
+   becomes a REAL descendant of a real `overflow: hidden` wrapper (so the rounded corner actually
+   clips it), with the render-time origin rebased to that wrapper's own top-left — the exact
+   technique `renderPreview()` already established above. Safe specifically because hit-testing
+   never relied on real DOM structure to begin with. Everything else stays flat.
 5. **Every element gets explicit inline styles only — no `<style>` tag, no class name, anywhere,**
    with exactly one narrow exception: `mount()` injects a single shadow-root-scoped `<style>`
    containing only an `@page` rule (page size + zero margin), because `@page` is a stylesheet-level
@@ -370,7 +375,7 @@ those don't need their own such fields.
 | `padding` | `number \| { top, right, bottom, left }?` | Insets `child` from whatever width/height the box resolved to |
 | `background` | `string?` | |
 | `border` | `ContainerBorder = { thickness?; color?; style?: LineStyle }?` | A plain rectangle at the container's own edge — no straddle-avoidance needed (unlike table borders), since there's no internal grid to share edges with. `style` (`'solid'` default, `'dashed'`/`'dotted'`) — see `SeparatorNode.style`'s doc for the rendering approximation both non-solid styles share across every line/border in this codebase |
-| `borderRadius` | `number?` | Rounds the container's own box (background + border) — does NOT clip `child`'s own content to match (e.g. wrapping an image needs `ImageNode.borderRadius` too if you want the image itself rounded, not just the box behind it) |
+| `borderRadius` | `number?` | Rounds the container's own box (background + border) AND real-clips `child`'s own painted content to match — DOM via `overflow: hidden` on a real (non-flat, see invariant #4) wrapper, PDF via a `save()`/`roundedRect().clip()`/`restore()` region around just the child draw, same technique `ImageNode.borderRadius` already uses for its own pixels. Clamped to half the box's own width/height, same as `chart-geometry.ts`'s `roundedRectPath()`. Wrapping an image still benefits from the image's *own* `ImageNode.borderRadius` too if you want the image's corners individually rounded rather than merely windowed by the container's clip |
 
 Splittability delegates entirely to `child` (splittable iff `child` is splittable, exactly like
 `group` delegates to its own children) — a container wrapping a long paragraph or a tall column can
@@ -568,14 +573,14 @@ cell merging is supported; see "Cell spans" below.
 | Field | Type | Notes |
 |---|---|---|
 | `columns` | `{ width?: FlexSize; background?: string; align?: CrossAlign; padding?: number; verticalAlign?: 'start'\|'center'\|'end'; content?: Node }[]` | `width` uses the *same* fixed-px/flex-weight/`'shrink'` model as row-child sizing below — `width: 'shrink'` sizes the column to the widest colSpan-1 cell's own natural width across every row (own padding included), the same `naturalWidth()`/`childCrossWidthInColumn` mechanism a shrink-wrapped row/column child uses, just maxed over the whole column instead of one subtree (`columnNaturalWidth()` in `src/nodes/table/layout.ts`). `generateDocx()` can't compute it (see Row flex sizing below) and falls back to an equal flex-grow weight with a one-time warning; `generateXlsx()` computes it correctly, since it reuses this same real layout function. `padding`/`verticalAlign` are per-column DEFAULTS for every cell in that column (see precedence below) — `verticalAlign` in particular is the only way to align the auto-generated header row (from `content`), since that row has no other mechanism to set it. `content` — a header caption for this column; see "Column header captions" below. Always exactly what you authored — no other feature (grouping included) ever strips or reshapes this array |
-| `rows` | `TableRow[]` — `{ kind?: 'cells'; cells: TableCell[]; groupValues?: string[]; background?: string; verticalAlign?: 'start'\|'center'\|'end' }` or `{ kind: 'header'; depth: number; content?: Node; cells?: TableCell[]; background?: string; repeat?: boolean }` | `cells.length` must equal `columns.length` for every non-header row (implicit-flow authoring changes this when spans are in play — see "Cell spans"). `groupValues` — see "Column grouping". The `header` variant is either a full-width single-`content` bar, or colSpan-aware, column-grid-aligned `cells` (exactly one of the two is set) — see "Column grouping" |
-| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; padding?: number; border?: ContainerBorder; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `padding` overrides `column.padding`/`TableNode.cellPadding` for this one cell. `border` draws a complete rectangle around just this cell's own box, independent of (and drawn on top of) the table-wide `border` modes below — since it's a full rect rather than a shared-edge line, two adjacent bordered cells show a double-thickness line between them (deliberately simpler, not a bug); no `borderRadius` (a rounded corner on one cell in a shared grid has no well-defined meaning next to its square neighbors). `border.style` (`LineStyle`, default `'solid'`) is independent of, and can differ from, the table-wide `TableNode.border.style`. `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
+| `rows` | `TableRow[]` — `{ kind?: 'cells'; cells: TableCell[]; groupValues?: string[]; background?: string; verticalAlign?: 'start'\|'center'\|'end'; topBorder?: ContainerBorder; bottomBorder?: ContainerBorder }` or `{ kind: 'header'; depth: number; content?: Node; cells?: TableCell[]; background?: string; repeat?: boolean; topBorder?: ContainerBorder; bottomBorder?: ContainerBorder }` | `cells.length` must equal `columns.length` for every non-header row (implicit-flow authoring changes this when spans are in play — see "Cell spans"). `groupValues` — see "Column grouping". The `header` variant is either a full-width single-`content` bar, or colSpan-aware, column-grid-aligned `cells` (exactly one of the two is set) — see "Column grouping". `topBorder`/`bottomBorder` — a full-width accent line at this row's own top/bottom edge, overriding whatever `TableNode.border.inner`/`headerSeparator` would otherwise draw at that exact boundary; hand-authorable on any row, or baked in automatically by `TableGroupLevel.headerBorder`/`totalsBorder` — see the `border` row below and "Column grouping" |
+| `TableCell` | `{ content?: Node; colSpan?; rowSpan?; background?: string; align?: CrossAlign; verticalAlign?: 'start'\|'center'\|'end'; padding?: number; border?: ContainerBorder; value?: string }` | `content` is an arbitrary `Node` — a cell can nest a `group`/`text`/`image`/another `table`, and is always required. `padding` overrides `column.padding`/`TableNode.cellPadding` for this one cell. `border` draws a complete rectangle around just this cell's own box, independent of (and drawn on top of) the table-wide `border.inner`/`border.outer` lines below — since it's a full rect rather than a shared-edge line, two adjacent bordered cells show a double-thickness line between them (deliberately simpler, not a bug); no `borderRadius` (a rounded corner on one cell in a shared grid has no well-defined meaning next to its square neighbors). `border.style` (`LineStyle`, default `'solid'`) is independent of, and can differ from, the table-wide `border.inner.style`/`border.outer.style`. `value` — optional convenience for `totals()` callbacks (see "Column grouping"), unrelated to bucketing; `colSpan`/`rowSpan` — see "Cell spans" |
 | `groups` | `TableGroupLevel[]?` | Report-style row grouping levels, ordered outermost -> innermost — see "Column grouping" |
 | `headerRows` | `number?` | Leading row count repeated at the top of every continuation page this table spans. Freely composable with `groups`; mutually exclusive with `column.content` (see "Column header captions") |
 | `headerBackground` | `string?` | Background for the single auto-generated header row (from `column.content`). Ignored if no column defines `content`, or if you author header row(s) manually via `headerRows` instead (set `background` on that row directly) |
 | `repeatHeaderRow` | `boolean?` | Default `true`. Whether the table's own `headerRows` prefix repeats on every continuation page, or appears only once at the very top |
 | `repeatGroupHeaders` | `boolean?` | Default `true`. Table-wide default for `TableGroupLevel.repeat` on every grouping level that doesn't set its own — see "Column grouping" |
-| `border` | `{ mode?: 'none'\|'all'\|'outer'\|'horizontal'\|'vertical'; thickness?; color?; style?: LineStyle }?` | Omitted = no borders. `mode` defaults to `'all'` when the object is present; `style` (default `'solid'`) applies to every grid line this mode draws. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges — a `'dashed'`/`'dotted'` line segment strokes its own centerline instead of filling (same approximation `SeparatorNode.style` uses), still avoiding the double-thickness straddle. No `borderRadius` — rounding corners across a whole grid of cells with shared edges (without disturbing the inner grid lines) has no existing primitive to build on; not supported |
+| `border` | `{ inner?: TableBorderLine; outer?: TableBorderLine & { borderRadius?: number }; headerSeparator?: ContainerBorder \| boolean }?` — `TableBorderLine = { mode?: 'none'\|'horizontal'\|'vertical'\|'all'; thickness?; color?; style?: LineStyle }` | Omitted entirely = no borders at all. `inner` (grid lines between rows/columns) and `outer` (the table's own perimeter) are FULLY INDEPENDENT — each resolves its own `mode`/`thickness`/`color`/`style` (defaults `1`/`'#000000'`/`'solid'`), and `mode` defaults to `'all'` whenever that group's object is present (even with `mode` itself unset), same "object present = mode defaults to all" rule the old single `mode` used. For `inner`, `'horizontal'`/`'vertical'` mean "only between-row lines"/"only between-column lines"; for `outer`, they mean "only the top+bottom perimeter edges"/"only the left+right perimeter edges". Migrating the old single-`mode` shorthand: old `'outer'` is `{ inner: { mode: 'none' }, outer: {} }`; old `'horizontal'`/`'vertical'`/`'all'`/`'none'` is the same mode set on BOTH `inner` and `outer`. Rendered as single-thickness line segments, never a per-cell CSS border, to avoid doubled thickness at shared cell edges — a `'dashed'`/`'dotted'` line segment strokes its own centerline instead of filling (same approximation `SeparatorNode.style` uses), still avoiding the double-thickness straddle. `outer.borderRadius` rounds the OUTER perimeter's 4 corners and real-clips cell/row/header backgrounds and content to match (same clipping technique as `ContainerNode.borderRadius`) — only valid when `outer.mode` is `'all'` (the only mode that draws a closed rectangle; `table()` throws otherwise), clamped to half the table's own width/height. `headerSeparator` draws one more line at the boundary between the table's `headerRows` prefix and its body — `true` reuses `inner`'s own thickness/color/style, an object is fully custom, and it's silently skipped when `headerRows` is 0 (no boundary exists). A row's own `topBorder`/`bottomBorder` (see the `rows` row above, and `TableGroupLevel.headerBorder`/`totalsBorder` under "Column grouping") overrides whatever `inner`/`headerSeparator` would otherwise draw at that one row boundary — precedence at any given horizontal line, most-specific wins: row override > `headerSeparator` > `outer` (only at an outer-perimeter position) > `inner`. docx/xlsx exports support independent `inner`/`outer` styling (real per-edge `IBorderOptions`/`ExcelJS.Borders`) but ignore `outer.borderRadius` (no rounded-border primitive in either format), `headerSeparator`, and any row's `topBorder`/`bottomBorder` — each skipped with its own one-time console warning |
 | `cellPadding` | `number?` | Default 0. Table-wide default, overridable per column (`column.padding`) or per cell (`cell.padding`) — see precedence below |
 | `stripe` | `{ even?: string; odd?: string }?` | Alternating row background, desugared entirely at `table()` build time into per-row `background` (`src/nodes/table/layout.ts` never knows striping happened, same architecture "Column grouping" already uses). Applies only to ordinary data rows — never the table's own literal header-row prefix, nor a column-grouping header/divider bar — and never overrides a row that already sets its own `background`. `even`/`odd` count sequentially through those data rows starting at 0 (even) |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
@@ -605,8 +610,18 @@ type TableGroupLevel = {
   background?: string
   totals?: (rows: TableRow[]) => TableCell[]            // one cell per column, colSpan-aware — same implicit-flow tiling as an ordinary row
   repeat?: boolean                                      // default: TableNode.repeatGroupHeaders (itself default true)
+  headerBorder?: { top?: ContainerBorder; bottom?: ContainerBorder }  // accent line at this level's header bar's own top/bottom edge
+  totalsBorder?: { top?: ContainerBorder; bottom?: ContainerBorder }  // same, for this level's totals() row — table() throws if set without totals
 }
 ```
+`headerBorder`/`totalsBorder` are baked onto the synthesized `kind: 'header'`/totals row's own
+`topBorder`/`bottomBorder` (see the `rows` row in "Node type reference" above) by
+`applyGroupingRows()` — for the `TableCell[]`-form `totals()`, they're passed on the INPUT to
+`resolveCellSpans()` rather than bolted on afterward, so they survive that call's `{ ...row, ... }`
+spread the same way `groupValues` already does when spans and grouping coexist. They OVERRIDE (not
+add to) whatever the table-wide `border.inner`/`border.headerSeparator` would otherwise draw at that
+exact row boundary — see the `TableNode.border` row's precedence rule above.
+
 Each `cells`-kind row supplies its bucketing value(s) via `TableRow.groupValues: string[]` — one
 entry per level, same order as `groups`, required (with the right length) whenever `groups` is set.
 This is unrelated to `cells`/`columns` entirely: a row's `groupValues` and its `cells` are two
@@ -683,6 +698,18 @@ skip past a header bar's full width (same interval-subtraction machinery `render
 column grouping — a plain section-divider banner in any table (with its own `repeat`, default
 `true`) — but not mixable with `groups` in the same table's data rows (`table()` throws if a `kind:
 'header'` row appears among the rows that would otherwise get bucketed).
+
+**Horizontal border-line precedence** (`src/nodes/table/border-resolve.ts`, shared by `dom.ts`/
+`pdf.ts` so the two renderers can't drift): at any given horizontal Y position, the most specific
+source wins — a row's own `topBorder`/`bottomBorder` (whether hand-authored or baked in from
+`TableGroupLevel.headerBorder`/`totalsBorder`) beats `border.headerSeparator`, which beats
+`border.outer` (only at an outer-perimeter position), which beats `border.inner`. When two adjacent
+rows both set a border at the boundary they share (row *i*'s `bottomBorder` and row *i+1*'s
+`topBorder`), row *i*'s `bottomBorder` wins. **Known limitation:** when `border.outer.borderRadius`
+is active, a row's own accent border landing exactly on row 0 or the last row draws as an ordinary
+straight segment, not clipped to the curve — the rounded perimeter's clip region is already restored
+by the time row-level overrides draw, the same class of narrow cosmetic limitation as docx's
+documented rowSpan-border-repeat issue below.
 
 #### Column header captions
 
@@ -1117,7 +1144,8 @@ src/export/
   table-grid.ts           — borderSides(): shared table-border grid math for BOTH exporters — a
                             TableNode's rows/cells are already grid-aligned (no pixel geometry,
                             unlike pdf-render.ts's interval-straddle math), so "does this cell's
-                            edge get a line" is pure row/col-index adjacency against the border mode
+                            edge get a line, and is it the inner or outer style" is pure row/col-
+                            index adjacency against border.inner/border.outer's independent modes
   units.ts                 — pxToTwip()/pxToPt()/pxToExcelWidth()/pxToEmu(): unit conversions,
                              deliberately NOT imported from pdf-render.ts (pulls in pdfkit's
                              browser-standalone bundle at module scope) — small enough to duplicate
@@ -1184,7 +1212,7 @@ with the same precedence `table/layout.ts`'s `layoutCell` uses (`cell ?? column 
 docx `margins` (a `TableCell`'s direct analog of padding). **Known limitation**: `docx` copies a
 rowSpan cell's `borders` verbatim onto every auto-inserted continuation cell, so a "this cell's merged
 block ends here" bottom border can repeat at every physical row inside the span rather than only its
-true bottom edge — rare (colSpan/rowSpan + a full/horizontal border mode together), accepted as a
+true bottom edge — rare (colSpan/rowSpan + `border.inner`/`border.outer` drawing at that edge together), accepted as a
 known cosmetic limitation. Cell content goes through the exact same node-to-blocks recursion as
 everything else in the document (a group/container/table nested in a cell gets real paragraph breaks
 and real per-run styling, not a flattened single-style string).
@@ -1610,10 +1638,18 @@ type, splittable or not — this is the entire point of the registry pattern.
 - `ContainerNode.height` is a MINIMUM, not an exact/clipped size — deliberately, so no clip-region
   code is needed in either renderer and content is never silently lost. If you want a true fixed-
   and-clipped box, it isn't supported.
-- `TableNode.border` has no `borderRadius` — rounding corners across a whole grid of cells with
-  shared edges (without disturbing the inner grid lines) has no existing primitive to build on.
-  `TableCell.border` (per-cell) draws a complete, independent rectangle rather than a shared-edge
-  line, so two adjacent bordered cells show a double-thickness line between them by design.
+- `TableNode.border.outer.borderRadius` only works with `outer.mode: 'all'` (`table()` throws for
+  `'horizontal'`/`'vertical'`/`'none'`, since no closed rectangle exists to round there) — it real-
+  clips cell/row/header content to the rounded outer shape, same technique as `ContainerNode.
+  borderRadius`. docx/xlsx exports ignore it (square corners, one-time warning) since neither format
+  has a rounded-border primitive — they also ignore `border.headerSeparator` and any row's
+  `topBorder`/`bottomBorder` entirely (each skipped with its own one-time warning; the ordinary
+  inner/outer grid still draws at that boundary instead), though they DO support `border.inner`/
+  `border.outer` resolving to independently different thickness/color/style, via real per-edge
+  `IBorderOptions`/`ExcelJS.Borders`. `TableCell.border` (per-cell) draws a complete, independent
+  rectangle rather than a shared-edge line, so two adjacent bordered cells show a double-thickness
+  line between them by design — still no `borderRadius` there (a rounded corner on one cell in a
+  shared grid has no well-defined meaning next to its square neighbors).
 - `TextNode.align` has no `'justify'` option — true justify needs per-word spacing distribution,
   which needs word-boundary data pretext's `LayoutLine` doesn't currently expose; not attempted
   without first investigating pretext's own API.
@@ -1639,7 +1675,7 @@ type, splittable or not — this is the entire point of the registry pattern.
   `OffscreenCanvas` (unavailable under `bun test`) — degrades to a warning + skip rather than
   throwing. A `rowSpan` cell's border can incorrectly repeat at every physical row it spans (docx
   copies `borders` verbatim onto every auto-inserted continuation cell) rather than only its true
-  bottom edge — rare (needs colSpan/rowSpan + a full/horizontal border mode together). Excel cell
+  bottom edge — rare (needs colSpan/rowSpan + `border.inner`/`border.outer` drawing at that edge together). Excel cell
   `padding` has no real equivalent (spreadsheets have no box-model padding concept) and is
   approximated via `alignment.indent` at best. Both exporters' color resolution (`export-color.ts`)
   only understands `#hex`/`rgb()`/`rgba()` — named CSS colors and `hsl()`/`hsla()` fall back to black

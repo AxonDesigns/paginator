@@ -16,11 +16,15 @@ export type PositionedRichLine = { y: number; width: number; runs: PositionedRun
 // lookup needed (see table-layout.ts and shadow-dom.ts).
 export type RenderedTableCell = { box: Box; rendered: RenderedNode; background?: string; border?: ContainerBorder }
 
+// `topBorder`/`bottomBorder` mirror TableRow's own fields (nodes.ts) — a full-width accent line
+// overriding whatever the table-wide border.inner/headerSeparator would otherwise draw at that
+// row's own top/bottom boundary. Carried on both variants since either can be a totals row
+// (`'cells'`) or a group header bar (`'header'`).
 export type RenderedTableRow =
-  | { kind: 'cells'; box: Box; cells: RenderedTableCell[] }
+  | { kind: 'cells'; box: Box; cells: RenderedTableCell[]; topBorder?: ContainerBorder; bottomBorder?: ContainerBorder }
   // Exactly one of `content`/`cells` is set, mirroring TableRow's header variant — `content` for a
   // single full-width Node, `cells` for colSpan-aware, column-grid-aligned cells (see nodes.ts).
-  | { kind: 'header'; box: Box; background?: string; content?: RenderedNode; cells?: RenderedTableCell[] }
+  | { kind: 'header'; box: Box; background?: string; content?: RenderedNode; cells?: RenderedTableCell[]; topBorder?: ContainerBorder; bottomBorder?: ContainerBorder }
 
 export type RenderedNode =
   | { type: 'text'; box: Box; node: TextNode; lines: PositionedLine[] }

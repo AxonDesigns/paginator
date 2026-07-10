@@ -9,6 +9,8 @@ import type { LineStyle, TableNode } from '../../core/nodes.ts'
 import { applyLineStyle, pxToPt, resetLineStyle, resolvePdfColor, toPdfRect } from '../../render/pdf-render.ts'
 import { BORDER_EPSILON, subtractIntervals } from '../../render/interval-utils.ts'
 import { resolveColumnWidths } from './layout.ts'
+import { createHorizontalLineStyler, resolveBorderLine, resolveOuterBorderRadius } from './border-resolve.ts'
+import type { LineStyleResolved } from './border-resolve.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'table' }>
 
@@ -50,18 +52,20 @@ function drawTableBorders(
   originY: number,
   x: number,
   y: number,
+  roundOuter: boolean,
 ): void {
-  if (node.border === undefined || node.border.mode === 'none') return
-  const mode = node.border.mode ?? 'all'
-  const thickness = node.border.thickness ?? 1
-  const color = resolvePdfColor(node.border.color ?? '#000000')
-  const style = node.border.style ?? 'solid'
+  const hasRowOverrides = rendered.rows.some(r => r.topBorder !== undefined || r.bottomBorder !== undefined)
+  if (node.border === undefined && !hasRowOverrides) return
   const doc = ctx.pdf.doc
 
-  const outerH = mode === 'all' || mode === 'outer' || mode === 'horizontal'
-  const innerH = mode === 'all' || mode === 'horizontal'
-  const outerV = mode === 'all' || mode === 'outer' || mode === 'vertical'
-  const innerV = mode === 'all' || mode === 'vertical'
+  // `inner`/`outer` resolve fully independently — see border-resolve.ts. A row's own
+  // `topBorder`/`bottomBorder` draws independently of `node.border` entirely, same as
+  // `TableCell.border` already does.
+  const inner = resolveBorderLine(node.border, 'inner')
+  const outer = resolveBorderLine(node.border, 'outer')
+
+  const innerV = inner.mode === 'all' || inner.mode === 'vertical'
+  const outerV = outer.mode === 'all' || outer.mode === 'vertical'
 
   const tableTop = y
   const tableBottom = y + rendered.box.height
@@ -85,27 +89,37 @@ function drawTableBorders(
     .filter((row): row is Extract<RenderedTableRow, { kind: 'header' }> => row.kind === 'header' && row.cells === undefined)
     .map(row => [originY + row.box.y, originY + row.box.y + row.box.height])
 
-  const hYs: number[] = []
-  if (outerH) hYs.push(tableTop, tableBottom)
-  if (innerH) {
-    for (let i = 0; i < rendered.rows.length - 1; i++) hYs.push(originY + rendered.rows[i]!.box.y + rendered.rows[i]!.box.height)
-  }
-  for (const lineY of hYs) {
+  // Horizontal lines: style resolution (row override > headerSeparator > outer-position > inner)
+  // is centralized in border-resolve.ts so this file and dom.ts can't drift on the precedence rule.
+  const { styler, candidateYs } = createHorizontalLineStyler({
+    rows: rendered.rows,
+    originY,
+    tableTop,
+    tableBottom,
+    headerRows: node.headerRows ?? 0,
+    headerSeparatorConfig: node.border?.headerSeparator,
+    inner,
+    outer,
+    roundOuter,
+  })
+  for (const lineY of candidateYs) {
+    const resolved = styler(lineY)
+    if (resolved === null) continue
     const straddling = cellBoxes.filter(b => b.top < lineY - BORDER_EPSILON && lineY + BORDER_EPSILON < b.bottom)
     const segments = subtractIntervals([tableLeft, tableRight], straddling.map(b => [b.left, b.right] as const))
-    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'horizontal', lineY, segStart, segEnd, thickness, color, style)
+    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'horizontal', lineY, segStart, segEnd, resolved.thickness, resolvePdfColor(resolved.color), resolved.style)
   }
 
-  const vXs: number[] = []
-  if (outerV) vXs.push(tableLeft, tableRight)
+  const vLines: { x: number; line: LineStyleResolved }[] = []
+  if (outerV && !roundOuter) vLines.push({ x: tableLeft, line: outer }, { x: tableRight, line: outer })
   if (innerV) {
-    for (let i = 0; i < colWidths.length - 1; i++) vXs.push(originX + colX[i]! + colWidths[i]!)
+    for (let i = 0; i < colWidths.length - 1; i++) vLines.push({ x: originX + colX[i]! + colWidths[i]!, line: inner })
   }
-  for (const lineX of vXs) {
+  for (const { x: lineX, line } of vLines) {
     const straddling = cellBoxes.filter(b => b.left < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < b.right)
     const headerHoles = tableLeft < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < tableRight ? headerRowVRanges : []
     const segments = subtractIntervals([tableTop, tableBottom], [...straddling.map(b => [b.top, b.bottom] as const), ...headerHoles])
-    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'vertical', lineX, segStart, segEnd, thickness, color, style)
+    for (const [segStart, segEnd] of segments) drawGridSegment(doc, 'vertical', lineX, segStart, segEnd, line.thickness, resolvePdfColor(line.color), line.style)
   }
 }
 
@@ -119,6 +133,22 @@ export async function drawTableNode(rendered: Rendered, x: number, y: number, ct
   for (const w of colWidths) {
     colX.push(acc)
     acc += w
+  }
+
+  const outer = resolveBorderLine(node.border, 'outer')
+  const radius = resolveOuterBorderRadius(node.border)
+  const roundOuter = outer.mode === 'all' && radius > 0
+
+  // pdfkit clip regions are pure graphics-state (`save`/`clip`/`restore`), unaffected by coordinate
+  // math — unlike the DOM renderer, no origin rebasing is needed here. Clips just the cell
+  // backgrounds/content/per-cell borders drawn below; the outer border stroke itself is drawn by
+  // drawTableBorders() AFTER restore() (see its own roundOuter branch and the call site below), so
+  // the stroke centered on the clip boundary isn't half-clipped by its own clip path.
+  if (roundOuter) {
+    const rect = toPdfRect(x, y, rendered.box.width, rendered.box.height)
+    const r = pxToPt(Math.max(0, Math.min(radius, rendered.box.width / 2, rendered.box.height / 2)))
+    doc.save()
+    doc.roundedRect(rect.x, rect.y, rect.width, rect.height, r).clip()
   }
 
   // Shared by an ordinary 'cells' row AND a colSpan-aware 'header' row (see nodes.ts) — same
@@ -159,5 +189,15 @@ export async function drawTableNode(rendered: Rendered, x: number, y: number, ct
     await drawCellsRow(row.cells)
   }
 
-  drawTableBorders(ctx, node, rendered, colWidths, colX, originX, originY, x, y)
+  if (roundOuter) {
+    const rect = toPdfRect(x, y, rendered.box.width, rendered.box.height)
+    const r = pxToPt(Math.max(0, Math.min(radius, rendered.box.width / 2, rendered.box.height / 2)))
+    doc.restore()
+    const thicknessPt = pxToPt(outer.thickness)
+    applyLineStyle(doc, outer.style, thicknessPt)
+    doc.roundedRect(rect.x, rect.y, rect.width, rect.height, r).lineWidth(thicknessPt).stroke(resolvePdfColor(outer.color))
+    resetLineStyle(doc)
+  }
+
+  drawTableBorders(ctx, node, rendered, colWidths, colX, originX, originY, x, y, roundOuter)
 }

@@ -17,7 +17,8 @@ import '../src/nodes/group.ts'
 import '../src/nodes/table/index.ts'
 import '../src/nodes/chart/index.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from '../src/core/behavior.ts'
-import { chart, container, group, image, pageBreak, separator, table } from '../src/core/nodes.ts'
+import { chart, container, group, image, pageBreak, separator, table, text } from '../src/core/nodes.ts'
+import type { TableRow } from '../src/core/nodes.ts'
 import type { RenderedNode, RenderedTableRow } from '../src/core/geometry.ts'
 import { estimateChartTextWidth, estimateTextWidth, normalizeChartText, squarifyTreemap, wrapChartTextToWidth } from '../src/render/chart-geometry.ts'
 
@@ -713,5 +714,100 @@ describe('table', () => {
     expect(rest).not.toBeNull()
     expect(rest!.headerRows).toBe(1)
     expect(rest!.rows).toHaveLength(2) // repeated header + remaining data row
+  })
+
+  describe('border.outer.borderRadius validation', () => {
+    const columns = [{}]
+    const rows = [{ cells: [{ content: image({ src: 'a.png', width: 10, height: 10 }) }] }]
+
+    test('throws when set with outer.mode "horizontal"', () => {
+      expect(() => table({ columns, rows, border: { outer: { mode: 'horizontal', borderRadius: 8 } } })).toThrow(/border\.outer\.borderRadius needs border\.outer\.mode "all"/)
+    })
+
+    test('throws when set with outer.mode "vertical"', () => {
+      expect(() => table({ columns, rows, border: { outer: { mode: 'vertical', borderRadius: 8 } } })).toThrow(/border\.outer\.borderRadius needs border\.outer\.mode "all"/)
+    })
+
+    test('throws when set with outer.mode "none"', () => {
+      expect(() => table({ columns, rows, border: { outer: { mode: 'none', borderRadius: 8 } } })).toThrow(/border\.outer\.borderRadius needs border\.outer\.mode "all"/)
+    })
+
+    test('throws when negative', () => {
+      expect(() => table({ columns, rows, border: { outer: { mode: 'all', borderRadius: -1 } } })).toThrow(/cannot be negative/)
+    })
+
+    test('does not throw for outer.mode "all"', () => {
+      expect(() => table({ columns, rows, border: { outer: { mode: 'all', borderRadius: 8 } } })).not.toThrow()
+    })
+
+    test('does not throw for the default outer.mode (unset, defaults to "all")', () => {
+      expect(() => table({ columns, rows, border: { outer: { borderRadius: 8 } } })).not.toThrow()
+    })
+
+    test('inner.mode does not affect outer.borderRadius validity', () => {
+      expect(() => table({ columns, rows, border: { inner: { mode: 'horizontal' }, outer: { mode: 'all', borderRadius: 8 } } })).not.toThrow()
+    })
+  })
+
+  describe('border.inner/outer/headerSeparator thickness validation', () => {
+    const columns = [{}]
+    const rows = [{ cells: [{ content: image({ src: 'a.png', width: 10, height: 10 }) }] }]
+
+    test('throws when border.inner.thickness is negative', () => {
+      expect(() => table({ columns, rows, border: { inner: { thickness: -1 } } })).toThrow(/border\.inner\.thickness cannot be negative/)
+    })
+
+    test('throws when border.outer.thickness is negative', () => {
+      expect(() => table({ columns, rows, border: { outer: { thickness: -1 } } })).toThrow(/border\.outer\.thickness cannot be negative/)
+    })
+
+    test('throws when border.headerSeparator.thickness is negative', () => {
+      expect(() => table({ columns, rows, border: { headerSeparator: { thickness: -1 } } })).toThrow(/border\.headerSeparator\.thickness cannot be negative/)
+    })
+
+    test('does not throw when border.headerSeparator is the boolean shorthand', () => {
+      expect(() => table({ columns, rows, border: { headerSeparator: true } })).not.toThrow()
+    })
+  })
+
+  describe('TableGroupLevel.headerBorder/totalsBorder validation', () => {
+    const columns = [{ content: text({ content: 'Item', fontFamily: 'Arial', fontSize: 10 }) }]
+
+    test('totalsBorder without totals throws', () => {
+      expect(() =>
+        table({
+          columns,
+          rows: [{ groupValues: ['a'], cells: [{ content: image({ src: 'a.png', width: 10, height: 10 }) }] }],
+          groups: [{ totalsBorder: { top: { thickness: 2 } } }],
+        }),
+      ).toThrow(/groups\[0\]\.totalsBorder requires groups\[0\]\.totals to be set/)
+    })
+
+    test('headerBorder without totals does not throw', () => {
+      expect(() =>
+        table({
+          columns,
+          rows: [{ groupValues: ['a'], cells: [{ content: image({ src: 'a.png', width: 10, height: 10 }) }] }],
+          groups: [{ headerBorder: { bottom: { thickness: 2 } } }],
+        }),
+      ).not.toThrow()
+    })
+
+    test('a colSpan totals() row keeps its totalsBorder after resolveCellSpans()', () => {
+      const node = table({
+        columns: [{ content: text({ content: 'Item', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'Qty', fontFamily: 'Arial', fontSize: 10 }) }],
+        rows: [{ groupValues: ['a'], cells: [{ content: image({ src: 'a.png', width: 10, height: 10 }) }, { content: image({ src: 'a.png', width: 10, height: 10 }) }] }],
+        groups: [
+          {
+            totals: () => [{ colSpan: 2, content: text({ content: 'Total', fontFamily: 'Arial', fontSize: 10 }) }],
+            totalsBorder: { top: { thickness: 3, color: '#ff0000' }, bottom: { thickness: 1 } },
+          },
+        ],
+      })
+      const totalsRow = node.rows.find(r => r.kind === 'cells' && r.cells.length === 1)
+      expect(totalsRow).toBeDefined()
+      expect((totalsRow as Extract<TableRow, { kind?: 'cells' }>).topBorder).toEqual({ thickness: 3, color: '#ff0000' })
+      expect((totalsRow as Extract<TableRow, { kind?: 'cells' }>).bottomBorder).toEqual({ thickness: 1 })
+    })
   })
 })

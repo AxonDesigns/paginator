@@ -252,15 +252,15 @@ export function layoutRows(rows: TableRow[], columns: TableColumn[], colWidths: 
     if (row.kind === 'header') {
       if (row.cells !== undefined) {
         const prepared = prepareRowCells({ cells: row.cells, background: row.background }, columns, colWidths, cellPadding)
-        return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, cells: renderCells(prepared, r) }
+        return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, cells: renderCells(prepared, r), topBorder: row.topBorder, bottomBorder: row.bottomBorder }
       }
       const availableWidth = Math.max(0, fullWidth - 2 * cellPadding - row.depth * GROUP_INDENT)
       const content = translateRendered(layoutNodeFull(row.content!, availableWidth), cellPadding + row.depth * GROUP_INDENT, rowY[r]! + cellPadding)
-      return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, background: row.background, content }
+      return { kind: 'header', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, background: row.background, content, topBorder: row.topBorder, bottomBorder: row.bottomBorder }
     }
 
     const prepared = prepareRowCells(row, columns, colWidths, cellPadding)
-    return { kind: 'cells', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, cells: renderCells(prepared, r) }
+    return { kind: 'cells', box: { x: 0, y: rowY[r]!, width: fullWidth, height: heights[r]! }, cells: renderCells(prepared, r), topBorder: row.topBorder, bottomBorder: row.bottomBorder }
   })
 }
 

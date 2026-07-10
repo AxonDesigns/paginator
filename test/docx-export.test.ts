@@ -272,7 +272,7 @@ describe('generateDocx', () => {
       { cells: [{ rowSpan: 2, content: text({ content: 'span', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }] },
       { cells: [{ content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] },
     ])
-    const doc = definePage(PAGE, table({ columns, rows, border: { mode: 'all' } }))
+    const doc = definePage(PAGE, table({ columns, rows, border: { inner: {}, outer: {} } }))
     const xml = await documentXml(await generateDocx(doc))
     expect(xml).toContain('w:val="restart"')
     expect(xml).toContain('w:val="continue"')
@@ -284,10 +284,62 @@ describe('generateDocx', () => {
   test('TableNode.border.style maps to the matching docx border style for every grid line', async () => {
     const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
     const rows: TableRow[] = [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] }]
-    const doc = definePage(PAGE, table({ columns, rows, border: { mode: 'all', style: 'dotted' } }))
+    const doc = definePage(PAGE, table({ columns, rows, border: { inner: { style: 'dotted' }, outer: { style: 'dotted' } } }))
     const xml = await documentXml(await generateDocx(doc))
     expect(xml).toContain('w:val="dotted"')
     expect(xml).not.toContain('w:val="single"')
+  })
+
+  test('independent border.inner/border.outer thickness resolve to different docx border sizes', async () => {
+    const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
+    const rows: TableRow[] = [
+      { cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] },
+      { cells: [{ content: text({ content: 'c', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'd', fontFamily: 'Arial', fontSize: 10 }) }] },
+    ]
+    const doc = definePage(PAGE, table({ columns, rows, border: { inner: { thickness: 1, color: '#aaaaaa' }, outer: { thickness: 3, color: '#000000' } } }))
+    const xml = await documentXml(await generateDocx(doc))
+    // borderOption() maps thickness*6 (clamped 2-96) to docx's w:sz — 1px -> 6, 3px -> 18.
+    expect(xml).toContain('w:sz="6"')
+    expect(xml).toContain('w:sz="18"')
+    expect(xml).toContain('w:color="AAAAAA"')
+    expect(xml).toContain('w:color="000000"')
+  })
+
+  test('table border.outer.borderRadius is ignored (square corners) with a one-time warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const columns: TableColumn[] = [{ width: 100 }, { width: 100 }]
+      const rows: TableRow[] = [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] }]
+      const doc = definePage(PAGE, table({ columns, rows, border: { inner: { mode: 'none' }, outer: { borderRadius: 8 } } }))
+      await generateDocx(doc)
+      await generateDocx(doc) // second export must not warn again
+      expect(warnings.filter(w => w.includes('borderRadius')).length).toBe(1)
+    } finally {
+      console.warn = warnSpy
+    }
+  })
+
+  test('table border.headerSeparator and a row topBorder are each skipped with a one-time warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const columns: TableColumn[] = [{ width: 100, content: text({ content: 'Item', fontFamily: 'Arial', fontSize: 10 }) }]
+      const rows: TableRow[] = [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }], topBorder: { thickness: 2 } }]
+      const doc = definePage(PAGE, table({ columns, rows, border: { headerSeparator: true } }))
+      await generateDocx(doc)
+      await generateDocx(doc) // second export must not warn again
+      expect(warnings.filter(w => w.includes('headerSeparator')).length).toBe(1)
+      expect(warnings.filter(w => w.includes('topBorder/bottomBorder')).length).toBe(1)
+    } finally {
+      console.warn = warnSpy
+    }
   })
 
   test('TableCell.border.style overrides the table-wide border style for just that cell', async () => {
@@ -295,7 +347,7 @@ describe('generateDocx', () => {
     const rows: TableRow[] = [
       { cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }), border: { style: 'dashed' } }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] },
     ]
-    const doc = definePage(PAGE, table({ columns, rows, border: { mode: 'all' } }))
+    const doc = definePage(PAGE, table({ columns, rows, border: { inner: {}, outer: {} } }))
     const xml = await documentXml(await generateDocx(doc))
     expect(xml).toContain('w:val="dashed"')
     expect(xml).toContain('w:val="single"') // the rest of the grid stays the table-wide default

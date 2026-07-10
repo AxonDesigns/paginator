@@ -7,6 +7,8 @@ import type { LineStyle, TableNode } from '../../core/nodes.ts'
 import { styledDiv } from '../../render/shadow-dom.ts'
 import { BORDER_EPSILON, subtractIntervals } from '../../render/interval-utils.ts'
 import { resolveColumnWidths } from './layout.ts'
+import { createHorizontalLineStyler, resolveBorderLine, resolveOuterBorderRadius } from './border-resolve.ts'
+import type { LineStyleResolved } from './border-resolve.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'table' }>
 
@@ -51,17 +53,21 @@ function renderTableBorders(
   x: number,
   y: number,
   container: HTMLElement,
+  roundOuter: boolean,
 ): void {
-  if (node.border === undefined || node.border.mode === 'none') return
-  const mode = node.border.mode ?? 'all'
-  const thickness = node.border.thickness ?? 1
-  const color = node.border.color ?? '#000000'
-  const style = node.border.style ?? 'solid'
+  const hasRowOverrides = rendered.rows.some(r => r.topBorder !== undefined || r.bottomBorder !== undefined)
+  if (node.border === undefined && !hasRowOverrides) return
 
-  const outerH = mode === 'all' || mode === 'outer' || mode === 'horizontal'
-  const innerH = mode === 'all' || mode === 'horizontal'
-  const outerV = mode === 'all' || mode === 'outer' || mode === 'vertical'
-  const innerV = mode === 'all' || mode === 'vertical'
+  // `inner` (grid lines between rows/columns) and `outer` (the table's own perimeter) resolve fully
+  // independently — see border-resolve.ts's own doc comment for the "object present = mode defaults
+  // to all" rule. A row's own `topBorder`/`bottomBorder` (from `TableGroupLevel.headerBorder`/
+  // `totalsBorder`, or hand-authored directly) draws independently of `node.border` entirely, same
+  // as `TableCell.border` already does.
+  const inner = resolveBorderLine(node.border, 'inner')
+  const outer = resolveBorderLine(node.border, 'outer')
+
+  const innerV = inner.mode === 'all' || inner.mode === 'vertical'
+  const outerV = outer.mode === 'all' || outer.mode === 'vertical'
 
   const tableTop = y
   const tableBottom = y + rendered.box.height
@@ -92,23 +98,33 @@ function renderTableBorders(
     .filter((row): row is Extract<RenderedTableRow, { kind: 'header' }> => row.kind === 'header' && row.cells === undefined)
     .map(row => [originY + row.box.y, originY + row.box.y + row.box.height])
 
-  const hYs: number[] = []
-  if (outerH) hYs.push(tableTop, tableBottom)
-  if (innerH) {
-    for (let i = 0; i < rendered.rows.length - 1; i++) hYs.push(originY + rendered.rows[i]!.box.y + rendered.rows[i]!.box.height)
-  }
-  for (const lineY of hYs) {
+  // Horizontal lines: style resolution (row override > headerSeparator > outer-position > inner)
+  // is centralized in border-resolve.ts so this file and pdf.ts can't drift on the precedence rule.
+  const { styler, candidateYs } = createHorizontalLineStyler({
+    rows: rendered.rows,
+    originY,
+    tableTop,
+    tableBottom,
+    headerRows: node.headerRows ?? 0,
+    headerSeparatorConfig: node.border?.headerSeparator,
+    inner,
+    outer,
+    roundOuter,
+  })
+  for (const lineY of candidateYs) {
+    const resolved = styler(lineY)
+    if (resolved === null) continue
     const straddling = cellBoxes.filter(b => b.top < lineY - BORDER_EPSILON && lineY + BORDER_EPSILON < b.bottom)
     const segments = subtractIntervals([tableLeft, tableRight], straddling.map(b => [b.left, b.right] as const))
-    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('horizontal', lineY, segStart, segEnd, thickness, color, style))
+    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('horizontal', lineY, segStart, segEnd, resolved.thickness, resolved.color, resolved.style))
   }
 
-  const vXs: number[] = []
-  if (outerV) vXs.push(tableLeft, tableRight)
+  const vLines: { x: number; line: LineStyleResolved }[] = []
+  if (outerV && !roundOuter) vLines.push({ x: tableLeft, line: outer }, { x: tableRight, line: outer })
   if (innerV) {
-    for (let i = 0; i < colWidths.length - 1; i++) vXs.push(originX + colX[i]! + colWidths[i]!)
+    for (let i = 0; i < colWidths.length - 1; i++) vLines.push({ x: originX + colX[i]! + colWidths[i]!, line: inner })
   }
-  for (const lineX of vXs) {
+  for (const { x: lineX, line } of vLines) {
     const straddling = cellBoxes.filter(b => b.left < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < b.right)
     // A header row's box is exactly [tableLeft, tableRight] — this same strict-inequality check
     // (mirroring the cell one above) is naturally false for the OUTER lines (lineX equals one of
@@ -116,7 +132,7 @@ function renderTableBorders(
     // inner/outer branch is needed here.
     const headerHoles = tableLeft < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < tableRight ? headerRowVRanges : []
     const segments = subtractIntervals([tableTop, tableBottom], [...straddling.map(b => [b.top, b.bottom] as const), ...headerHoles])
-    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('vertical', lineX, segStart, segEnd, thickness, color, style))
+    for (const [segStart, segEnd] of segments) container.appendChild(gridSegmentDiv('vertical', lineX, segStart, segEnd, line.thickness, line.color, line.style))
   }
 }
 
@@ -127,7 +143,7 @@ function renderTableBorders(
 // original, un-offset origin.
 export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
   const node = rendered.node
-  const { originX, originY, container } = ctx
+  let { originX, originY, container } = ctx
   const colWidths = resolveColumnWidths(node, rendered.box.width)
   const colX: number[] = []
   let acc = 0
@@ -136,8 +152,37 @@ export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: D
     acc += w
   }
 
-  // Table wrapper (devtools parity only, per invariant #4 — same as group).
-  container.appendChild(styledDiv({ left: `${x}px`, top: `${y}px`, width: `${rendered.box.width}px`, height: `${rendered.box.height}px` }))
+  const outer = resolveBorderLine(node.border, 'outer')
+  const radius = resolveOuterBorderRadius(node.border)
+  const roundOuter = outer.mode === 'all' && radius > 0
+
+  // Table wrapper: devtools parity only (per invariant #4 — same as group) UNLESS `roundOuter`, in
+  // which case this becomes a REAL clip wrapper — the rounded outer border is its own CSS `border`
+  // (replacing the 4 straight perimeter segments renderTableBorders would otherwise draw), and
+  // `overflow: hidden` clips everything below to match.
+  const wrapperStyle: Partial<CSSStyleDeclaration> = { left: `${x}px`, top: `${y}px`, width: `${rendered.box.width}px`, height: `${rendered.box.height}px` }
+  if (roundOuter) {
+    const r = Math.max(0, Math.min(radius, rendered.box.width / 2, rendered.box.height / 2))
+    wrapperStyle.border = `${outer.thickness}px ${outer.style} ${outer.color}`
+    wrapperStyle.borderRadius = `${r}px`
+    wrapperStyle.overflow = 'hidden'
+  }
+  const wrapperEl = styledDiv(wrapperStyle)
+  container.appendChild(wrapperEl)
+
+  if (roundOuter) {
+    // Deliberate, narrow exception to "DOM rendering is flat" (GUIDE.md invariant #4) — same
+    // rebase-origin-into-a-real-wrapper technique container.ts's borderRadius clipping and
+    // renderPreview() both use. Everything below (backgrounds/content/per-cell borders/inner grid
+    // lines) becomes a REAL descendant of `wrapperEl`, in wrapper-local (0,0-based) coordinates, so
+    // `overflow: hidden` actually clips square corners to the curve.
+    originX -= x
+    originY -= y
+    container = wrapperEl
+    x = 0
+    y = 0
+    ctx = { container, originX, originY, unselectable: ctx.unselectable }
+  }
 
   // Shared by an ordinary 'cells' row AND a colSpan-aware 'header' row (see nodes.ts) — same
   // per-cell background-then-content painting either way. Backgrounds use each cell's own FULL
@@ -200,5 +245,5 @@ export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: D
     renderCellsRow(row.cells)
   }
 
-  renderTableBorders(node, rendered, colWidths, colX, originX, originY, x, y, container)
+  renderTableBorders(node, rendered, colWidths, colX, originX, originY, x, y, container, roundOuter)
 }

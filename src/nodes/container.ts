@@ -84,8 +84,23 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
   }
   if (node.background !== undefined) style.background = node.background
   if (node.border !== undefined) style.border = `${node.border.thickness ?? 1}px ${node.border.style ?? 'solid'} ${node.border.color ?? '#000000'}`
+  const needsClip = node.borderRadius !== undefined && node.borderRadius > 0
   if (node.borderRadius !== undefined) style.borderRadius = `${node.borderRadius}px`
-  ctx.container.appendChild(styledDiv(style))
+  // A rounded box whose child fills it edge-to-edge (its own background, or an unrounded image)
+  // would otherwise show square corners poking past the curve — `overflow: hidden` here clips the
+  // child's real painted content to match, not just the decorative background/border shape.
+  if (needsClip) style.overflow = 'hidden'
+  const el = styledDiv(style)
+  ctx.container.appendChild(el)
+  if (needsClip) {
+    // Deliberate, narrow exception to "DOM rendering is flat" (GUIDE.md invariant #4): the child
+    // becomes a REAL descendant of `el` so `overflow: hidden` actually clips it, same technique
+    // `renderPreview()` already uses (rebase origin to the wrapper's own top-left instead of the
+    // page's). Safe because hit-testing/interactions resolve purely from RenderedNode geometry
+    // data, never real DOM parent/child relationships (see attach-interactions.ts).
+    renderNodeDom(rendered.child, ctx.originX - x, ctx.originY - y, { container: el, unselectable: ctx.unselectable })
+    return
+  }
   // Same convention as group/table: rendered.child.box is already resolved relative to this SAME
   // (originX, originY), not to the container's own box (translateRendered's container branch
   // shifts both by the same delta) — so recursion reuses the UNCHANGED origin, not (x, y).
@@ -95,7 +110,10 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
 async function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderCtx): Promise<void> {
   const node = rendered.node
   const rect = toPdfRect(x, y, rendered.box.width, rendered.box.height)
-  const radiusPt = node.borderRadius !== undefined ? pxToPt(node.borderRadius) : 0
+  // Clamped against the box's own half-width/half-height (chart-geometry.ts's roundedRectPath()
+  // clamps the same way) — an oversized radius degrades to a stadium shape instead of a malformed
+  // pdfkit path.
+  const radiusPt = node.borderRadius !== undefined ? pxToPt(Math.max(0, Math.min(node.borderRadius, rendered.box.width / 2, rendered.box.height / 2))) : 0
   const doc = ctx.pdf.doc
 
   if (node.background !== undefined) {
@@ -107,9 +125,18 @@ async function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderC
     doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).lineWidth(thicknessPt).stroke(resolvePdfColor(node.border.color ?? '#000000'))
     resetLineStyle(doc)
   }
+  // Same clip-region technique image.ts already uses for ImageNode.borderRadius (save/clip/
+  // restore around just the child draw) — pdfkit clip regions are pure graphics-state, unaffected
+  // by coordinate math, so no origin adjustment is needed here (unlike the DOM branch above).
+  const needsClip = node.borderRadius !== undefined && node.borderRadius > 0
+  if (needsClip) {
+    doc.save()
+    doc.roundedRect(rect.x, rect.y, rect.width, rect.height, radiusPt).clip()
+  }
   // Same origin convention as group/table (NOT the chart module's own-origin exception) — see
   // shadow-dom.ts's renderContainerNode-era rationale, preserved here.
   await drawPdfNode(rendered.child, ctx.originX, ctx.originY, ctx.pdf)
+  if (needsClip) doc.restore()
 }
 
 registerNode('container', {

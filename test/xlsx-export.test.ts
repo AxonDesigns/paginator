@@ -47,6 +47,70 @@ describe('generateXlsx', () => {
     }
   })
 
+  test('table border.outer.borderRadius is ignored (square corners) with a one-time warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const t = table({
+        columns: [{ width: 100 }, { width: 100 }],
+        rows: [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] }],
+        border: { inner: { mode: 'none' }, outer: { borderRadius: 8 } },
+      })
+      const doc = definePage(PAGE, t)
+      await generateXlsx(doc)
+      await generateXlsx(doc) // second export must not warn again
+      expect(warnings.filter(w => w.includes('borderRadius')).length).toBe(1)
+    } finally {
+      console.warn = warnSpy
+    }
+  })
+
+  test('table border.headerSeparator and a row topBorder are each skipped with a one-time warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const t = table({
+        columns: [{ width: 100, content: text({ content: 'Item', fontFamily: 'Arial', fontSize: 10 }) }],
+        rows: [{ cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }], topBorder: { thickness: 2 } }],
+        border: { headerSeparator: true },
+      })
+      const doc = definePage(PAGE, t)
+      await generateXlsx(doc)
+      await generateXlsx(doc) // second export must not warn again
+      expect(warnings.filter(w => w.includes('headerSeparator')).length).toBe(1)
+      expect(warnings.filter(w => w.includes('topBorder/bottomBorder')).length).toBe(1)
+    } finally {
+      console.warn = warnSpy
+    }
+  })
+
+  test('independent border.inner/border.outer thickness resolve to different Excel border styles', async () => {
+    const t = table({
+      columns: [{ width: 100 }, { width: 100 }],
+      rows: [
+        { cells: [{ content: text({ content: 'a', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'b', fontFamily: 'Arial', fontSize: 10 }) }] },
+        { cells: [{ content: text({ content: 'c', fontFamily: 'Arial', fontSize: 10 }) }, { content: text({ content: 'd', fontFamily: 'Arial', fontSize: 10 }) }] },
+      ],
+      border: { inner: { thickness: 1, color: '#aaaaaa' }, outer: { thickness: 3, color: '#000000' } },
+    })
+    const doc = definePage(PAGE, t)
+    const workbook = await loadWorkbook(await generateXlsx(doc))
+    const sheet = workbook.worksheets[0]!
+    // Top-left cell: top/left edges are OUTER (thick/black), the shared edge with its row/column
+    // neighbor (bottom/right) is INNER (thin/gray).
+    const topLeft = sheet.getCell(1, 1).border!
+    expect(topLeft.top!.style).toBe('thick')
+    expect(topLeft.top!.color!.argb).toBe('FF000000')
+    expect(topLeft.bottom!.style).toBe('thin')
+    expect(topLeft.bottom!.color!.argb).toBe('FFAAAAAA')
+  })
+
   test('emits one worksheet per table, in document order', async () => {
     const t1 = table({ columns: [{ width: 100, content: text({ content: 'A', fontFamily: 'Arial', fontSize: 10 }) }], rows: [] })
     const t2 = table({ columns: [{ width: 100, content: text({ content: 'B', fontFamily: 'Arial', fontSize: 10 }) }], rows: [] })
@@ -102,7 +166,7 @@ describe('generateXlsx', () => {
       columns,
       rows,
       cellPadding: 4,
-      border: { mode: 'all', color: '#dddddd' },
+      border: { inner: { color: '#dddddd' }, outer: { color: '#dddddd' } },
       headerBackground: '#eef1f6',
       stripe: { even: '#ffffff', odd: '#f7f9fc' },
       groups: [
@@ -157,7 +221,7 @@ describe('generateXlsx', () => {
         ],
       },
     ])
-    const t = table({ columns, rows, border: { mode: 'all' } })
+    const t = table({ columns, rows, border: { inner: {}, outer: {} } })
     const doc = definePage(PAGE, t)
     const workbook = await loadWorkbook(await generateXlsx(doc))
     const sheet = workbook.worksheets[0]!

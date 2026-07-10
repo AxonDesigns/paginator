@@ -73,7 +73,7 @@ const DEMO_IMAGE_SRC = `data:image/svg+xml,${encodeURIComponent(`
 </svg>
 `)}`
 
-const tableIntro = `A table is a fixed grid of rows and columns, not a semantically "correct" HTML table — no thead element, though colSpan/rowSpan cell merging IS supported (see the "Cell Spans" section further down). Column widths use the exact same fixed-px/flex-weight model as a row group's children: "#", "Qty", and "Price" below are fixed-px, "Item" is flexible. Each column's header caption lives directly on the column definition ("content", right alongside "width"/"align") — table() derives one auto-repeating header row from them, so there's no separate row to keep in sync with column order by hand. It repeats automatically at the top of every page this table spans — enough rows are generated here to force at least one page break, so watch for the header reappearing. A cell can hold arbitrary nested content, not just text — row 13's "Item" cell nests a column group containing a row group (SKU + a vertical divider + status), i.e. groups nested inside groups inside a cell, and the last row's "Item" cell opts itself into hover/click/drag independent of the table (try dragging it). Cell/row/column background color, alignment overrides, and every border mode (none/all/outer/horizontal/vertical) are all supported — this demo uses "all".`
+const tableIntro = `A table is a fixed grid of rows and columns, not a semantically "correct" HTML table — no thead element, though colSpan/rowSpan cell merging IS supported (see the "Cell Spans" section further down). Column widths use the exact same fixed-px/flex-weight model as a row group's children: "#", "Qty", and "Price" below are fixed-px, "Item" is flexible. Each column's header caption lives directly on the column definition ("content", right alongside "width"/"align") — table() derives one auto-repeating header row from them, so there's no separate row to keep in sync with column order by hand. It repeats automatically at the top of every page this table spans — enough rows are generated here to force at least one page break, so watch for the header reappearing. A cell can hold arbitrary nested content, not just text — row 13's "Item" cell nests a column group containing a row group (SKU + a vertical divider + status), i.e. groups nested inside groups inside a cell, and the last row's "Item" cell opts itself into hover/click/drag independent of the table (try dragging it). Cell/row/column background color, alignment overrides, and independently-configurable inner grid lines vs. outer perimeter ("border.inner"/"border.outer", each with their own mode/thickness/color/style) are all supported — this demo matches them (dashed, same color) and rounds the outer perimeter via "border.outer.borderRadius".`
 
 // Enough rows to force at least one page break. Row 12 (0-indexed) gets a nested group + longer
 // content to demonstrate mixed cell heights within one row (paired with verticalAlign: 'center');
@@ -142,11 +142,11 @@ const demoTable = table({
   columns: tableColumns,
   rows: tableDataRows(),
   cellPadding: 8,
-  border: { mode: 'all', thickness: 1, color: '#dddddd', style: "dashed" },
+  border: { inner: { mode: 'all', thickness: 1, color: '#dddddd', style: 'dashed' }, outer: { mode: 'all', thickness: 1, color: '#dddddd', style: 'dashed', borderRadius: 16 } },
   headerBackground: '#eef1f6',
 })
 
-const groupingIntro = `Column grouping is a TABLE-level concept, entirely independent of "columns" — it never marks or removes a column. Instead, "groups: [...]" on the table declares report-style bucketing levels, and each row supplies its bucketing value(s) via "groupValues" (one entry per level), unrelated to that row's "cells". Below, Warehouse (outermost) and Status (innermost) are nested groups, yet neither has a column of its own — the table's only real columns are Item/Qty/Price, each still getting its own repeating column header exactly like the plain table above. Because a group never touches columns/cells, it's freely combinable with colSpan/rowSpan in the very same table (see the receipt table further down, grouped by category). Grouping is a "global regroup by value": rows sharing a value merge into one group wherever they appear in the authored row order, not just when adjacent — the rows below deliberately cycle through warehouses every row, yet every "Warehouse: West" row still ends up gathered under one heading. Each level can opt into its own totals() row, aggregating across all of that group's rows (including nested subgroups) via a fully custom callback — Warehouse's total sums every status beneath it, not just rows directly at that level. Enough rows are generated here to force a page split in the middle of a group's own data (not just at a group boundary) — watch "Warehouse: X" reappear at the top of the next page, since Warehouse defaults to "repeat: true", while "Pending"/"Shipped" do NOT reappear, since Status opts out with "repeat: false".`
+const groupingIntro = `Column grouping is a TABLE-level concept, entirely independent of "columns" — it never marks or removes a column. Instead, "groups: [...]" on the table declares report-style bucketing levels, and each row supplies its bucketing value(s) via "groupValues" (one entry per level), unrelated to that row's "cells". Below, Warehouse (outermost) and Status (innermost) are nested groups, yet neither has a column of its own — the table's only real columns are Item/Qty/Price, each still getting its own repeating column header exactly like the plain table above. Because a group never touches columns/cells, it's freely combinable with colSpan/rowSpan in the very same table (see the receipt table further down, grouped by category). Grouping is a "global regroup by value": rows sharing a value merge into one group wherever they appear in the authored row order, not just when adjacent — the rows below deliberately cycle through warehouses every row, yet every "Warehouse: West" row still ends up gathered under one heading. Each level can opt into its own totals() row, aggregating across all of that group's rows (including nested subgroups) via a fully custom callback — Warehouse's total sums every status beneath it, not just rows directly at that level. Enough rows are generated here to force a page split in the middle of a group's own data (not just at a group boundary) — watch "Warehouse: X" reappear at the top of the next page, since Warehouse defaults to "repeat: true", while "Pending"/"Shipped" do NOT reappear, since Status opts out with "repeat: false". The table's own "border.headerSeparator" also draws a distinct line beneath the repeating column header, and the Warehouse level's "headerBorder"/"totalsBorder" put a blue accent rule at that group's own header bar bottom edge / totals row top edge — overriding the ordinary gray inner line at those two boundaries specifically.`
 
 type InventoryRow = { warehouse: string; status: string; item: string; qty: number; price: number }
 
@@ -183,7 +183,7 @@ const groupedTableColumns: TableColumn[] = [
 const groupedDemoTable = table({
   columns: groupedTableColumns,
   cellPadding: 8,
-  border: { mode: 'horizontal', color: '#dddddd' },
+  border: { inner: { mode: 'horizontal', color: '#dddddd' }, outer: { mode: 'horizontal', color: '#dddddd' }, headerSeparator: true },
   headerBackground: '#eef1f6',
   groups: [
     {
@@ -194,6 +194,11 @@ const groupedDemoTable = table({
         { content: text({ content: String(sumCell(rows, 1)), fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
         { content: text({ content: `$${sumCell(rows, 2).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
       ],
+      // Overrides the ordinary gray inner line at this group's own header bar bottom edge / totals
+      // row top edge with a heavier blue accent rule — independent of the table-wide border.inner
+      // styling above.
+      headerBorder: { bottom: { thickness: 2, color: '#4f7cff' } },
+      totalsBorder: { top: { thickness: 2, color: '#4f7cff' } },
     },
     {
       // No custom `header` — falls back to the library default (bold text showing the value).
@@ -274,7 +279,7 @@ function sumReceiptPrice(rows: TableRow[]): number {
 const receiptTable = table({
   columns: receiptColumns,
   cellPadding: 8,
-  border: { mode: 'all', color: '#dddddd' },
+  border: { inner: { color: '#dddddd' }, outer: { color: '#dddddd' } },
   headerBackground: '#eef1f6',
   groups: [
     {
@@ -299,7 +304,7 @@ const receiptTable = table({
   rows: receiptRows,
 })
 
-const tableStylingIntro = `Beyond the table-wide border modes and cellPadding above, styling now goes finer-grained: "stripe" (table-level) desugars into alternating row background at build time, same architecture column grouping already uses — table-layout.ts never knows striping happened. "padding" is resolvable per column or per cell (cell.padding ?? column.padding ?? table cellPadding), shown below on the tighter "Qty" column. And "border" on a cell draws a complete rectangle around just that cell's own box, independent of the table-wide border — shown on the one low-stock row's Qty cell — which is why it's a full, separate rectangle rather than a shared-edge line like the table-wide modes (adjacent bordered cells would show a double-thickness line between them).`
+const tableStylingIntro = `Beyond the independently-styled inner/outer table borders and cellPadding above, styling now goes finer-grained: "stripe" (table-level) desugars into alternating row background at build time, same architecture column grouping already uses — table-layout.ts never knows striping happened. "padding" is resolvable per column or per cell (cell.padding ?? column.padding ?? table cellPadding), shown below on the tighter "Qty" column. And "border" on a cell draws a complete rectangle around just that cell's own box, independent of the table-wide border — shown on the one low-stock row's Qty cell — which is why it's a full, separate rectangle rather than a shared-edge line like the table-wide inner/outer lines (adjacent bordered cells would show a double-thickness line between them). This table also shows "border.inner: { mode: 'none' }" paired with an "outer" perimeter — the old single "mode: 'outer'" shorthand, now expressed as two independent groups.`
 
 const stylingTableColumns: TableColumn[] = [
   { width: 3, content: headerCaption('Item') },
@@ -328,7 +333,7 @@ const stylingTable = table({
   columns: stylingTableColumns,
   rows: stylingTableRows,
   cellPadding: 8,
-  border: { mode: 'outer', thickness: 1, color: '#dddddd' },
+  border: { inner: { mode: 'none' }, outer: { thickness: 1, color: '#dddddd' } },
   headerBackground: '#eef1f6',
   stripe: { even: '#ffffff', odd: '#f7f9fc' },
 })
@@ -586,7 +591,7 @@ const doc = definePage(
     table({
       columns: [{ width: 3, content: headerCaption('Item') }, { width: '120px', content: headerCaption('Status') }],
       cellPadding: 8,
-      border: { mode: 'all', thickness: 1, color: '#dddddd' },
+      border: { inner: { thickness: 1, color: '#dddddd' }, outer: { thickness: 1, color: '#dddddd' } },
       headerBackground: '#eef1f6',
       rows: [
         {

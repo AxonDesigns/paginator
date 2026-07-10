@@ -13,7 +13,7 @@ if (typeof globalThis.Buffer === 'undefined') {
 }
 
 import ExcelJS from 'exceljs'
-import type { CrossAlign, Node, PageDef, RichTextNode, RichTextRun, TableBorderMode, TableCell, TableNode, TableRow, TextNode } from '../core/nodes.ts'
+import type { CrossAlign, Node, PageDef, RichTextNode, RichTextRun, TableBorderLineMode, TableCell, TableNode, TableRow, TextNode } from '../core/nodes.ts'
 import { resolvePageSize } from '../core/page-sizes.ts'
 import { resolveColumnWidths } from '../nodes/table/index.ts'
 import { findTables } from './find-tables.ts'
@@ -21,6 +21,7 @@ import { flattenNodeToText } from './node-to-text.ts'
 import { toArgb } from './export-color.ts'
 import { pxToExcelWidth, pxToPt } from './units.ts'
 import { borderSides, borderStyleForThickness as sharedBorderStyleForThickness } from './table-grid.ts'
+import type { BorderSide, BorderSides } from './table-grid.ts'
 
 export type XlsxMetadata = { title?: string; author?: string; subject?: string; keywords?: string[] }
 
@@ -30,6 +31,30 @@ function warnNestedCellContentOnce(): void {
   if (warnedNestedCellContent) return
   warnedNestedCellContent = true
   console.warn('[paginator] generateXlsx(): a cell contains nested layout (e.g. a group/container) that can\'t be represented in a spreadsheet cell — flattening it to plain text.')
+}
+
+let warnedTableBorderRadius = false
+
+function warnTableBorderRadiusOnce(): void {
+  if (warnedTableBorderRadius) return
+  warnedTableBorderRadius = true
+  console.warn('[paginator] generateXlsx(): table border.outer.borderRadius has no spreadsheet equivalent — drawing square corners.')
+}
+
+let warnedTableHeaderSeparator = false
+
+function warnTableHeaderSeparatorOnce(): void {
+  if (warnedTableHeaderSeparator) return
+  warnedTableHeaderSeparator = true
+  console.warn('[paginator] generateXlsx(): table border.headerSeparator has no spreadsheet equivalent — skipping (the ordinary inner/outer grid still draws at that boundary).')
+}
+
+let warnedTableRowBorder = false
+
+function warnTableRowBorderOnce(): void {
+  if (warnedTableRowBorder) return
+  warnedTableRowBorder = true
+  console.warn('[paginator] generateXlsx(): a table row\'s topBorder/bottomBorder (e.g. TableGroupLevel.headerBorder/totalsBorder) has no spreadsheet equivalent — skipping (the ordinary inner/outer grid still draws at that boundary).')
 }
 
 const HORIZONTAL_ALIGN: Record<CrossAlign, ExcelJS.Alignment['horizontal']> = {
@@ -98,28 +123,22 @@ function borderStyleForThickness(thickness: number): ExcelJS.BorderStyle {
   return sharedBorderStyleForThickness(thickness, { thin: 'thin', medium: 'medium', thick: 'thick' })
 }
 
+type EdgeLine = { style: ExcelJS.BorderStyle; argb: string }
+
 /** Applies a border rectangle (a single cell, or a colSpan/rowSpan-merged block) — sets each side
  *  only on the block's own perimeter cells, since ExcelJS renders a merged range's border from the
- *  styles of its edge cells, not just the top-left "master" cell. */
-function applyBorderRect(
-  sheet: ExcelJS.Worksheet,
-  rowStart: number,
-  rowEnd: number,
-  colStart: number,
-  colEnd: number,
-  sides: { top: boolean; bottom: boolean; left: boolean; right: boolean },
-  style: ExcelJS.BorderStyle,
-  argb: string,
-): void {
-  const edge: Partial<ExcelJS.Border> = { style, color: { argb } }
+ *  styles of its edge cells, not just the top-left "master" cell. `sides` says which line-config
+ *  (inner vs outer vs none) applies per edge, since the two can differ independently. */
+function applyBorderRect(sheet: ExcelJS.Worksheet, rowStart: number, rowEnd: number, colStart: number, colEnd: number, sides: BorderSides, lines: { inner: EdgeLine; outer: EdgeLine }): void {
+  const edgeFor = (s: BorderSide): Partial<ExcelJS.Border> | undefined => (s === 'none' ? undefined : { style: lines[s].style, color: { argb: lines[s].argb } })
   for (let r = rowStart; r <= rowEnd; r++) {
     for (let c = colStart; c <= colEnd; c++) {
       const cell = sheet.getCell(r, c)
       const border: Partial<ExcelJS.Borders> = { ...cell.border }
-      if (sides.top && r === rowStart) border.top = edge
-      if (sides.bottom && r === rowEnd) border.bottom = edge
-      if (sides.left && c === colStart) border.left = edge
-      if (sides.right && c === colEnd) border.right = edge
+      if (r === rowStart) { const e = edgeFor(sides.top); if (e) border.top = e }
+      if (r === rowEnd) { const e = edgeFor(sides.bottom); if (e) border.bottom = e }
+      if (c === colStart) { const e = edgeFor(sides.left); if (e) border.left = e }
+      if (c === colEnd) { const e = edgeFor(sides.right); if (e) border.right = e }
       cell.border = border
     }
   }
@@ -134,9 +153,9 @@ function writeCell(
   rowVerticalAlign: 'start' | 'center' | 'end' | undefined,
   totalRows: number,
   columnCount: number,
-  tableMode: TableBorderMode,
-  tableBorderColor: string,
-  tableBorderStyle: ExcelJS.BorderStyle,
+  innerMode: TableBorderLineMode,
+  outerMode: TableBorderLineMode,
+  borderLines: { inner: EdgeLine; outer: EdgeLine },
 ): void {
   // Mirrors table/layout.ts's prepareRowCells: `__resolvedCol` is only baked in when the table has
   // ANY colSpan/rowSpan (resolveCellSpans() in nodes.ts); an ordinary table falls back to plain
@@ -161,15 +180,15 @@ function writeCell(
   const vertical = VERTICAL_ALIGN[cell.verticalAlign ?? rowVerticalAlign ?? 'start']
   target.alignment = { horizontal, vertical, wrapText: true }
 
-  const sides = borderSides(tableMode, excelRow - 1, rowEnd, colStart, colEnd, totalRows, columnCount)
-  if (sides.top || sides.bottom || sides.left || sides.right) {
-    applyBorderRect(sheet, excelRow, rowEnd + 1, colStart + 1, colEnd + 1, sides, tableBorderStyle, tableBorderColor)
+  const sides = borderSides(innerMode, outerMode, excelRow - 1, rowEnd, colStart, colEnd, totalRows, columnCount)
+  if (sides.top !== 'none' || sides.bottom !== 'none' || sides.left !== 'none' || sides.right !== 'none') {
+    applyBorderRect(sheet, excelRow, rowEnd + 1, colStart + 1, colEnd + 1, sides, borderLines)
   }
 
   if (cell.border !== undefined) {
-    const perCellStyle = borderStyleForThickness(cell.border.thickness ?? 1)
-    const perCellColor = toArgb(cell.border.color ?? '#000000')
-    applyBorderRect(sheet, excelRow, rowEnd + 1, colStart + 1, colEnd + 1, { top: true, bottom: true, left: true, right: true }, perCellStyle, perCellColor)
+    const perCellLine: EdgeLine = { style: borderStyleForThickness(cell.border.thickness ?? 1), argb: toArgb(cell.border.color ?? '#000000') }
+    const fullRectSides: BorderSides = { top: 'outer', bottom: 'outer', left: 'outer', right: 'outer' }
+    applyBorderRect(sheet, excelRow, rowEnd + 1, colStart + 1, colEnd + 1, fullRectSides, { inner: perCellLine, outer: perCellLine })
   }
 }
 
@@ -179,15 +198,21 @@ function writeTableSheet(sheet: ExcelJS.Worksheet, table: TableNode, contentWidt
   sheet.columns = colWidthsPx.map(w => ({ width: pxToExcelWidth(w) }))
 
   const totalRows = table.rows.length
-  const mode = table.border?.mode ?? (table.border !== undefined ? 'all' : 'none')
-  const borderColor = toArgb(table.border?.color ?? '#000000')
-  const borderStyle = borderStyleForThickness(table.border?.thickness ?? 1)
+  const innerMode: TableBorderLineMode = table.border === undefined ? 'none' : (table.border.inner?.mode ?? 'all')
+  const outerMode: TableBorderLineMode = table.border === undefined ? 'none' : (table.border.outer?.mode ?? 'all')
+  if (table.border?.outer?.borderRadius !== undefined) warnTableBorderRadiusOnce()
+  if (table.border?.headerSeparator) warnTableHeaderSeparatorOnce()
+  if (table.rows.some(r => r.topBorder !== undefined || r.bottomBorder !== undefined)) warnTableRowBorderOnce()
+  const borderLines: { inner: EdgeLine; outer: EdgeLine } = {
+    inner: { style: borderStyleForThickness(table.border?.inner?.thickness ?? 1), argb: toArgb(table.border?.inner?.color ?? '#000000') },
+    outer: { style: borderStyleForThickness(table.border?.outer?.thickness ?? 1), argb: toArgb(table.border?.outer?.color ?? '#000000') },
+  }
 
   table.rows.forEach((row: TableRow, r) => {
     const excelRow = r + 1
     if (row.kind === 'header') {
       if (row.cells !== undefined) {
-        row.cells.forEach((cell, i) => writeCell(sheet, excelRow, cell, i, row.background, undefined, totalRows, columnCount, mode, borderColor, borderStyle))
+        row.cells.forEach((cell, i) => writeCell(sheet, excelRow, cell, i, row.background, undefined, totalRows, columnCount, innerMode, outerMode, borderLines))
         return
       }
       sheet.mergeCells(excelRow, 1, excelRow, columnCount)
@@ -195,13 +220,13 @@ function writeTableSheet(sheet: ExcelJS.Worksheet, table: TableNode, contentWidt
       if (row.content !== undefined) applyCellContent(target, row.content)
       target.alignment = { vertical: 'middle', indent: row.depth }
       if (row.background !== undefined) target.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: toArgb(row.background) } }
-      const sides = borderSides(mode, r, r, 0, columnCount - 1, totalRows, columnCount)
-      if (sides.top || sides.bottom || sides.left || sides.right) {
-        applyBorderRect(sheet, excelRow, excelRow, 1, columnCount, sides, borderStyle, borderColor)
+      const sides = borderSides(innerMode, outerMode, r, r, 0, columnCount - 1, totalRows, columnCount)
+      if (sides.top !== 'none' || sides.bottom !== 'none' || sides.left !== 'none' || sides.right !== 'none') {
+        applyBorderRect(sheet, excelRow, excelRow, 1, columnCount, sides, borderLines)
       }
       return
     }
-    row.cells.forEach((cell, i) => writeCell(sheet, excelRow, cell, i, row.background, row.verticalAlign, totalRows, columnCount, mode, borderColor, borderStyle))
+    row.cells.forEach((cell, i) => writeCell(sheet, excelRow, cell, i, row.background, row.verticalAlign, totalRows, columnCount, innerMode, outerMode, borderLines))
   })
 
   if ((table.headerRows ?? 0) > 0) {
