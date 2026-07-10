@@ -579,6 +579,36 @@ describe('group (column)', () => {
     expect(outcome!.rest).not.toBeNull()
     expect((outcome!.rest as { children: unknown[] }).children).toHaveLength(2)
   })
+
+  test('unset crossAlign: a nested GROUP child defaults to "stretch" (full column width)', () => {
+    const node = group({ direction: 'column' }, [group({ direction: 'row' }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })])])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(300)
+  })
+
+  test('unset crossAlign: a leaf child still defaults to "start" (shrink-wraps to its own natural width)', () => {
+    const node = group({ direction: 'column' }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(40)
+  })
+
+  test('an explicit crossAlign: "start" on the column overrides a nested GROUP child\'s stretch default', () => {
+    const node = group({ direction: 'column', crossAlign: 'start' }, [
+      group({ direction: 'row', flex: 'shrink' }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })]),
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(40)
+  })
+
+  test('a per-child alignSelf: "start" overrides a nested GROUP child\'s stretch default without affecting siblings', () => {
+    const node = group({ direction: 'column' }, [
+      group({ direction: 'row', alignSelf: 'start', flex: 'shrink' }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })]),
+      group({ direction: 'row' }, [image({ src: 'b.png', height: 10, aspectRatio: 4 })]),
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(40) // alignSelf: 'start' opts out of the stretch default
+    expect(rendered.children[1]!.box.width).toBe(300) // sibling still gets the GROUP stretch default
+  })
 })
 
 describe('group (row)', () => {
@@ -621,6 +651,81 @@ describe('group (row)', () => {
     expect(rendered.children[0]!.box.width).toBe(40)
     expect(rendered.children[1]!.box.x).toBe(110)
     expect(rendered.children[1]!.box.width).toBe(20)
+  })
+
+  test('flex: "shrink" on a column with a nested row of leaf children shrink-wraps to content, not full width', () => {
+    // Reproduces a real bug: a nested ROW inside a `flex: 'shrink'` column, with ordinary (no
+    // explicit width/flex) leaf children — used to make shrinkWrapWidth() bail out to the FULL
+    // width offered instead of a content-derived sum, starving the sibling column's default flex
+    // down to 0. Leaf children now default to 'shrink' themselves (see "Row flex sizing" in
+    // GUIDE.md), so this also doubles as coverage for that default.
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', flex: 'shrink' }, [
+        group({ direction: 'row', gap: 5 }, [
+          image({ src: 'label.png', height: 10, aspectRatio: 4 }), // no width/flex -> default shrink, natural width 40
+          image({ src: 'value.png', height: 10, aspectRatio: 8 }), // no width/flex -> default shrink, natural width 80
+        ]),
+      ]),
+      group({ direction: 'column' }, [image({ src: 'sibling.png', width: 10, height: 10 })]), // GROUP -> default flex: 1
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    // shrink column's natural width: 40 + 80 + 1 gap * 5 = 125, NOT the full 300px offered.
+    expect(rendered.children[0]!.box.width).toBe(125)
+    expect(rendered.children[1]!.box.width).toBe(175)
+  })
+
+  test('flex: "shrink" column takes the max natural width across multiple nested label/value rows, still leaving the flex sibling correctly sized', () => {
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', flex: 'shrink', gap: 2 }, [
+        group({ direction: 'row', gap: 5 }, [
+          image({ src: 'label1.png', width: 20, height: 10 }), // explicit width -> fixed
+          image({ src: 'value1.png', height: 10, aspectRatio: 3 }), // no width/flex -> default shrink, natural width 30
+        ]),
+        group({ direction: 'row', gap: 5 }, [
+          image({ src: 'label2.png', width: 20, height: 10 }),
+          image({ src: 'value2.png', height: 10, aspectRatio: 6 }), // natural width 60 -> this row is wider
+        ]),
+      ]),
+      group({ direction: 'column' }, [image({ src: 'sibling.png', width: 10, height: 10 })]),
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    // row1 natural width: 20 + 30 + 5 = 55; row2: 20 + 60 + 5 = 85 -> column shrink-wraps to the wider row.
+    expect(rendered.children[0]!.box.width).toBe(85)
+    expect(rendered.children[1]!.box.width).toBe(215)
+  })
+
+  test('unset flex on a leaf row child defaults to "shrink" (hugs content), not an equal flex-grow share', () => {
+    // The actual default-behavior change: three un-pinned leaf children (no flex, no width) used
+    // to divide the row equally (flex: 1 each), which could squeeze one below its own content width
+    // and force it to wrap. Now each hugs its own natural width instead, left-packed.
+    const node = group({ direction: 'row', gap: 10 }, [
+      image({ src: 'a.png', height: 10, aspectRatio: 4 }), // natural width 40
+      image({ src: 'b.png', height: 10, aspectRatio: 6 }), // natural width 60
+      image({ src: 'c.png', height: 10, aspectRatio: 8 }), // natural width 80
+    ])
+    const rendered = layoutNodeFull(node, 400) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children.map(c => c.box.width)).toEqual([40, 60, 80])
+    expect(rendered.children.map(c => c.box.x)).toEqual([0, 50, 120])
+  })
+
+  test('unset flex on a nested GROUP row child still defaults to flex weight 1 (grow), unlike a leaf sibling', () => {
+    const node = group({ direction: 'row', gap: 10 }, [
+      image({ src: 'a.png', height: 10, aspectRatio: 4, flex: 'shrink' }), // fixed, natural width 40
+      group({ direction: 'column' }, [image({ src: 'b.png', width: 10, height: 10 })]), // GROUP -> default flex: 1
+    ])
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(40)
+    expect(rendered.children[1]!.box.width).toBe(150) // 200 - 40 - 10 gap
+  })
+
+  test('an explicit numeric flex on a leaf child still makes it flexible, overriding the shrink default', () => {
+    const node = group({ direction: 'row', gap: 10 }, [
+      image({ src: 'a.png', height: 10, aspectRatio: 4, flex: 2 }),
+      image({ src: 'b.png', height: 10, aspectRatio: 4, flex: 1 }),
+    ])
+    const rendered = layoutNodeFull(node, 190) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(120) // (190-10) * 2/3
+    expect(rendered.children[1]!.box.width).toBe(60) // (190-10) * 1/3
   })
 })
 

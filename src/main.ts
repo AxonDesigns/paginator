@@ -85,7 +85,7 @@ const TABLE_ROW_COUNT = 32
 // row from them (see column.content in GUIDE.md), rather than requiring a hand-authored row kept
 // in sync with column order by hand.
 function headerCaption(content: string): ReturnType<typeof text> {
-  return text({ content, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14 })
+  return text({ content, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, })
 }
 
 const tableColumns: TableColumn[] = [
@@ -108,32 +108,32 @@ function tableDataRows(): TableRow[] {
     // free, since each level is just another Node it hands off to the generic dispatcher.
     const itemContent = isTall
       ? group({ direction: 'column', gap: 2 }, [
-        text({ content: `Widget Deluxe Pro ${i}`, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 17 }),
+        text({ content: `Widget Deluxe Pro ${i}`, fontFamily: BODY_FONT, fontSize: 12, }),
         group({ direction: 'row', gap: 8, crossAlign: 'center' }, [
-          text({ content: 'SKU: WD-1042', fontFamily: UI_FONT, fontSize: 10, lineHeight: 13, color: '#666666', flex: '90px' }),
+          text({ content: 'SKU: WD-1042', fontFamily: UI_FONT, fontSize: 10, color: '#666666', flex: '90px' }),
           separator({ thickness: 1, color: '#dddddd' }),
-          text({ content: 'Backordered — extended lead time', fontFamily: UI_FONT, fontSize: 10, lineHeight: 13, color: '#b45309' }),
+          text({ content: 'Backordered — extended lead time', fontFamily: UI_FONT, fontSize: 10, color: '#b45309' }),
         ]),
       ])
       : isLast
         ? group({ direction: 'column', interactive: true, draggable: true }, [
-          text({ content: `Widget ${String.fromCharCode(65 + (i % 26))}${i}`, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16, color: '#4f7cff', fontWeight: 700 }),
+          text({ content: `Widget ${String.fromCharCode(65 + (i % 26))}${i}`, fontFamily: BODY_FONT, fontSize: 12, color: '#4f7cff', fontWeight: 700 }),
         ])
-        : text({ content: `Widget ${String.fromCharCode(65 + (i % 26))}${i}`, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 })
+        : text({ content: `Widget ${String.fromCharCode(65 + (i % 26))}${i}`, fontFamily: BODY_FONT, fontSize: 12, })
 
     const hashCell: TableCell = {
-      content: text({ content: String(i + 1), fontFamily: UI_FONT, fontSize: 11, lineHeight: 15, color: '#888888' }),
+      content: text({ content: String(i + 1), fontFamily: UI_FONT, fontSize: 11, color: '#888888' }),
       ...(i === 3 ? { align: 'center' as const } : {}),
     }
     const priceCell: TableCell = {
-      content: text({ content: `$${price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }),
+      content: text({ content: `$${price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, }),
       ...(i === 5 ? { background: '#ffe8e8' } : {}),
     }
 
     return {
       background: i % 2 === 1 ? '#f7f9fc' : undefined,
       verticalAlign: isTall ? ('center' as const) : undefined,
-      cells: [hashCell, { content: itemContent }, { content: text({ content: String(qty), fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }) }, priceCell],
+      cells: [hashCell, { content: itemContent }, { content: text({ content: String(qty), fontFamily: UI_FONT, fontSize: 12, }) }, priceCell],
     }
   })
 }
@@ -187,12 +187,12 @@ const groupedDemoTable = table({
   headerBackground: '#eef1f6',
   groups: [
     {
-      header: value => text({ content: `Warehouse: ${value}`, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 17 }),
+      header: value => text({ content: `Warehouse: ${value}`, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, }),
       background: '#eef1f6',
       totals: rows => [
-        { content: text({ content: 'Warehouse total', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
-        { content: text({ content: String(sumCell(rows, 1)), fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
-        { content: text({ content: `$${sumCell(rows, 2).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
+        { content: text({ content: 'Warehouse total', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }) },
+        { content: text({ content: String(sumCell(rows, 1)), fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }) },
+        { content: text({ content: `$${sumCell(rows, 2).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }) },
       ],
       // Overrides the ordinary gray inner line at this group's own header bar bottom edge / totals
       // row top edge with a heavier blue accent rule — independent of the table-wide border.inner
@@ -207,18 +207,18 @@ const groupedDemoTable = table({
       background: '#f7f9fc',
       repeat: false,
       totals: rows => [
-        { content: text({ content: 'Subtotal', fontFamily: UI_FONT, fontSize: 11, lineHeight: 15, color: '#666666' }) },
-        { content: text({ content: String(sumCell(rows, 1)), fontFamily: UI_FONT, fontSize: 11, lineHeight: 15 }) },
-        { content: text({ content: `$${sumCell(rows, 2).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, lineHeight: 15 }) },
+        { content: text({ content: 'Subtotal', fontFamily: UI_FONT, fontSize: 11, color: '#666666' }) },
+        { content: text({ content: String(sumCell(rows, 1)), fontFamily: UI_FONT, fontSize: 11, }) },
+        { content: text({ content: `$${sumCell(rows, 2).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, }) },
       ],
     },
   ],
   rows: inventoryRows.map(r => ({
     groupValues: [r.warehouse, r.status],
     cells: [
-      { content: text({ content: r.item, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 }) },
-      { content: text({ content: String(r.qty), fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }), value: String(r.qty) },
-      { content: text({ content: `$${r.price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }), value: String(r.price) },
+      { content: text({ content: r.item, fontFamily: BODY_FONT, fontSize: 12, }) },
+      { content: text({ content: String(r.qty), fontFamily: UI_FONT, fontSize: 12, }), value: String(r.qty) },
+      { content: text({ content: `$${r.price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, }), value: String(r.price) },
     ],
   })),
 })
@@ -255,15 +255,15 @@ const receiptRows: TableRow[] = RECEIPT_ITEMS.flatMap(item =>
   rowGroup([item.category], [
     {
       cells: [
-        { rowSpan: 2, verticalAlign: 'center' as const, content: text({ content: `x${item.qty}`, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 16, align: 'center' as const }) },
-        { colSpan: 2, content: text({ content: item.name, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 17 }) },
+        { rowSpan: 2, verticalAlign: 'center' as const, content: text({ content: `x${item.qty}`, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, align: 'center' as const }) },
+        { colSpan: 2, content: text({ content: item.name, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, }) },
       ],
     },
     {
       // Column 0 (Qty) is skipped automatically — occupied by the rowSpan cell above.
       cells: [
-        { content: text({ content: item.detail, fontFamily: BODY_FONT, fontSize: 11, lineHeight: 14, color: '#666666' }) },
-        { content: text({ content: `$${item.price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }), value: String(item.price) },
+        { content: text({ content: item.detail, fontFamily: BODY_FONT, fontSize: 11, color: '#666666' }) },
+        { content: text({ content: `$${item.price.toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, }), value: String(item.price) },
       ],
     },
   ]),
@@ -289,15 +289,15 @@ const receiptTable = table({
       // header (see groupedDemoTable's Warehouse/Status bars above), which is never indented by
       // nesting depth for this reason — it aligns to the real grid instead.
       header: (value, rows) => [
-        { colSpan: 2, content: text({ content: value, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 17 }) },
-        { content: text({ content: `${rows.length / 2} items`, fontFamily: UI_FONT, fontSize: 11, lineHeight: 15, color: '#666666' }) },
+        { colSpan: 2, content: text({ content: value, fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, }) },
+        { content: text({ content: `${rows.length / 2} items`, fontFamily: UI_FONT, fontSize: 11, color: '#666666' }) },
       ],
       background: '#eef1f6',
       // colSpan works on a totals() row too — the label spans the Qty+Item columns instead of
       // needing a separate blank Qty cell.
       totals: rows => [
-        { colSpan: 2, content: text({ content: 'Category total', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
-        { content: text({ content: `$${sumReceiptPrice(rows).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 15 }) },
+        { colSpan: 2, content: text({ content: 'Category total', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }) },
+        { content: text({ content: `$${sumReceiptPrice(rows).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }) },
       ],
     },
   ],
@@ -319,13 +319,13 @@ const stylingTableRows: TableRow[] = [
   { qty: 8, low: false },
 ].map((r, i) => ({
   cells: [
-    { content: text({ content: `Widget ${String.fromCharCode(65 + i)}`, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 }) },
+    { content: text({ content: `Widget ${String.fromCharCode(65 + i)}`, fontFamily: BODY_FONT, fontSize: 12, }) },
     {
-      content: text({ content: String(r.qty), fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: r.low ? '#b3261e' : undefined }),
+      content: text({ content: String(r.qty), fontFamily: UI_FONT, fontSize: 12, color: r.low ? '#b3261e' : undefined }),
       ...(r.low ? { border: { thickness: 2, color: '#b3261e' } } : {}),
       verticalAlign: 'center',
     },
-    { content: text({ content: `$${(4.5 + i * 3).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, lineHeight: 16 }) },
+    { content: text({ content: `$${(4.5 + i * 3).toFixed(2)}`, fontFamily: UI_FONT, fontSize: 12, }) },
   ],
 }))
 
@@ -399,7 +399,6 @@ const doc = definePage(
         content: 'Paginator — Declarative Document Pagination Engine',
         fontFamily: UI_FONT,
         fontSize: 11,
-        lineHeight: 14,
         color: '#888888',
       }),
     footer: ({ pageNumber, totalPages }) =>
@@ -407,83 +406,91 @@ const doc = definePage(
         content: `Page ${pageNumber} of ${totalPages}`,
         fontFamily: UI_FONT,
         fontSize: 10,
-        lineHeight: 13,
         color: '#888888',
         align: 'right',
       }),
   },
   group({ direction: 'column', gap: 16 }, [
+    // The row itself needs no `alignSelf: 'stretch'` — a nested GROUP column child defaults to
+    // that now — and its two text children need no `flex: 'shrink'` either, since a leaf child
+    // defaults to that too; both are left implicit here to show the new defaults doing the work.
     group({
       direction: "row",
       mainAlign: "center",
-      alignSelf: "stretch"
     }, [
-      text({ content: 'Title', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30, flex: 'shrink' }),
+      text({ content: 'Title', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, }),
       separator({ thickness: 1, margin: 4, color: '#dddddd' }),
-      text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, lineHeight: 30, flex: 'shrink' })
+      text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700, })
     ]),
     separator({ thickness: 1, margin: 0, color: '#dddddd', style: "dashed" }),
     text({ content: longParagraph1, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-    group({ direction: 'row', mainAlign: 'space-between', crossAlign: 'stretch', gap: 12 }, [
-      // Fixed (px) flex opts these out of the row's default equal-column sizing, so they hug
-      // their own content width and let `space-between` spread the leftover space between them —
-      // the same look the row had before explicit sizing existed, now expressed explicitly.
-      text({ content: 'Prepared by: Jane Doe', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: 'shrink' }),
+    // Same story: the row stretches to full width by default (it's a GROUP), and each text child
+    // shrinks to its own content by default (it's a leaf) — `mainAlign: 'start'` then left-packs
+    // them with the separators, matching a compact metadata line instead of spreading across the
+    // page (swap to 'space-between' for that instead, now that the row actually has free space).
+    group({ direction: 'row', mainAlign: 'start', crossAlign: 'stretch', gap: 12 }, [
+      text({ content: 'Prepared by: Jane Doe', fontFamily: UI_FONT, fontSize: 12, }),
       separator({ margin: 4, color: '#cccccc' }),
-      text({ content: 'Date: 2026-07-01', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, flex: 'shrink' }),
+      text({ content: 'Date: 2026-07-01', fontFamily: UI_FONT, fontSize: 12, }),
       separator({ thickness: 1, color: '#cccccc' }),
-      text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, lineHeight: 16, color: '#2a7a2a', flex: 'shrink' }),
+      text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, color: '#2a7a2a' }),
     ]),
     text({ content: longParagraph2, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    // A nested GROUP column child now defaults to 'stretch' (fills the page width) and its own
+    // leaf text children default to 'shrink' (hug their own content) — no explicit alignSelf/flex
+    // needed for either anymore.
     group({ direction: 'row', gap: 16 }, [
-      text({ content: 'Normal text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18 }),
-      text({ content: 'Underlined text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18, textDecoration: 'underline' }),
-      text({ content: 'Struck-through text', fontFamily: BODY_FONT, fontSize: 13, lineHeight: 18, textDecoration: 'line-through' }),
+      text({ content: 'Normal text', fontFamily: BODY_FONT, fontSize: 13 }),
+      text({ content: 'Underlined text', fontFamily: BODY_FONT, fontSize: 13, textDecoration: 'underline' }),
+      text({ content: 'Struck-through text', fontFamily: BODY_FONT, fontSize: 13, textDecoration: 'line-through' }),
     ]),
-    text({ content: 'Isolation From Host CSS', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Isolation From Host CSS', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: longParagraph3, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-    text({ content: 'Group Layout as a Small, Literal Flexbox', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Group Layout as a Small, Literal Flexbox', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: longParagraph4, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     text({ content: longParagraph5, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-    text({ content: 'Columns of Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Columns of Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     group({ direction: 'row', gap: 16, crossAlign: 'start', splitColumns: true, interactive: true, droppable: true, accepts: ['image'] }, [
-      text({ content: columnA, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 18 }), // flex: 1 (default)
-      text({ content: columnB, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 18, flex: 2 }),
-      text({ content: columnC, fontFamily: BODY_FONT, fontSize: 12, lineHeight: 18, interactive: true }), // flex: 1 (default)
+      // Leaf text children now default to 'shrink' (hug content), not an equal flex-grow share —
+      // these three columns need explicit flex weights to keep splitting the row into newspaper
+      // columns instead of each hugging its own (very long) single-line natural width.
+      text({ content: columnA, fontFamily: BODY_FONT, fontSize: 12, flex: 1 }),
+      text({ content: columnB, fontFamily: BODY_FONT, fontSize: 12, flex: 2 }),
+      text({ content: columnC, fontFamily: BODY_FONT, fontSize: 12, flex: 1, interactive: true }),
       group({ direction: 'column', gap: 4, flex: '160px' }, [
-        text({ content: 'Sidebar', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14 }),
-        text({ content: sidebarNote, fontFamily: BODY_FONT, fontSize: 11, lineHeight: 15, color: '#666666' }),
+        text({ content: 'Sidebar', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, }),
+        text({ content: sidebarNote, fontFamily: BODY_FONT, fontSize: 11, color: '#666666' }),
       ]),
     ]),
     pageBreak(),
-    text({ content: 'Forcing a Page Break', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Forcing a Page Break', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: pageBreakIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     pageBreak(),
-    text({ content: 'This Page Starts Deliberately, Not by Accident', fontFamily: UI_FONT, fontSize: 18, fontWeight: 700, lineHeight: 24 }),
+    text({ content: 'This Page Starts Deliberately, Not by Accident', fontFamily: UI_FONT, fontSize: 18, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: pageBreakOutro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-    text({ content: 'Tables', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Tables', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: tableIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     demoTable,
-    text({ content: 'Column Grouping', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Column Grouping', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: groupingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     groupedDemoTable,
-    text({ content: 'Cell Spans', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Cell Spans', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: spansIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     receiptTable,
-    text({ content: 'Table Styling', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Table Styling', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: tableStylingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     stylingTable,
     pageBreak(),
-    text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26, align: 'center', alignSelf: 'stretch' }),
+    text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, align: 'center', alignSelf: 'stretch' }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: imageIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     image({
@@ -498,34 +505,34 @@ const doc = definePage(
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
         image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', alt: 'objectFit: cover' }),
-        text({ content: 'objectFit: "cover"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'objectFit: "cover"', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'contain', alt: 'objectFit: contain' }),
-        text({ content: 'objectFit: "contain"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'objectFit: "contain"', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'fill', alt: 'objectFit: fill' }),
-        text({ content: 'objectFit: "fill"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'objectFit: "fill"', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `An image also takes a "borderRadius" (clips the image's own pixels — a container's borderRadius only decorates around a still-rectangular image, since it doesn't know how to clip arbitrary content) and "opacity". Both below use the same 400x300 source.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
         image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', borderRadius: 24, alt: 'borderRadius: 24' }),
-        text({ content: 'borderRadius: 24', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'borderRadius: 24', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', opacity: 0.4, alt: 'opacity: 0.4' }),
-        text({ content: 'opacity: 0.4', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'opacity: 0.4', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
-    text({ content: 'SVG', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'SVG', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: svgIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     // alignSelf: 'stretch' claims the full column width for this row alone (the outer body column
@@ -534,18 +541,18 @@ const doc = definePage(
     group({ direction: 'row', mainAlign: 'center', alignSelf: 'stretch' }, [
       svg({ markup: DEMO_SVG_BADGE, width: 160, aspectRatio: 1 }),
     ]),
-    text({ content: 'Containers', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Containers', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: containerIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     container(
       { background: '#f7f9fc', border: { thickness: 1, color: '#dddddd' }, borderRadius: 8, padding: 16 },
       group({ direction: 'column', gap: 4 }, [
-        text({ content: 'Plain Card', fontFamily: UI_FONT, fontSize: 14, fontWeight: 700, lineHeight: 18 }),
+        text({ content: 'Plain Card', fontFamily: UI_FONT, fontSize: 14, fontWeight: 700, }),
         text({
           content: 'background + border + borderRadius + padding, wrapping an ordinary column group that has none of its own.',
           fontFamily: BODY_FONT,
           fontSize: 12,
-          lineHeight: 17,
+
           color: '#666666',
         }),
       ]),
@@ -553,15 +560,15 @@ const doc = definePage(
     group({ direction: 'row', gap: 8 }, [
       container(
         { background: '#eef1f6', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
-        text({ content: 'Draft', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, align: 'center' }),
+        text({ content: 'Draft', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, align: 'center' }),
       ),
       container(
         { background: '#e8f5e9', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
-        text({ content: 'Approved', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#2a7a2a', align: 'center' }),
+        text({ content: 'Approved', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, color: '#2a7a2a', align: 'center' }),
       ),
       container(
         { background: '#fdecea', borderRadius: 4, padding: { top: 4, right: 10, bottom: 4, left: 10 }, width: 90 },
-        text({ content: 'Rejected', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#b3261e', align: 'center' }),
+        text({ content: 'Rejected', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, color: '#b3261e', align: 'center' }),
       ),
     ]),
     container(
@@ -577,11 +584,11 @@ const doc = definePage(
     group({ direction: 'row', gap: 16 }, [
       container(
         { height: 40, background: '#fff7e6', border: { thickness: 1, color: '#f0c36d' }, padding: 8, flex: 1 },
-        text({ content: '"height: 40" — this content needs more room than that, so the box grows to fit it: height is a MINIMUM, never a clip.', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 17 }),
+        text({ content: '"height: 40" — this content needs more room than that, so the box grows to fit it: height is a MINIMUM, never a clip.', fontFamily: BODY_FONT, fontSize: 12, }),
       ),
       container(
         { height: 120, background: '#eef7ff', border: { thickness: 1, color: '#a8d0f0' }, padding: 8, flex: 1 },
-        text({ content: '"height: 120" — shorter content, so the extra space just sits below it.', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 17 }),
+        text({ content: '"height: 120" — shorter content, so the extra space just sits below it.', fontFamily: BODY_FONT, fontSize: 12, }),
       ),
     ]),
     container(
@@ -596,11 +603,11 @@ const doc = definePage(
       rows: [
         {
           cells: [
-            { content: text({ content: 'Widget A1', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16 }) },
+            { content: text({ content: 'Widget A1', fontFamily: BODY_FONT, fontSize: 12, }) },
             {
               content: container(
                 { background: '#e8f5e9', borderRadius: 4, padding: { top: 3, right: 8, bottom: 3, left: 8 } },
-                text({ content: 'In Stock', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, lineHeight: 14, color: '#2a7a2a', align: 'center' }),
+                text({ content: 'In Stock', fontFamily: UI_FONT, fontSize: 11, fontWeight: 700, color: '#2a7a2a', align: 'center' }),
               ),
             },
           ],
@@ -608,16 +615,25 @@ const doc = definePage(
       ],
     }),
     container(
-      { background: '#ffffff', border: { thickness: 2, color: '#4f7cff' }, borderRadius: 8, padding: 12, interactive: true, draggable: true, dragType: 'container' },
-      text({ content: 'Drag me — I am an interactive, draggable container', fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, lineHeight: 17, color: '#4f7cff' }),
+      {
+        background: '#ffffff',
+        border: { thickness: 2, color: '#4f7cff' },
+        borderRadius: 8,
+        interactive: true,
+        draggable: true,
+        padding: 10,
+        dragType: 'container'
+      },
+      text({ content: 'Drag me — I am an interactive, draggable container', fontFamily: UI_FONT, fontSize: 13, fontWeight: 700, color: '#4f7cff' }),
     ),
-    text({ content: 'Rich Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Rich Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: richTextIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     richText({
       fontFamily: BODY_FONT,
       fontSize: 14,
-      lineHeight: 21,
+      lineHeight: 20,
+
       runs: [
         { text: 'This paragraph starts in plain text, then switches to a ' },
         { text: 'bold run', fontWeight: 700 },
@@ -628,7 +644,7 @@ const doc = definePage(
         { text: ' — the same rich-inline layout engine this node is built on.' },
       ],
     }),
-    text({ content: 'Charts', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Charts', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
     text({ content: chartIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
     group({ direction: 'row', gap: 16 }, [
@@ -648,7 +664,7 @@ const doc = definePage(
           draggable: true,
           dragType: 'chart',
         }),
-        text({ content: 'one series.kind per series: "bar" + "bar" + "line" + "points"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'one series.kind per series: "bar" + "bar" + "line" + "points"', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -662,14 +678,14 @@ const doc = definePage(
             { name: '2026', kind: 'line', data: [140, 151, 149, 162, 171], fill: true },
           ],
         }),
-        text({ content: 'every series kind: "line" (multi-series)', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'every series kind: "line" (multi-series)', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `chartKind: "radial" merges what used to be separate pie and donut chart kinds into one — a hole is now just innerRadiusRatio (default 0 = a solid pie), not a different kind. Every radial chart is authored as "rings": a single-ring pie/donut is just rings: [{ slices: [...] }], since there's no separate top-level "slices" shorthand anymore. Below: a plain single-ring pie; a single-ring donut (innerRadiusRatio, title/axis/legend all off); and a two-ring sunburst, where the outer ring's slices each declare a parentIndex into the inner ring, nesting their arc inside their parent's own — a ring's slices are either ALL parented or NONE (chart() throws on a ring that mixes both), so "some nested, some not" only ever means different rings.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -689,7 +705,7 @@ const doc = definePage(
             },
           ],
         }),
-        text({ content: 'rings: [{ slices }] — a plain pie', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'rings: [{ slices }] — a plain pie', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -713,7 +729,7 @@ const doc = definePage(
           content: 'innerRadiusRatio: 0.6, title/axis/legend all off',
           fontFamily: UI_FONT,
           fontSize: 11,
-          lineHeight: 14,
+
           color: '#666666',
           align: 'center',
         }),
@@ -751,7 +767,7 @@ const doc = definePage(
           content: 'two rings, outer ring parentIndex-nested under the inner one; long title auto-wraps instead of overflowing',
           fontFamily: UI_FONT,
           fontSize: 11,
-          lineHeight: 14,
+
           color: '#666666',
           align: 'center',
         }),
@@ -761,7 +777,7 @@ const doc = definePage(
       content: `Every chart text role has an independently configurable size: axis.tickFontSize (y-axis numbers), axis.categoryFontSize (x-axis labels), legend.fontSize, and title's own fontSize — set unevenly below (large category labels, small tick numbers, larger legend) to prove margins/row-heights/baselines all recompute from whatever size you pick, rather than a fixed layout that only happens to fit the default 11px.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     chart({
       chartKind: 'categorical',
@@ -779,7 +795,7 @@ const doc = definePage(
       content: `Bar charts also take a barMode: the default "grouped" places each category's series side by side (see "Quarterly Revenue by Region" above); "stacked" below sums them into one bar per category instead, positive segments growing up from zero and negative ones growing down, each in series order, with the rounded bar-end reserved for the outermost segment only. Segments render fully flush by default — opt into a gap between them with barSegmentGap (px), shown on the right below. Pie/donut slices similarly default to flush at sliceGap: 0 (no stroke, no residual seam) and take an explicit "colors" palette override, replacing the default categorical palette wholesale — see the donut further down.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -795,7 +811,7 @@ const doc = definePage(
             { name: 'Other', data: [8, 6, 9, 7] },
           ],
         }),
-        text({ content: 'barMode: "stacked" (barSegmentGap defaults to 0)', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'barMode: "stacked" (barSegmentGap defaults to 0)', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -811,14 +827,14 @@ const doc = definePage(
             { name: 'Other', data: [8, 6, 9, 7] },
           ],
         }),
-        text({ content: 'barSegmentGap: 3', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'barSegmentGap: 3', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `The y-axis domain is controlled by "view", separate from "axis" (which only ever draws chrome — ticks/gridlines/labels — on top of whatever domain view resolves). view.domain defaults to 'zero': auto-computed, always including 0. 'auto' instead computes a domain tight to the data's own min/max — not forced through zero — then widened by view.padding (a fraction of that range, default 0.1) on each side, so the lowest/highest mark isn't flush against the plot's own edge. An explicit { min, max } object overrides either mode outright. Below, the same daily-temperature line is plotted three ways: the default zero-based domain, where a tight real-world range of 68-79°F reads as a nearly flat line; an explicit view: { domain: { min: 50, max: 80 } } zoomed in by hand; and view: { domain: 'auto' } letting the chart pick that same kind of tight range automatically. Bars behave the same way — if zero falls outside the resolved domain, a bar simply grows from whichever domain edge is nearer instead of from zero, since zero is no longer on the visible axis to grow from.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -829,7 +845,7 @@ const doc = definePage(
           categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
           series: [{ name: 'High °F', kind: 'line', data: [72, 75, 79, 74, 68] }],
         }),
-        text({ content: "view: {} (default, 'zero' — always includes 0)", fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: "view: {} (default, 'zero' — always includes 0)", fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -840,7 +856,7 @@ const doc = definePage(
           series: [{ name: 'High °F', kind: 'line', data: [72, 75, 79, 74, 68] }],
           view: { domain: { min: 50, max: 80 } },
         }),
-        text({ content: "view: { domain: { min: 50, max: 80 } }", fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: "view: { domain: { min: 50, max: 80 } }", fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -851,14 +867,14 @@ const doc = definePage(
           series: [{ name: 'High °F', kind: 'line', data: [72, 75, 79, 74, 68] }],
           view: { domain: 'auto', padding: 0.2 },
         }),
-        text({ content: "view: { domain: 'auto', padding: 0.2 }", fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: "view: { domain: 'auto', padding: 0.2 }", fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `Both bar and line charts also take orientation: "horizontal", swapping which axis carries categories vs. values — categories run top-to-bottom on the left, values run left-to-right along the bottom, and bars grow rightward instead of upward. It's a separate rendering path rather than a single axis-agnostic function (same reasoning group-layout.ts's layoutRow/layoutColumn split gives), so every other option — barMode, barSegmentGap, view.domain, custom font sizes — works identically in both orientations.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -870,7 +886,7 @@ const doc = definePage(
           categories: ['Organic', 'Referral', 'Social', 'Direct', 'Email'],
           series: [{ name: 'Sessions', data: [4820, 2210, 1840, 1200, 640] }],
         }),
-        text({ content: 'orientation: "horizontal"', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'orientation: "horizontal"', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -884,7 +900,7 @@ const doc = definePage(
             { name: 'South', kind: 'line', data: [30, 34, 39, 45, 41] },
           ],
         }),
-        text({ content: 'orientation: "horizontal" (multi-series)', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'orientation: "horizontal" (multi-series)', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     group({ direction: 'row', gap: 16 }, [
@@ -906,14 +922,14 @@ const doc = definePage(
           colors: ['#0f7a3d', '#b3261e', '#8a8a8a'],
           sliceGap: 0,
         }),
-        text({ content: 'colors: [...], sliceGap: 0', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'colors: [...], sliceGap: 0', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `Beyond series colors, a chart's chrome is themeable too: axis.color/gridlineColor/tickColor override the axis line, gridlines, and tick/category text independently of each other; legend.color overrides legend text; and fontFamily (chart-level) applies to every text role — on the PDF export specifically, this now goes through the SAME font registry text() nodes use, so a chart can render in a registered custom font instead of always falling back to a system font in the exported PDF. Mark geometry is configurable too: barCornerRadius (bar charts), lineStrokeWidth and markerRadius (line charts).`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -929,7 +945,7 @@ const doc = definePage(
           colors: ['#c98a1a'],
           barCornerRadius: 10,
         }),
-        text({ content: 'axis/gridline/tick/legend colors + fontFamily + barCornerRadius: 10', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'axis/gridline/tick/legend colors + fontFamily + barCornerRadius: 10', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -941,14 +957,14 @@ const doc = definePage(
           lineStrokeWidth: 4,
           markerRadius: 7,
         }),
-        text({ content: 'lineStrokeWidth: 4, markerRadius: 7', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'lineStrokeWidth: 4, markerRadius: 7', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `chartKind: "scatter" is this library's first chart with two genuinely independent NUMERIC axes — every other kind has at most one (the other side is a category band), so scatter draws a full axis frame (a left baseline for y, a bottom baseline for x) instead of a single baseline on whichever edge carries the category axis. xView/yView default to 'auto' rather than 'zero' (unlike every other chart's y-domain) since scatter data routinely sits far from either axis' zero. Points can optionally be sized by an arbitrary data value via sizeScale — its mere presence (even {}) opts every point WITH a "size" into bubble sizing, mapped through a sqrt (area-proportional, the standard bubble-chart convention) or linear scale onto a px radius range.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -971,7 +987,7 @@ const doc = definePage(
             },
           ],
         }),
-        text({ content: "xView/yView default to 'auto' (tight to data)", fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: "xView/yView default to 'auto' (tight to data)", fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -994,14 +1010,14 @@ const doc = definePage(
           ],
           sizeScale: { range: [5, 26] },
         }),
-        text({ content: 'sizeScale: bubble radius ∝ √size (population, millions)', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'sizeScale: bubble radius ∝ √size (population, millions)', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `chartKind: "gantt" plots tasks as pill-shaped bars over a single numeric time axis (xAxis/xView — the same ChartNumericAxisConfig scatter's axes use, defaulting to 'auto' rather than 'zero' for the same reason). Task start/end are plain numbers, never Date objects — this library does no date math anywhere, so a real schedule is pre-converted to numeric offsets by the caller, with xAxis.formatTick rendering them back as dates. Tasks sharing a "group" value in a CONTIGUOUS run get a header band above them — deliberately much simpler than table's column grouping: no reordering, no aggregation, just a divider wherever the group value changes. Header bands are themeable: groupHeaderColor/groupHeaderBackground set a chart-wide default, and a "groups" lookup (keyed by group name) overrides either for one group's own band specifically — below, "Build" gets its own color while every other band falls back to the chart-level default. Task row-label text is independently themeable too: taskLabelColor sets a chart-wide default, and a task's own labelColor overrides it — independent of that task's bar color entirely (below, "Launch" gets a red label to flag it as the critical milestone, while its bar stays the default palette color).`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     chart({
       chartKind: 'gantt',
@@ -1030,7 +1046,7 @@ const doc = definePage(
       content: 'groupHeaderColor/Background (purple default, amber "Build" override) + taskLabelColor (default) with a per-task labelColor override on "Launch"',
       fontFamily: UI_FONT,
       fontSize: 11,
-      lineHeight: 14,
+
       color: '#666666',
       align: 'center',
     }),
@@ -1038,7 +1054,7 @@ const doc = definePage(
       content: `chartKind: "radar" (spider chart) reuses the familiar categories/series shape — each category becomes a spoke arranged evenly around the circle (0°=top, clockwise, same convention the radial chart's own slices use), each series becomes one closed polygon connecting a vertex per spoke. The shared radial domain reuses the exact same zero/auto/explicit resolution as a categorical chart's y-domain, so unlike a pie's always-positive slice values, radar values CAN go negative — the domain's own minimum simply becomes the center (radius 0), not a hard-coded literal zero. A polygon's fill (series.fill) is flat solid-color-at-opacity rather than line's gradient-to-baseline fade, since a closed radial shape has no single edge that reads as "the baseline."`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     group({ direction: 'row', gap: 16 }, [
       group({ direction: 'column', gap: 6 }, [
@@ -1052,7 +1068,7 @@ const doc = definePage(
             { name: 'Player B', data: [60, 85, 55, 70, 80, 65], fill: true },
           ],
         }),
-        text({ content: 'two filled polygons, shared zero-based domain', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'two filled polygons, shared zero-based domain', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
       group({ direction: 'column', gap: 6 }, [
         chart({
@@ -1064,14 +1080,14 @@ const doc = definePage(
           markerRadius: 5,
           lineStrokeWidth: 3,
         }),
-        text({ content: 'negative values: domain min (not 0) sits at the center', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+        text({ content: 'negative values: domain min (not 0) sits at the center', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
       ]),
     ]),
     text({
       content: `chartKind: "candlestick" plots OHLC (open/high/low/close) bars over the same category-band x-axis a categorical chart's vertical orientation uses — always vertical, since real candlestick charts have no meaningful horizontal-orientation counterpart. Each candle's data is entirely caller-supplied (this library computes no statistics anywhere) — chart() only validates the shape is internally consistent (low <= min(open,close), high >= max(open,close)). A candle's fill color comes from whether it closed up or down (close >= open), not from a series identity, defaulting to green/red with per-series upColor/downColor overrides. Like scatter/gantt, view defaults to 'auto' rather than 'zero', since real price data rarely sits near zero.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     chart({
       chartKind: 'candlestick',
@@ -1094,12 +1110,12 @@ const doc = definePage(
         },
       ],
     }),
-    text({ content: 'green: close >= open, red: close < open — same domain "auto" default as scatter/gantt', fontFamily: UI_FONT, fontSize: 11, lineHeight: 14, color: '#666666', align: 'center' }),
+    text({ content: 'green: close >= open, red: close < open — same domain "auto" default as scatter/gantt', fontFamily: UI_FONT, fontSize: 11, color: '#666666', align: 'center' }),
     text({
       content: `chartKind: "treemap" is the last new kind, and the odd one out: no axis, no domain, no ticks — the whole plot box IS the chart. Rectangle area is proportional to each item's value, packed via the standard squarified layout algorithm (Bruls/Huizing/van Wijk) to keep rectangles close to square instead of the thin slivers a naive left-to-right slice-and-dice would produce. Flat, single level only — a hierarchical drill-down treemap was considered and deliberately scoped out. formatLabel lets the caller format each rectangle's own content as rich ChartText — receiving the whole item, not just its label, so a name run and a value run can be styled independently (bigger/bolder name, smaller/faded value on the line below). A rectangle too small to fit its own (possibly multi-line) content at labelFontSize simply omits it rather than overflowing past its own edge or wrapping; formatLabel returning "" does the same on purpose, hiding the label for the smallest items below.`,
       fontFamily: BODY_FONT,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 20
     }),
     chart({
       chartKind: 'treemap',
@@ -1127,21 +1143,21 @@ const doc = definePage(
       content: 'formatLabel: big bold name run + smaller, lower-opacity value run — area ∝ value, tiny items just go label-less',
       fontFamily: UI_FONT,
       fontSize: 11,
-      lineHeight: 14,
+
       color: '#666666',
       align: 'center',
     }),
-    text({ content: 'Interaction Events', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, lineHeight: 26 }),
+    text({ content: 'Interaction Events', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
     separator({ thickness: 1, color: '#dddddd' }),
-    text({ content: interactionIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-    text({ content: cardIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    text({ content: interactionIntro, fontFamily: BODY_FONT, fontSize: 13, }),
+    text({ content: cardIntro, fontFamily: BODY_FONT, fontSize: 13, }),
     group({ direction: 'row', gap: 12, crossAlign: 'center', interactive: true, droppable: true, accepts: ['avatar'] }, [
       text({
         content: 'JD',
         fontFamily: UI_FONT,
         fontSize: 18,
         fontWeight: 700,
-        lineHeight: 22,
+
         color: '#4f7cff',
         flex: '48px',
         align: 'center',
@@ -1150,8 +1166,8 @@ const doc = definePage(
         dragType: 'avatar',
       }),
       group({ direction: 'column', gap: 2 }, [
-        text({ content: 'Jane Doe', fontFamily: UI_FONT, fontSize: 14, fontWeight: 700, lineHeight: 18 }),
-        text({ content: 'jane@example.com', fontFamily: BODY_FONT, fontSize: 12, lineHeight: 16, color: '#666666' }),
+        text({ content: 'Jane Doe', fontFamily: UI_FONT, fontSize: 14, fontWeight: 700, }),
+        text({ content: 'jane@example.com', fontFamily: BODY_FONT, fontSize: 12, color: '#666666' }),
       ]),
     ]),
   ]),
@@ -1407,7 +1423,7 @@ function docxFooter(): ReturnType<typeof text> {
     content: 'Page {{pageNumber}} of {{totalPages}}',
     fontFamily: UI_FONT,
     fontSize: 10,
-    lineHeight: 13,
+
     color: '#888888',
     align: 'right',
   })

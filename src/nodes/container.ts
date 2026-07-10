@@ -98,7 +98,17 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
     // `renderPreview()` already uses (rebase origin to the wrapper's own top-left instead of the
     // page's). Safe because hit-testing/interactions resolve purely from RenderedNode geometry
     // data, never real DOM parent/child relationships (see attach-interactions.ts).
-    renderNodeDom(rendered.child, ctx.originX - x, ctx.originY - y, { container: el, unselectable: ctx.unselectable })
+    //
+    // `el` keeps `box-sizing: border-box`, so its CSS `border` (set above, when present) eats into
+    // its own box instead of sitting outside it — meaning an absolutely positioned REAL child of
+    // `el` is anchored to `el`'s padding edge, which is already inset by the border's thickness.
+    // Border is supposed to be pure paint per this module's header comment (never consuming layout
+    // space, unlike the sibling-of-`el` non-clip branch below, where the child is positioned purely
+    // from absolute page coordinates and never touches `el`'s box model at all) — so that inset is
+    // subtracted back out here to keep the child's position identical whether or not this container
+    // happens to also have a borderRadius.
+    const borderPx = node.border !== undefined ? node.border.thickness ?? 1 : 0
+    renderNodeDom(rendered.child, ctx.originX - x - borderPx, ctx.originY - y - borderPx, { container: el, unselectable: ctx.unselectable })
     return
   }
   // Same convention as group/table: rendered.child.box is already resolved relative to this SAME

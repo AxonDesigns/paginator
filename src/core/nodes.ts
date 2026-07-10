@@ -101,18 +101,27 @@ export type TextAlign = 'left' | 'center' | 'right'
 // mirrors CSS `align-self`. In a COLUMN parent: `'stretch'` claims the column's full width for this
 // child (bypassing its own shrink-wrap sizing — e.g. a Group's mainAlign-driven layout, or
 // Container/Image/Svg/Chart's own `width`) even though the column itself isn't stretching every
-// child. In a ROW parent: only affects this child's vertical position among mismatched-height
-// siblings (start/center/end) — `'stretch'` has no effect there (falls back to `'start'`), since a
-// row child's height is always intrinsic. Not given to Separator/PageBreak/Table: those already
-// always claim full width unconditionally in childCrossWidthInColumn, so there's nothing to override.
+// child. When neither `alignSelf` nor the column's own `crossAlign` is set, the default itself
+// depends on the child's type: a nested GROUP defaults to `'stretch'` (a layout container fills the
+// width it's given, like a block-level flex box), while every other node type defaults to `'start'`
+// (hugs its own natural width, like inline/replaced content) — see `layoutColumn()` in
+// `src/nodes/group.ts`. In a ROW parent: `alignSelf` only affects this child's vertical position
+// among mismatched-height siblings (start/center/end) — `'stretch'` has no effect there (falls back
+// to `'start'`), since a row child's height is always intrinsic. Not given to Separator/PageBreak/
+// Table: those already always claim full width unconditionally in childCrossWidthInColumn, so
+// there's nothing to override.
 export type SelfAlignable = { alignSelf?: CrossAlign }
 
 // Main-axis sizing hint for a ROW group's direct children (row width division only — column
-// children keep intrinsic/content-driven height always, since pagination depends on that). A
-// plain number is a flex-grow-style weight (default 1, so children are equal-width columns by
-// default); a `"Npx"` string is a fixed size that opts out of flexing entirely; `'shrink'` is also
-// a fixed size, but computed from the child's own natural/shrink-wrap width (same mechanism as
-// column shrink-wrap sizing) instead of an authored pixel value — see "Row flex sizing" in GUIDE.md.
+// children keep intrinsic/content-driven height always, since pagination depends on that). A plain
+// number is a flex-grow-style weight; a `"Npx"` string is a fixed size that opts out of flexing
+// entirely; `'shrink'` is also a fixed size, but computed from the child's own natural/shrink-wrap
+// width (same mechanism as column shrink-wrap sizing) instead of an authored pixel value — see "Row
+// flex sizing" in GUIDE.md. When `flex` is left unset, the default itself depends on the child's
+// type: a nested GROUP defaults to weight `1` (a layout container fills its share of the row, like a
+// block-level flex box), while every other node type defaults to `'shrink'` (hugs its own natural
+// width instead of being squeezed into an equal share that might force it to wrap) — mirroring CSS's
+// actual flex-item default (`flex-grow: 0`, content-sized), not an equal-share weight.
 export type FlexSize = number | `${number}px` | 'shrink'
 
 // Off by default — no node responds to hover/click/drag unless explicitly opted in. Not inherited:

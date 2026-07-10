@@ -71,6 +71,10 @@ function columnNaturalWidth(column: TableColumn, columnIndex: number, rows: Tabl
   return max
 }
 
+// Deliberately does NOT mirror resolveRowChildSizing()'s leaf-content-defaults-to-'shrink' rule
+// (src/nodes/group.ts) — a table's columns are a grid, not a row of arbitrary content, so an
+// unset `width` always defaults to flex weight 1 (equal-width columns) regardless of what a cell's
+// content type is. Only an explicit `width: 'shrink'` opts a column out of that.
 function resolveColumnSizing(column: TableColumn, columnIndex: number, rows: TableRow[], cellPadding: number, boundWidth: number): RowChildSizing {
   const flex = column.width
   if (flex === 'shrink') return { kind: 'fixed', size: columnNaturalWidth(column, columnIndex, rows, cellPadding, boundWidth) }

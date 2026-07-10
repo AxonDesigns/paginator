@@ -786,8 +786,10 @@ A ROW group's direct children are sized by a two-pass model, same mechanics as C
    - `flex: 'Npx'` claims exactly `N` authored pixels.
    - `flex: 'shrink'` claims its own natural/shrink-wrap width instead of an authored pixel value —
      the same `naturalWidth()`/`measureNaturalWidth` mechanism a column child uses to hug its
-     content (a nested row reuses its own "has a flexible child?" rule to decide whether IT has a
-     natural width at all; a nested column reuses `childCrossWidthInColumn`'s max-of-children). Works
+     content (a nested row's own natural width sums each child's natural contribution — a fixed
+     child's resolved size, or a flex child's OWN natural/shrink-wrap width computed the same
+     recursive way, plus gaps; a nested column reuses `childCrossWidthInColumn`'s max-of-children).
+     Works
      on any node type that registers a `naturalWidth` (`TextNode`, `RichTextNode`, `ImageNode`,
      `SvgNode`, `ContainerNode`, `GroupNode`) — see `shrinkWrapWidth()` in `src/nodes/group.ts`. This
      is how you get CSS-`inline-block`-style siblings that hug their own content instead of splitting
@@ -799,28 +801,44 @@ A ROW group's direct children are sized by a two-pass model, same mechanics as C
      `width` field whenever `flex` is left unset — the same value that already governs their size in
      a column/shrink-wrap context works unchanged as a row child too, so `flex: 'Npx'`/`'shrink'` is
      only needed to override `width` or to opt into flex-grow weighting for these four types.
-2. Remaining width is divided among flexible children (`flex: N` or unset, which defaults to
-   weight `1`) proportional to their weight.
+   - **A leaf content node (`TextNode`/`RichTextNode`/`ImageNode`/`SvgNode`/`ContainerNode`/
+     `ChartNode`) with `flex` left unset AND no explicit `width` is ALSO fixed-size by default** —
+     it behaves exactly like `flex: 'shrink'`, hugging its own natural width instead of taking an
+     equal share. This mirrors CSS's actual flex-item default (`flex-grow: 0`, content-sized), not
+     an equal-share weight — an un-pinned label/value pair of `text()` nodes sizes to its own
+     content and never wraps just because a sibling squeezed it below what it needs.
+2. Remaining width is divided among flexible children proportional to their weight. Only a nested
+   **`GroupNode`** (row or column) with `flex` left unset defaults to being flexible here (weight
+   `1`) — a nested group is a layout container, closer to a block-level flex box that fills its
+   share of the row unless told otherwise, so it keeps the old equal-share default. An explicit
+   `flex: N` makes ANY child (leaf or group) flexible with that weight, overriding its type's default.
 
 `mainAlign` (`space-between` etc.) only has an effect when **no** child is flexible — flexible
 children already consume all remaining space by construction, exactly like CSS (`flex-grow` eats
-free space before `justify-content` ever sees any). `flex: 'shrink'` children count as fixed-size
-for this rule, same as `flex: 'Npx'`, so a row that's entirely `'shrink'`/`'Npx'`/separator children
-leaves free space for `mainAlign` to distribute.
+free space before `justify-content` ever sees any). `flex: 'shrink'` children (and now, by default,
+any un-pinned leaf child) count as fixed-size for this rule, same as `flex: 'Npx'`, so a row that's
+entirely leaf/`'shrink'`/`'Npx'`/separator children leaves free space for `mainAlign` to distribute.
 
-`TableColumn.width` reuses the same `FlexSize` type/px/weight/`'shrink'` model — `width: 'shrink'`
-sizes the column to the widest colSpan-1 cell's natural width across every row instead of one
-subtree (see the `TableNode.columns` row in "Node type reference" above for exactly how it's
-computed and its one edge case, colSpan>1 cells). `generateDocx()` can't compute a `'shrink'` width
-for either a row child's `flex` or a `TableColumn.width` — it deliberately avoids pulling in the
-DOM/pretext measurement path (see the module header comment in `src/export/docx-export.ts`) — and
-falls back to an equal flex-grow weight in both cases, with a one-time console warning.
+`TableColumn.width` reuses the same `FlexSize` type/px/`'shrink'` model, but **keeps the old
+equal-share default** (`width` unset → weight `1` for every column, regardless of what a cell's
+content type is) — a table's columns are a grid, not a row of arbitrary content, so equal columns
+stays the sane default there; only `TableColumn.width: 'shrink'` opts a column out of it, sizing it
+to the widest colSpan-1 cell's natural width across every row instead of one subtree (see the
+`TableNode.columns` row in "Node type reference" above for exactly how it's computed and its one
+edge case, colSpan>1 cells). `generateDocx()` can't compute a `'shrink'` width for either a row
+child's `flex` or a `TableColumn.width` — it deliberately avoids pulling in the DOM/pretext
+measurement path (see the module header comment in `src/export/docx-export.ts`) — and falls back to
+an equal flex-grow weight in both cases, with a one-time console warning.
 
 Column children never use `flex` for width — their cross-axis width comes from `crossAlign`
-(`'stretch'` = full column width, otherwise shrink-to-fit via pretext's `measureNaturalWidth`). A
-nested group's *own* `crossAlign: 'stretch'` is honored by its shrink-wrapping ancestor too — a
-column whose `crossAlign` is `'stretch'` is treated the same as a row with a flexible child (see
-`childCrossWidthInColumn` in `src/nodes/group.ts`): it's handed the full width being offered rather
+(`'stretch'` = full column width, otherwise shrink-to-fit via pretext's `measureNaturalWidth`). When
+neither a child's own `alignSelf` nor the column's own `crossAlign` is set, the default itself
+depends on the child's type, mirroring the row-axis default above: **a nested `GroupNode` defaults
+to `'stretch'`** (fills the column's full width, like a block-level flex box), while **every other
+node type defaults to `'start'`** (hugs its own natural width, like inline/replaced content) — see
+`layoutColumn()` in `src/nodes/group.ts`. A nested group's *own* `crossAlign: 'stretch'` is honored
+by its shrink-wrapping ancestor too — a column whose `crossAlign` is `'stretch'` (see
+`childCrossWidthInColumn` in `src/nodes/group.ts`) is handed the full width being offered rather
 than shrink-wrapped to its content, so its own children can actually fill it. Without that, a
 `crossAlign: 'stretch'` column nested inside a shrink-wrapping ancestor would get boxed to its
 content's natural width one level up, making the inner `stretch` inert.
@@ -1705,16 +1723,29 @@ type, splittable or not — this is the entire point of the registry pattern.
   "exceeds page height" warning for a genuinely zero-height node.
 - **Nested `crossAlign: 'stretch'` silently inert**: `childCrossWidthInColumn()` (`src/nodes/group.ts`)
   computes the shrink-wrapped width a column hands to a nested group child. It already special-cased
-  a nested *row* with a flexible child (`rowHasFlexChild`) as wanting full width, but originally had
-  no equivalent check for a nested *column* — so `group({ direction: 'column', crossAlign: 'stretch'
-  })` nested inside a shrink-wrapping ancestor got boxed to its content's natural width one level up,
-  and the inner `stretch` had nothing left to stretch into. Fixed by checking `node.crossAlign ===
-  'stretch'` alongside the row case. Symptom to watch for: a single short text child with `align:
-  'center'`/`'right'` that visually stays flush-left no matter what — the giveaway is that its box
-  width already equals the text's own width. A per-child `alignSelf: 'stretch'` (see "Per-child
-  `alignSelf` override" above) is now the direct fix for this same symptom — set it on the one child
-  that needs full width instead of reaching for an ancestor `crossAlign: 'stretch'` wrapper, which
-  affects every sibling too.
+  a nested *row* with a flexible child (the row branch of `shrinkWrapWidth()` — see the pitfall
+  below) as wanting full width, but originally had no equivalent check for a nested *column* — so
+  `group({ direction: 'column', crossAlign: 'stretch' })` nested inside a shrink-wrapping ancestor
+  got boxed to its content's natural width one level up, and the inner `stretch` had nothing left to
+  stretch into. Fixed by checking `node.crossAlign === 'stretch'` alongside the row case. Symptom to
+  watch for: a single short text child with `align: 'center'`/`'right'` that visually stays
+  flush-left no matter what — the giveaway is that its box width already equals the text's own
+  width. A per-child `alignSelf: 'stretch'` (see "Per-child `alignSelf` override" above) is now the
+  direct fix for this same symptom — set it on the one child that needs full width instead of
+  reaching for an ancestor `crossAlign: 'stretch'` wrapper, which affects every sibling too.
+- **Nested row's shrink-wrap width bailing out to "full width" whenever it had a flex child**:
+  `shrinkWrapWidth()`'s row branch (`src/nodes/group.ts`) used to treat ANY row with a default-flex
+  child (i.e. almost any row of plain, width-less content — a label/value text pair is the ordinary
+  case) as having no natural width of its own, returning the full width handed down instead of a
+  content-derived size. That inflated "natural width" then flowed into a `flex: 'shrink'` ancestor
+  column's own size via `resolveRowChildSizing`'s `'shrink'` case, so the column claimed ~all the
+  available width and starved its `flex: 1` sibling column down to 0. Fixed by having the row's
+  natural width SUM each child's own contribution instead of bailing out — fixed children via
+  `resolveRowChildSizing`'s existing 'fixed' resolution, flex children via their OWN
+  recursively-computed `shrinkWrapWidth()` (`sumNaturalRowWidth()`, replacing the old
+  `rowHasFlexChild`/`sumFixedRowWidth` pair). Symptom to watch for: a `flex: 'shrink'` column
+  sibling getting width 0 as soon as its shrink-wrapped column contains any nested row of ordinary
+  (width-less) content, even though the same column works fine with a single non-row child.
 - **The old `group-layout.ts` ↔ `table-layout.ts` cycle is gone — don't reintroduce a peer-file
   cycle "for convenience"**: an earlier version of this codebase had `group-layout.ts` and
   `table-layout.ts` import each other's exported measurer to lay out a group nested in a table cell
