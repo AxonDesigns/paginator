@@ -4,16 +4,20 @@
 // run side by side without one instance's registerFont()/generatePdf() calls corrupting another's.
 //
 // Everything else this delegates to (paginate(), mount(), attachInteractions(), the hit-registry
-// functions, the pdf-view helpers) has no module-level state of its own — they're grouped here as
-// methods purely for one consistent object-oriented entry point, not because they need `this`.
+// functions) has no module-level state of its own — they're grouped here as methods purely for one
+// consistent object-oriented entry point, not because they need `this`.
 //
 // Deliberately NOT part of this class: node builders (definePage/text/group/... — pure content
-// constructors with no state, see core/nodes.ts) and setLocale/clearCache (re-exported directly from
-// @chenglou/pretext — that library's own global, with no instance-scoped equivalent to wrap).
+// constructors with no state, see core/nodes.ts), setLocale/clearCache (re-exported directly from
+// @chenglou/pretext — that library's own global, with no instance-scoped equivalent to wrap), and
+// printing/PDF-viewing chrome (window.print(), opening PDF bytes in a tab/dialog) — those are plain
+// browser-native calls a consumer makes directly against its own host element/generatePdf() output;
+// this library has no opinion on that UI, so it doesn't wrap it (see the demo's main.ts for the
+// pattern).
 
 import type { PageDef } from './core/nodes.ts'
 import { paginate as corePaginate, type PaginatedResult } from './core/paginate.ts'
-import { mount as coreMount, printDocument as corePrintDocument, renderPreview as coreRenderPreview } from './render/shadow-dom.ts'
+import { mount as coreMount, renderPreview as coreRenderPreview } from './render/shadow-dom.ts'
 import { createZoomController as coreCreateZoomController, type ZoomController, type ZoomOptions } from './render/zoom.ts'
 import type { RenderedNode } from './core/geometry.ts'
 import { generatePdf as coreGeneratePdf, type PdfMetadata } from './render/pdf-render.ts'
@@ -31,7 +35,6 @@ import {
   type HitRegistry,
 } from './interaction/hit-registry.ts'
 import type { AttachInteractionsOptions, InteractionController, InteractionTarget } from './interaction/types.ts'
-import { openPdfInNewTab as coreOpenPdfInNewTab, showPdfDialog as coreShowPdfDialog } from './render/pdf-view.ts'
 
 export class Paginator {
   #fonts: FontRegistry = new Map()
@@ -54,10 +57,6 @@ export class Paginator {
 
   renderPreview(rendered: RenderedNode): HTMLElement {
     return coreRenderPreview(rendered)
-  }
-
-  printDocument(host: HTMLElement): void {
-    corePrintDocument(host)
   }
 
   createZoomController(host: HTMLElement, options: ZoomOptions = {}): ZoomController {
@@ -105,13 +104,5 @@ export class Paginator {
 
   generateXlsx(doc: PageDef, metadata?: XlsxMetadata): Promise<Uint8Array> {
     return coreGenerateXlsx(doc, metadata)
-  }
-
-  openPdfInNewTab(bytes: Uint8Array): void {
-    coreOpenPdfInNewTab(bytes)
-  }
-
-  showPdfDialog(bytes: Uint8Array, options?: { title?: string }): { close(): void } {
-    return coreShowPdfDialog(bytes, options)
   }
 }

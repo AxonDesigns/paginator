@@ -1451,9 +1451,80 @@ function setupZoomButtons(toolbar: HTMLDivElement, zoom: ZoomController): void {
   refresh()
 }
 
-function setupPrintButton(toolbar: HTMLDivElement, pdfDoc: Paginator, host: HTMLDivElement): void {
+// Printing/PDF-viewing chrome is plain browser-native UI, not part of the library's API — the
+// library only produces data (a mounted shadow host, or generatePdf()'s PDF bytes); what the demo
+// does with that data to open a print dialog or a PDF preview is entirely up to this file.
+
+function printDocument(host: HTMLElement): void {
+  if (host.shadowRoot === null) {
+    throw new Error('printDocument() called on a host that has no mount() output yet — call pdfDoc.mount(result, host) first.')
+  }
+  window.print()
+}
+
+const PDF_MIME_TYPE = 'application/pdf'
+
+// The object URL is intentionally never revoked — the new tab needs it for its own lifetime, and
+// closing that *other* tab fires no event this function could listen for; this accepts the same
+// small per-call resource cost common blob-URL download patterns do rather than risking revoking a
+// URL a slow-loading tab still needs.
+function openPdfInNewTab(bytes: Uint8Array): void {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: PDF_MIME_TYPE }))
+  window.open(url, '_blank')
+}
+
+// Shows a modal <dialog> with an <iframe> displaying the PDF (native PDF viewer inside the iframe).
+// Lives in the light DOM, like the demo's other toolbar chrome — it's page chrome, not paginated
+// document content.
+function showPdfDialog(bytes: Uint8Array, options?: { title?: string }): { close(): void } {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: PDF_MIME_TYPE }))
+
+  const dialog = document.createElement('dialog')
+  Object.assign(dialog.style, {
+    padding: '0',
+    border: 'none',
+    borderRadius: '8px',
+    width: '90vw',
+    height: '90vh',
+    boxShadow: '0 4px 24px rgba(0, 0, 0, 0.35)',
+  })
+
+  const header = document.createElement('div')
+  Object.assign(header.style, {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 12px',
+    borderBottom: '1px solid #ddd',
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    fontSize: '14px',
+  })
+  const titleEl = document.createElement('span')
+  titleEl.textContent = options?.title ?? 'PDF Preview'
+  const closeButton = document.createElement('button')
+  closeButton.type = 'button'
+  closeButton.textContent = 'Close'
+  closeButton.onclick = () => dialog.close()
+  header.append(titleEl, closeButton)
+
+  const iframe = document.createElement('iframe')
+  iframe.src = url
+  Object.assign(iframe.style, { width: '100%', height: 'calc(100% - 41px)', border: 'none' })
+
+  dialog.append(header, iframe)
+  document.body.appendChild(dialog)
+  dialog.addEventListener('close', () => {
+    URL.revokeObjectURL(url)
+    dialog.remove()
+  })
+  dialog.showModal()
+
+  return { close: () => dialog.close() }
+}
+
+function setupPrintButton(toolbar: HTMLDivElement, host: HTMLDivElement): void {
   const button = demoButton(toolbar, 'Print')
-  button.addEventListener('click', () => pdfDoc.printDocument(host))
+  button.addEventListener('click', () => printDocument(host))
 }
 
 // generatePdf() walks the same PaginatedResult mount() already rendered above — see pdf-render.ts's
@@ -1467,7 +1538,7 @@ function setupPdfButtons(toolbar: HTMLDivElement, pdfDoc: Paginator, result: Pag
       openButton.disabled = true
       openButton.textContent = 'Generating…'
       try {
-        pdfDoc.openPdfInNewTab(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }))
+        openPdfInNewTab(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }))
       } finally {
         openButton.disabled = false
         openButton.textContent = 'Open PDF'
@@ -1481,7 +1552,7 @@ function setupPdfButtons(toolbar: HTMLDivElement, pdfDoc: Paginator, result: Pag
       previewButton.disabled = true
       previewButton.textContent = 'Generating…'
       try {
-        pdfDoc.showPdfDialog(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }), { title: 'PDF Preview' })
+        showPdfDialog(await pdfDoc.generatePdf(result, { title: 'Paginator Demo' }), { title: 'PDF Preview' })
       } finally {
         previewButton.disabled = false
         previewButton.textContent = 'Preview PDF'
@@ -1576,7 +1647,7 @@ async function main(): Promise<void> {
   setupInteractionDemo(pdfDoc, result, app, zoom)
   const toolbar = createToolbar()
   setupZoomButtons(toolbar, zoom)
-  setupPrintButton(toolbar, pdfDoc, app)
+  setupPrintButton(toolbar, app)
   setupPdfButtons(toolbar, pdfDoc, result)
   setupExportButtons(toolbar, pdfDoc, doc)
 }

@@ -20,7 +20,6 @@ export declare class Paginator {
     paginate(doc: PageDef): PaginatedResult;
     mount(result: PaginatedResult, host: HTMLElement): void;
     renderPreview(rendered: RenderedNode): HTMLElement;
-    printDocument(host: HTMLElement): void;
     createZoomController(host: HTMLElement, options?: ZoomOptions): ZoomController;
     attachInteractions(result: PaginatedResult, host: HTMLElement, options?: AttachInteractionsOptions): InteractionController;
     buildHitRegistry(result: PaginatedResult): HitRegistry;
@@ -32,10 +31,4 @@ export declare class Paginator {
     generatePdf(result: PaginatedResult, metadata?: PdfMetadata): Promise<Uint8Array>;
     generateDocx(doc: PageDef, metadata?: DocxMetadata): Promise<Uint8Array>;
     generateXlsx(doc: PageDef, metadata?: XlsxMetadata): Promise<Uint8Array>;
-    openPdfInNewTab(bytes: Uint8Array): void;
-    showPdfDialog(bytes: Uint8Array, options?: {
-        title?: string;
-    }): {
-        close(): void;
-    };
 }

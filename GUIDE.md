@@ -174,8 +174,7 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | Method | Signature | Notes |
 |---|---|---|
 | `paginate` | `(doc: PageDef) => PaginatedResult` | Pure, synchronous |
-| `mount` | `(result: PaginatedResult, host: HTMLElement) => void` | Creates/reuses an open Shadow DOM on `host`, replaces its content |
-| `printDocument` | `(host: HTMLElement) => void` | Prints a mounted document with correct page size/margins — see "Printing" below. **Throws** if `host` hasn't been `mount()`-ed |
+| `mount` | `(result: PaginatedResult, host: HTMLElement) => void` | Creates/reuses an open Shadow DOM on `host`, replaces its content. Also wires up the `@page` size/margin rule and print-mode CSS so a plain `window.print()` against a mounted host prints correctly — see "Printing" below |
 | `renderPreview` | `(rendered: RenderedNode) => HTMLElement` | Standalone, pixel-identical re-render of one subtree, re-based to (0,0) — for drag-preview ghosts |
 
 ### PDF export (`Paginator` instance methods, see full section below)
@@ -183,9 +182,11 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 |---|---|---|
 | `registerFont` | `(options: { family: string; url: string; weight?: number \| string; style?: 'normal' \| 'italic' }) => Promise<void>` | Fetches a font file, registers it on THIS instance's own registry for on-screen use AND later PDF embedding. Call before `paginate()` |
 | `generatePdf` | `(result: PaginatedResult, metadata?: PdfMetadata) => Promise<Uint8Array>` | Real vector PDF from the same data `mount()` renders, embedding fonts from this instance's own registry. Throws if a `fontFamily`/weight/style was neither registered nor one of pdfkit's Standard-14 fonts (Helvetica/Times/Courier/Symbol/ZapfDingbats — see "PDF export" below) |
-| `openPdfInNewTab` | `(bytes: Uint8Array) => void` | Opens PDF bytes in a new browser tab via an object URL |
-| `showPdfDialog` | `(bytes: Uint8Array, options?: { title?: string }) => { close(): void }` | Shows a modal `<dialog>` with an `<iframe>` displaying the PDF |
 | `listRegisteredFonts` | `() => RegisteredFont[]` | Inspects what's currently registered on this instance |
+
+`generatePdf()` returns raw bytes — what a consumer does with them (open in a new tab via an object
+URL, show a `<dialog>` with an `<iframe>`, trigger a download) is plain browser-native code, not part
+of this library's API. See `src/main.ts`'s `openPdfInNewTab()`/`showPdfDialog()` for the pattern.
 
 ### Word/Excel export (`Paginator` instance methods, see full section below)
 | Method | Signature | Notes |
@@ -932,18 +933,12 @@ Single recursive function `paginateNode(node, width, ctx)` handles every case un
 
 ## Printing
 
-Call `pdfDoc.printDocument(host)` — the same `host` element passed to `pdfDoc.mount()` — instead of
-reaching for `window.print()` yourself:
-
-```ts
-pdfDoc.mount(result, host)
-printButton.addEventListener('click', () => pdfDoc.printDocument(host))
-```
-
-`printDocument()` is a thin, validated wrapper (`throws` if `host` was never `mount()`-ed); all of
-the actual print behavior is wired up by `mount()` itself, live, so it fires correctly regardless of
-*how* printing gets triggered — the button above, the browser's own Ctrl/Cmd+P, or a print icon in
-the OS UI:
+Printing itself is just `window.print()` — this library has no API of its own for triggering it (see
+`src/main.ts`'s `printDocument()` helper for the demo's thin, validated wrapper: `throws` if `host`
+was never `mount()`-ed). What the library DOES do is make a plain `window.print()` call against a
+`mount()`-ed host come out correctly sized, with no extra blank pages — wired up live inside `mount()`
+itself, so it fires correctly regardless of *how* printing gets triggered — a button calling
+`window.print()`, the browser's own Ctrl/Cmd+P, or a print icon in the OS UI:
 
 - **`@page` rule** (the one `<style>`-tag exception to invariant #5, injected fresh on every
   `mount()` call): `size: {pageSize.width}px {pageSize.height}px; margin: 0`. `pageSize` is already
@@ -968,7 +963,7 @@ the OS UI:
   with the physical page edge, matching the on-screen layout exactly — verified against a real
   `page.pdf()` render, not just print-media emulation.
 
-## PDF export (`src/paginator.ts`, `src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`, `src/render/pdf-view.ts`)
+## PDF export (`src/paginator.ts`, `src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`)
 
 A second, independent paint step over the same `PaginatedResult`/`RenderedNode` data `mount()` already
 consumes — same relationship `renderPreview()` has to `mount()`. Produces a real vector PDF via
@@ -1123,13 +1118,12 @@ measurement, by design — see that file's header comment) is unaffected by this
 decides internal margins/truncation, never actual glyph rendering, so it never claimed font-exact
 fidelity to begin with and doesn't need to.
 
-**Viewing helpers** (`src/render/pdf-view.ts`) are deliberately decoupled from `generatePdf`/
-`PaginatedResult` entirely — same data/paint split as `paginate()`/`mount()` — so either works with PDF
-bytes from any source. `openPdfInNewTab(bytes)` opens a new tab via an object URL it never revokes (the
-tab needs it for its own lifetime, with no reliable close signal available here — the same tradeoff
-common blob-URL download patterns accept). `showPdfDialog(bytes, options?)` shows a native `<dialog>`
-with an `<iframe>`, in the light DOM like the demo's Print button (page chrome, not paginated content
-— invariant #5 doesn't apply), and revokes its object URL on close.
+**Viewing PDF bytes is entirely the consumer's responsibility** — this library stops at
+`generatePdf()` returning a `Uint8Array`; opening it in a new tab, showing a preview dialog, or
+triggering a download is plain browser-native code with no library API of its own (see `src/main.ts`'s
+`openPdfInNewTab()`/`showPdfDialog()` for the demo's pattern: an object URL opened via `window.open()`,
+or shown inside a native `<dialog>`/`<iframe>`, in the light DOM like the rest of the demo's toolbar
+chrome — page chrome, not paginated content, so invariant #5 doesn't apply).
 
 ## Word/Excel export (`src/export/`)
 
@@ -1455,7 +1449,7 @@ src/
       index.ts                                       — wires layout.ts/dom.ts/pdf.ts into one
                                                        registerNode('chart', {...}) call
   render/
-    shadow-dom.ts                  — mount(), printDocument(), renderPreview(), styledDiv(), page
+    shadow-dom.ts                  — mount(), renderPreview(), styledDiv(), page
                                       watermark painting. No longer contains any per-node-type
                                       rendering or a renderNode() dispatcher — every node type's
                                       renderDom() is reached through behavior.ts's renderNodeDom()
@@ -1500,8 +1494,6 @@ src/
                                           longer contains any per-node-type drawing or a drawNode()
                                           dispatcher — every node type's drawPdf() is reached through
                                           behavior.ts's drawPdfNode()
-    pdf-view.ts                         — openPdfInNewTab(), showPdfDialog(): PDF-bytes-in, browser-
-                                           chrome-out, decoupled from generatePdf() itself
     zoom.ts                             — createZoomController(): headless CSS-transform zoom state
                                            (getZoom/setZoom/zoomIn/zoomOut/reset), no UI of its own
   interaction/
@@ -1524,10 +1516,9 @@ src/
   ready.ts                             — ready() (awaits document.fonts.ready)
   paginator.ts                          — Paginator class: the public facade. Owns a per-instance
                                            font registry (Map) and exposes paginate()/mount()/
-                                           renderPreview()/printDocument()/attachInteractions()/the
-                                           hit-registry functions/generatePdf()/generateDocx()/
-                                           generateXlsx()/registerFont()/listRegisteredFonts()/
-                                           openPdfInNewTab()/showPdfDialog() as instance methods,
+                                           renderPreview()/attachInteractions()/the hit-registry
+                                           functions/generatePdf()/generateDocx()/generateXlsx()/
+                                           registerFont()/listRegisteredFonts() as instance methods,
                                            delegating to the (unchanged) functions in
                                            core/render/interaction/export. Only registerFont/
                                            listRegisteredFonts/generatePdf actually touch instance

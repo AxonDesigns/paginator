@@ -6,7 +6,9 @@
 // it's the only way to force the browser's print engine to use this document's exact page size with
 // zero margins instead of whatever margin the OS/browser print dialog defaults to. It stays inside
 // the shadow root and targets nothing but the page box itself, so it doesn't reopen the
-// host-CSS-bleed-through hole invariant #5 otherwise closes — see printDocument() below.
+// host-CSS-bleed-through hole invariant #5 otherwise closes — see applyPrintMode() below, which
+// reacts to matchMedia('print')/beforeprint/afterprint so this stays correct however the consumer
+// triggers window.print() (that call itself is the consumer's responsibility, not this library's).
 //
 // Rendering is flat and page-absolute: since RenderedNode.box coordinates are already fully resolved
 // relative to their region's own origin by the time pagination finishes (see geometry.ts), every
@@ -150,9 +152,8 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
   // The one `<style>` exception in this file — see the header comment for why `@page` can't be
   // expressed as an inline style. `size` in physical px at the same 96dpi this whole engine already
   // assumes (see page-sizes.ts) makes the printed page dimensions match the on-screen ones exactly;
-  // `margin: 0` is what makes printDocument()'s zeroed-out wrapper padding/gap (applyPrintMode,
-  // above) actually reach the physical page edge instead of being pushed in by the browser's own
-  // default print margin.
+  // `margin: 0` is what makes applyPrintMode()'s zeroed-out wrapper padding/gap actually reach the
+  // physical page edge instead of being pushed in by the browser's own default print margin.
   const pageStyle = document.createElement('style')
   pageStyle.textContent = `@page { size: ${pageSize.width}px ${pageSize.height}px; margin: 0; }`
   root.appendChild(pageStyle)
@@ -218,22 +219,4 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
   mql.addEventListener('change', onPrint)
   window.addEventListener('beforeprint', () => applyPrintMode(wrapper, pageEls, true))
   window.addEventListener('afterprint', () => applyPrintMode(wrapper, pageEls, false))
-}
-
-/**
- * Prints a document previously mounted with `mount(result, host)`. All of the actual print
- * handling — the `@page` size/margin rule, hiding the screen-only wrapper padding/gap/background
- * and page drop-shadows — is already wired up inside `mount()` itself (it reacts live to
- * `matchMedia('print')`/`beforeprint`/`afterprint`, so it fires correctly however printing gets
- * triggered, including the browser's own Ctrl/Cmd+P). This function exists so consumers never need
- * to reach for the bare `window.print()` global themselves or know any of the above — wire a
- * button's `onclick` to this and printing "just works" per the isolation/sizing guarantees the rest
- * of this library already provides. Throws if `host` was never mounted, since an unmounted host has
- * no pages (and no `@page` rule) to print.
- */
-export function printDocument(host: HTMLElement): void {
-  if (host.shadowRoot === null) {
-    throw new Error('[paginator] printDocument() called on a host that has no mount() output yet — call mount(result, host) first.')
-  }
-  window.print()
 }
