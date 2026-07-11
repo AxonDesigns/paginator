@@ -1,5 +1,6 @@
 import type { PageDef } from './core/nodes.js';
 import { type PaginatedResult } from './core/paginate.js';
+import { type ZoomController, type ZoomOptions } from './render/zoom.js';
 import type { RenderedNode } from './core/geometry.js';
 import { type PdfMetadata } from './render/pdf-render.js';
 import { type DocxMetadata } from './export/docx-export.js';
@@ -20,11 +21,13 @@ export declare class Paginator {
     mount(result: PaginatedResult, host: HTMLElement): void;
     renderPreview(rendered: RenderedNode): HTMLElement;
     printDocument(host: HTMLElement): void;
+    createZoomController(host: HTMLElement, options?: ZoomOptions): ZoomController;
     attachInteractions(result: PaginatedResult, host: HTMLElement, options?: AttachInteractionsOptions): InteractionController;
     buildHitRegistry(result: PaginatedResult): HitRegistry;
     hitTest(registry: HitRegistry, pageNumber: number, x: number, y: number): InteractionTarget | null;
     hitTestDroppable(registry: HitRegistry, pageNumber: number, x: number, y: number, dragTypes?: string[]): InteractionTarget | null;
     findById(registry: HitRegistry, id: string): InteractionTarget[];
+    findFragments(registry: HitRegistry, target: InteractionTarget): InteractionTarget[];
     toTypeList(value: string | string[] | undefined): string[];
     generatePdf(result: PaginatedResult, metadata?: PdfMetadata): Promise<Uint8Array>;
     generateDocx(doc: PageDef, metadata?: DocxMetadata): Promise<Uint8Array>;

@@ -8,8 +8,9 @@
 // every line break by measuring against whatever font FILE the browser's canvas resolved for a
 // TextNode's `fontFamily` string (see measure-text.ts / font-registry.ts's header comment). For the
 // PDF's embedded vector glyphs to reproduce identical line breaks, it must embed that literal file —
-// see font-registry.ts / pdf-fonts.ts. When a family/weight/style was never registered, text nodes
-// fall back to a Helvetica standard font (warn once, not throw) rather than blocking generation.
+// see font-registry.ts / pdf-fonts.ts. A family/weight/style that was never registered can only still
+// draw if it names one of pdfkit's Standard-14 fonts (no file needed); anything else throws rather
+// than blocking generation with a silently substituted font.
 //
 // Coordinate system: pdfkit's page space is ALREADY top-left origin, y-down (it applies a
 // `1 0 0 -1 0 pageHeight` CTM flip once per page internally, confirmed by inspecting its output) —
@@ -33,9 +34,9 @@ import type { ImageNode, LineStyle, ObjectFit, Watermark } from '../core/nodes.t
 import { drawPdfNode } from '../core/behavior.ts'
 import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { measureTextWidthPx } from './text-measure.ts'
-import { lookupFont, normalizeFontWeight } from './font-registry.ts'
+import { DEFAULT_FONT_FAMILY, normalizeFontWeight } from './font-registry.ts'
 import type { FontRegistry, FontStyle, RegisteredFont } from './font-registry.ts'
-import { ensureRegisteredFont, measureFontMetricsPx, pickFallbackFont, warnMissingFontOnce } from './pdf-fonts.ts'
+import { measureFontMetricsPx, resolveFontOrThrow } from './pdf-fonts.ts'
 
 export type PdfMetadata = { title?: string; author?: string; subject?: string; keywords?: string[] }
 
@@ -49,8 +50,6 @@ export type PdfContext = {
   fonts: FontRegistry
   registeredFontNames: Map<RegisteredFont, string>
   imageEmbedCache: Map<string, string>
-  fallbackFonts: { regular: string; bold: string; italic: string; boldItalic: string }
-  warnedMissingFonts: Set<string>
 }
 
 export function toPdfRect(xPx: number, yPx: number, wPx: number, hPx: number): { x: number; y: number; width: number; height: number } {
@@ -239,20 +238,13 @@ export async function embedImage(ctx: PdfContext, node: Pick<ImageNode, 'src' | 
 function watermarkFontCss(watermark: Extract<Watermark, { kind: 'text' }>): string {
   const style = watermark.fontStyle === 'italic' ? 'italic ' : ''
   const weight = watermark.fontWeight ?? 700
-  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'Helvetica'}`
+  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`
 }
 
-// Falls back straight to a Helvetica standard font with no warning when `fontFamily` is omitted —
-// unlike resolveTextFont()/resolveChartFontName(), there was never a registered family this omission
-// could be missing relative to, so warnMissingFontOnce() would be pure noise here.
 function resolveWatermarkFontName(ctx: PdfContext, watermark: Extract<Watermark, { kind: 'text' }>): string {
   const weight = normalizeFontWeight(watermark.fontWeight ?? 700)
   const style: FontStyle = watermark.fontStyle === 'italic' ? 'italic' : 'normal'
-  if (watermark.fontFamily === undefined) return pickFallbackFont(ctx, weight, style)
-  const registered = lookupFont(ctx.fonts, watermark.fontFamily, weight, style)
-  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
-  warnMissingFontOnce(ctx, watermark.fontFamily, weight, style)
-  return pickFallbackFont(ctx, weight, style)
+  return resolveFontOrThrow(ctx, watermark.fontFamily ?? DEFAULT_FONT_FAMILY, weight, style)
 }
 
 // Rasterizes watermark text to a transparent PNG (same RASTER_SCALE/canvas approach as
@@ -406,8 +398,6 @@ export async function generatePdf(result: PaginatedResult, fonts: FontRegistry, 
     fonts,
     registeredFontNames: new Map(),
     imageEmbedCache: new Map(),
-    fallbackFonts: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
-    warnedMissingFonts: new Set(),
   }
 
   const { margins, headerHeight, headerGap, footerHeight } = result

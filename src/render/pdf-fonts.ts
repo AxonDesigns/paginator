@@ -5,24 +5,25 @@
 // The reason this exists at all: pretext decided every line break by measuring against whatever font
 // FILE the browser's canvas resolved for a TextNode's `fontFamily` string (see measure-text.ts /
 // font-registry.ts's header comment). For the PDF's embedded vector glyphs to reproduce identical
-// line breaks, it must embed that literal file — see font-registry.ts. When a family/weight/style was
-// never registered, callers fall back to a Helvetica standard font (warn once, not throw) rather than
-// blocking generation.
+// line breaks, it must embed that literal file — see font-registry.ts. A family/weight/style that
+// was never registered can only still be drawn if it's one of pdfkit's Standard-14 fonts (no file
+// needed, see resolveStandardFontName()) — anything else means generatePdf() has no font file to
+// embed at all, so it throws rather than silently substituting a different font's glyph widths.
 
 import type { PdfContext } from './pdf-render.ts'
 import type { RichTextNode, RichTextRun, TextNode } from '../core/nodes.ts'
-import { lookupFont, normalizeFontWeight } from './font-registry.ts'
+import { lookupFont, normalizeFontWeight, resolveStandardFontName } from './font-registry.ts'
 import type { FontStyle, RegisteredFont } from './font-registry.ts'
 
-export function warnMissingFontOnce(ctx: PdfContext, family: string, weight: number, style: FontStyle): void {
-  const key = `${family}|${weight}|${style}`
-  if (ctx.warnedMissingFonts.has(key)) return
-  ctx.warnedMissingFonts.add(key)
-  console.warn(
-    `[paginator] generatePdf(): no font registered for family "${family}", weight ${weight}, style "${style}" — falling back to a Helvetica ` +
-      `standard font. Text layout was measured against this font on screen; the substitute's glyph widths differ, so the PDF's fit/alignment for ` +
-      `this text may not exactly match the preview. Call registerFont({ family: '${family}', weight: ${weight}, style: '${style}', url: '...' }) ` +
-      `before generatePdf() to embed the identical font.`,
+export function resolveFontOrThrow(ctx: PdfContext, family: string, weight: number, style: FontStyle): string {
+  const registered = lookupFont(ctx.fonts, family, weight, style)
+  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
+  const standard = resolveStandardFontName(family, weight, style)
+  if (standard !== undefined) return standard
+  throw new Error(
+    `[paginator] generatePdf(): no font registered for family "${family}", weight ${weight}, style "${style}", and it is not one of pdfkit's ` +
+      `standard 14 fonts (Helvetica/Times/Courier/Symbol/ZapfDingbats). Call registerFont({ family: '${family}', weight: ${weight}, ` +
+      `style: '${style}', url: '...' }) before generatePdf(), or use one of the standard font families.`,
   )
 }
 
@@ -40,22 +41,10 @@ export function ensureRegisteredFont(ctx: PdfContext, font: RegisteredFont): str
   return name
 }
 
-export function pickFallbackFont(ctx: PdfContext, weight: number, style: FontStyle): string {
-  const bold = weight >= 600
-  const italic = style === 'italic'
-  if (bold && italic) return ctx.fallbackFonts.boldItalic
-  if (bold) return ctx.fallbackFonts.bold
-  if (italic) return ctx.fallbackFonts.italic
-  return ctx.fallbackFonts.regular
-}
-
 export function resolveTextFont(ctx: PdfContext, node: TextNode): string {
   const weight = normalizeFontWeight(node.fontWeight)
   const style: FontStyle = node.fontStyle === 'italic' ? 'italic' : 'normal'
-  const registered = lookupFont(ctx.fonts, node.fontFamily, weight, style)
-  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
-  warnMissingFontOnce(ctx, node.fontFamily, weight, style)
-  return pickFallbackFont(ctx, weight, style)
+  return resolveFontOrThrow(ctx, node.fontFamily, weight, style)
 }
 
 // Same registry lookup as resolveTextFont, but resolved per-run: family/weight/style each fall back
@@ -64,23 +53,15 @@ export function resolveRunFont(ctx: PdfContext, run: RichTextRun, node: RichText
   const weight = normalizeFontWeight(run.fontWeight ?? node.fontWeight)
   const style: FontStyle = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic' : 'normal'
   const family = run.fontFamily ?? node.fontFamily
-  const registered = lookupFont(ctx.fonts, family, weight, style)
-  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
-  warnMissingFontOnce(ctx, family, weight, style)
-  return pickFallbackFont(ctx, weight, style)
+  return resolveFontOrThrow(ctx, family, weight, style)
 }
 
-// Chart text (title/axis/legend) goes through the SAME font registry a TextNode does — an
-// unregistered family falls back to Helvetica with a one-time console.warn, same as resolveTextFont
-// above. Chart weight is binary (bold for the title/emphasis cases, regular otherwise), unlike a
-// TextNode's arbitrary numeric weight, so this maps that straight to 700/400 rather than plumbing a
-// numeric weight through every chart draw call.
+// Chart text (title/axis/legend) goes through the SAME font registry a TextNode does. Chart weight is
+// binary (bold for the title/emphasis cases, regular otherwise), unlike a TextNode's arbitrary
+// numeric weight, so this maps that straight to 700/400 rather than plumbing a numeric weight through
+// every chart draw call.
 export function resolveChartFontName(ctx: PdfContext, fontFamily: string, bold: boolean): string {
-  const weight = bold ? 700 : 400
-  const registered = lookupFont(ctx.fonts, fontFamily, weight, 'normal')
-  if (registered !== undefined) return ensureRegisteredFont(ctx, registered)
-  warnMissingFontOnce(ctx, fontFamily, weight, 'normal')
-  return pickFallbackFont(ctx, weight, 'normal')
+  return resolveFontOrThrow(ctx, fontFamily, bold ? 700 : 400, 'normal')
 }
 
 export function textNodeFontString(node: TextNode): string {

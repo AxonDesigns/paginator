@@ -34,9 +34,23 @@ export function measureNodeHeight(node, width) {
 export function isSplittable(node) {
     return entryFor(node.type).isSplittable(node);
 }
+let nextSplitGroupId = 0;
 export function splitNode(node, width, availableHeight) {
     const def = entryFor(node.type);
-    return def.split === undefined ? null : def.split(node, width, availableHeight);
+    if (def.split === undefined)
+        return null;
+    const result = def.split(node, width, availableHeight);
+    if (result === null)
+        return null;
+    // Stamp every fragment produced by this split with a shared, internal lineage id — reused from
+    // `node` itself when it's already a continuation of an earlier split, otherwise minted fresh —
+    // so findFragments() can later recover every fragment of the same authored node without the
+    // caller having to assign an `id` themselves. Every split() implementation sets `rendered.node`
+    // to the literal input `node` reference, so this clones rather than mutates it.
+    const splitGroupId = node.__splitGroupId ?? `split-${nextSplitGroupId++}`;
+    const rendered = { ...result.rendered, node: { ...result.rendered.node, __splitGroupId: splitGroupId } };
+    const rest = result.rest === null ? null : { ...result.rest, __splitGroupId: splitGroupId };
+    return { rendered, consumedHeight: result.consumedHeight, rest };
 }
 export function layoutNodeFull(node, width) {
     return entryFor(node.type).layout(node, width);

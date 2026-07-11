@@ -62,6 +62,10 @@ function columnNaturalWidth(column, columnIndex, rows, cellPadding, boundWidth) 
     }
     return max;
 }
+// Deliberately does NOT mirror resolveRowChildSizing()'s leaf-content-defaults-to-'shrink' rule
+// (src/nodes/group.ts) — a table's columns are a grid, not a row of arbitrary content, so an
+// unset `width` always defaults to flex weight 1 (equal-width columns) regardless of what a cell's
+// content type is. Only an explicit `width: 'shrink'` opts a column out of that.
 function resolveColumnSizing(column, columnIndex, rows, cellPadding, boundWidth) {
     const flex = column.width;
     if (flex === 'shrink')
@@ -209,14 +213,14 @@ export function layoutRows(rows, columns, colWidths, cellPadding) {
         if (row.kind === 'header') {
             if (row.cells !== undefined) {
                 const prepared = prepareRowCells({ cells: row.cells, background: row.background }, columns, colWidths, cellPadding);
-                return { kind: 'header', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, cells: renderCells(prepared, r) };
+                return { kind: 'header', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, cells: renderCells(prepared, r), topBorder: row.topBorder, bottomBorder: row.bottomBorder };
             }
             const availableWidth = Math.max(0, fullWidth - 2 * cellPadding - row.depth * GROUP_INDENT);
             const content = translateRendered(layoutNodeFull(row.content, availableWidth), cellPadding + row.depth * GROUP_INDENT, rowY[r] + cellPadding);
-            return { kind: 'header', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, background: row.background, content };
+            return { kind: 'header', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, background: row.background, content, topBorder: row.topBorder, bottomBorder: row.bottomBorder };
         }
         const prepared = prepareRowCells(row, columns, colWidths, cellPadding);
-        return { kind: 'cells', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, cells: renderCells(prepared, r) };
+        return { kind: 'cells', box: { x: 0, y: rowY[r], width: fullWidth, height: heights[r] }, cells: renderCells(prepared, r), topBorder: row.topBorder, bottomBorder: row.bottomBorder };
     });
 }
 // Whether a depth-`depth` group still has any of its own rows left in `rows` (which starts right

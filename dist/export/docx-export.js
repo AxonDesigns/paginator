@@ -46,6 +46,27 @@ function warnPageBackgroundOnce() {
     warnedPageBackground = true;
     console.warn('[paginator] generateDocx(): page background has no clean Word equivalent — skipping. (Page border is deliberately not applied either — see the module header comment.)');
 }
+let warnedTableBorderRadius = false;
+function warnTableBorderRadiusOnce() {
+    if (warnedTableBorderRadius)
+        return;
+    warnedTableBorderRadius = true;
+    console.warn('[paginator] generateDocx(): table border.outer.borderRadius has no Word equivalent — drawing square corners.');
+}
+let warnedTableHeaderSeparator = false;
+function warnTableHeaderSeparatorOnce() {
+    if (warnedTableHeaderSeparator)
+        return;
+    warnedTableHeaderSeparator = true;
+    console.warn('[paginator] generateDocx(): table border.headerSeparator has no Word equivalent — skipping (the ordinary inner/outer grid still draws at that boundary).');
+}
+let warnedTableRowBorder = false;
+function warnTableRowBorderOnce() {
+    if (warnedTableRowBorder)
+        return;
+    warnedTableRowBorder = true;
+    console.warn('[paginator] generateDocx(): a table row\'s topBorder/bottomBorder (e.g. TableGroupLevel.headerBorder/totalsBorder) has no Word equivalent — skipping (the ordinary inner/outer grid still draws at that boundary).');
+}
 // Disabled alongside the watermark call in generateDocx() — see there.
 // let warnedWatermarkUnsupported = false
 // function warnWatermarkUnsupportedOnce(): void {
@@ -264,13 +285,11 @@ function docxBorderStyle(style) {
 function borderOption(thicknessPx, color, style = BorderStyle.SINGLE) {
     return { style, size: Math.min(96, Math.max(2, Math.round(thicknessPx * 6))), color: resolveExportColor(color) };
 }
-function cellBorders(sides, style) {
-    return {
-        top: sides.top ? style : NONE_BORDER,
-        bottom: sides.bottom ? style : NONE_BORDER,
-        left: sides.left ? style : NONE_BORDER,
-        right: sides.right ? style : NONE_BORDER,
-    };
+// `sides` now says WHICH style applies per edge (inner vs outer vs none), since the two can differ
+// — `lines.inner`/`lines.outer` are the two already-resolved `IBorderOptions` to pick between.
+function cellBorders(sides, lines) {
+    const pick = (s) => (s === 'outer' ? lines.outer : s === 'inner' ? lines.inner : NONE_BORDER);
+    return { top: pick(sides.top), bottom: pick(sides.bottom), left: pick(sides.left), right: pick(sides.right) };
 }
 // Accepts CrossAlign too (used for a row-direction group's children, via childCrossAlign below) —
 // 'stretch' has no vertical-stretch meaning for a row child (height is always intrinsic, see
@@ -409,8 +428,17 @@ async function containerToTable(node, widthPx) {
 async function tableNodeToTable(node, widthPx) {
     const columnCount = node.columns.length;
     const totalRows = node.rows.length;
-    const mode = node.border === undefined ? 'none' : (node.border.mode ?? 'all');
-    const tableBorderOption = borderOption(node.border?.thickness ?? 1, node.border?.color ?? '#000000', docxBorderStyle(node.border?.style));
+    const innerMode = node.border === undefined ? 'none' : (node.border.inner?.mode ?? 'all');
+    const outerMode = node.border === undefined ? 'none' : (node.border.outer?.mode ?? 'all');
+    if (node.border?.outer?.borderRadius !== undefined)
+        warnTableBorderRadiusOnce();
+    if (node.border?.headerSeparator)
+        warnTableHeaderSeparatorOnce();
+    if (node.rows.some(r => r.topBorder !== undefined || r.bottomBorder !== undefined))
+        warnTableRowBorderOnce();
+    const innerBorderOption = borderOption(node.border?.inner?.thickness ?? 1, node.border?.inner?.color ?? '#000000', docxBorderStyle(node.border?.inner?.style));
+    const outerBorderOption = borderOption(node.border?.outer?.thickness ?? 1, node.border?.outer?.color ?? '#000000', docxBorderStyle(node.border?.outer?.style));
+    const borderLines = { inner: innerBorderOption, outer: outerBorderOption };
     const colWidthsPx = resolveColumnWidthsPx(node, widthPx);
     const colWidthsTwip = colWidthsPx.map(pxToTwip);
     const tableCellPadding = node.cellPadding ?? 0;
@@ -419,19 +447,19 @@ async function tableNodeToTable(node, widthPx) {
     const rows = await Promise.all(node.rows.map(async (row, r) => {
         if (row.kind === 'header') {
             if (row.cells !== undefined)
-                return docxRow(row.cells, undefined, r, totalRows, columnCount, colWidthsPx, mode, tableBorderOption, node.columns, tableCellPadding);
+                return docxRow(row.cells, undefined, r, totalRows, columnCount, colWidthsPx, innerMode, outerMode, borderLines, node.columns, tableCellPadding);
             const bannerBlocks = row.content !== undefined ? await nodeToBlocks(row.content, Math.max(0, fullWidthPx - 2 * tableCellPadding)) : [];
             const bannerCell = new DocxTableCell({
                 children: bannerBlocks.length > 0 ? bannerBlocks : [new Paragraph({})],
                 columnSpan: columnCount,
                 width: { size: colWidthsTwip.reduce((a, b) => a + b, 0), type: WidthType.DXA },
                 shading: shadingFor(row.background),
-                borders: cellBorders(borderSides(mode, r, r, 0, columnCount - 1, totalRows, columnCount), tableBorderOption),
+                borders: cellBorders(borderSides(innerMode, outerMode, r, r, 0, columnCount - 1, totalRows, columnCount), borderLines),
                 margins: bannerMargins,
             });
             return new DocxTableRow({ children: [bannerCell] });
         }
-        return docxRow(row.cells, row, r, totalRows, columnCount, colWidthsPx, mode, tableBorderOption, node.columns, tableCellPadding);
+        return docxRow(row.cells, row, r, totalRows, columnCount, colWidthsPx, innerMode, outerMode, borderLines, node.columns, tableCellPadding);
     }));
     return new DocxTable({
         rows,
@@ -453,7 +481,7 @@ function cellMargins(paddingPx) {
 // style string. Only text/richText/table cells were previously exempt from this (a synchronous-only
 // fallback that flattened anything else to plain text) — nodeToBlocks is already async everywhere
 // else (image fetching), so there's no real cost to routing cells through it uniformly too.
-async function docxRow(cells, row, r, totalRows, columnCount, colWidthsPx, mode, tableBorderOption, columns, tableCellPadding) {
+async function docxRow(cells, row, r, totalRows, columnCount, colWidthsPx, innerMode, outerMode, borderLines, columns, tableCellPadding) {
     const children = await Promise.all(cells.map(async (cell, i) => {
         const colStart = cell.__resolvedCol ?? i;
         const colSpan = cell.colSpan ?? 1;
@@ -461,10 +489,15 @@ async function docxRow(cells, row, r, totalRows, columnCount, colWidthsPx, mode,
         const colEnd = colStart + colSpan - 1;
         const rowEnd = r + rowSpan - 1;
         const widthPx = colWidthsPx.slice(colStart, colEnd + 1).reduce((a, b) => a + b, 0);
-        const sides = borderSides(mode, r, rowEnd, colStart, colEnd, totalRows, columnCount);
+        const sides = borderSides(innerMode, outerMode, r, rowEnd, colStart, colEnd, totalRows, columnCount);
+        // A full rect on all 4 sides, independent of the table-wide inner/outer modes — reuses
+        // cellBorders()'s edge-picker with every side forced to 'outer' and `outer` set to the
+        // cell's own resolved style (see TableCell.border's doc comment: two adjacent bordered
+        // cells double up, by design).
+        const fullRectSides = { top: 'outer', bottom: 'outer', left: 'outer', right: 'outer' };
         const borders = cell.border !== undefined
-            ? cellBorders({ top: true, bottom: true, left: true, right: true }, borderOption(cell.border.thickness ?? 1, cell.border.color ?? '#000000', docxBorderStyle(cell.border.style)))
-            : cellBorders(sides, tableBorderOption);
+            ? cellBorders(fullRectSides, { inner: NONE_BORDER, outer: borderOption(cell.border.thickness ?? 1, cell.border.color ?? '#000000', docxBorderStyle(cell.border.style)) })
+            : cellBorders(sides, borderLines);
         const padding = cell.padding ?? columns[colStart]?.padding ?? tableCellPadding;
         const blocks = cell.content !== undefined ? await nodeToBlocks(cell.content, Math.max(0, widthPx - 2 * padding)) : [];
         return new DocxTableCell({

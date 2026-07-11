@@ -104,7 +104,15 @@ describe('behavior.ts registry', () => {
     const outcome = splitNode(node, 100, 3)
     expect(outcome).not.toBeNull()
     expect(outcome!.consumedHeight).toBe(1)
-    expect(outcome!.rest).toEqual(asNode(rest))
+    // splitNode() stamps an internal split-lineage id onto both the rendered fragment and `rest`
+    // (see core/behavior.ts) so callers can recover every fragment of a split node without an
+    // authored `id` — asserted here via omit rather than a hardcoded id, since the id itself is an
+    // internal implementation detail (a monotonic counter shared across the whole test file).
+    const { __splitGroupId: restGroupId, ...restWithoutGroupId } = outcome!.rest as FixtureNode & { __splitGroupId?: string }
+    expect(restWithoutGroupId).toEqual(asNode(rest))
+    expect(restGroupId).toBeDefined()
+    const renderedNode = outcome!.rendered.node as FixtureNode & { __splitGroupId?: string }
+    expect(renderedNode.__splitGroupId).toBe(restGroupId)
   })
 
   test('naturalWidth falls back to availableWidth when the type registers no naturalWidth()', () => {

@@ -131,6 +131,13 @@ export type Interactive = {
      * always returns an array — one entry per matching page/fragment, in page order.
      */
     id?: string;
+    /**
+     * Internal — auto-assigned by splitNode() in core/behavior.ts when this node is split across a
+     * page boundary. Not meant to be set by callers (same double-underscore convention as
+     * TextNode.__resumeCursor). Powers findFragments()'s automatic, id-free fragment lookup — the
+     * counterpart to the caller-assigned `id` + `findById()` above.
+     */
+    __splitGroupId?: string;
 };
 type GroupCommon = Interactive & SelfAlignable & {
     type: 'group';
@@ -780,6 +787,21 @@ export type TableGroupLevel = {
      *  group's rows split across a page boundary. Overrides `TableNode.repeatGroupHeaders` for this
      *  level only; falls back to it when unset (which itself defaults to `true`). */
     repeat?: boolean;
+    /** Accent line at this level's own header bar's own top/bottom edge — a full-width rule that
+     *  OVERRIDES (not adds to) whatever `TableNode.border.inner` horizontal line or
+     *  `border.headerSeparator` would otherwise draw at that exact boundary. Baked onto the
+     *  synthesized `kind: 'header'` row's own `topBorder`/`bottomBorder` by table()'s
+     *  applyGroupingRows() — see those fields on `TableRow` below. */
+    headerBorder?: {
+        top?: ContainerBorder;
+        bottom?: ContainerBorder;
+    };
+    /** Same, for this level's `totals()` row. `table()` throws if set without `totals` — there's no
+     *  totals row to attach it to. */
+    totalsBorder?: {
+        top?: ContainerBorder;
+        bottom?: ContainerBorder;
+    };
 };
 export type TableColumn = {
     width?: FlexSize;
@@ -845,6 +867,14 @@ export type TableRow = {
     groupValues?: string[];
     background?: string;
     verticalAlign?: 'start' | 'center' | 'end';
+    /** Full-width accent line at this row's own top/bottom edge, overriding whatever
+     *  `TableNode.border.inner` horizontal line (or `border.headerSeparator`, at that one
+     *  boundary) would otherwise draw there — not additive, an explicit override. Baked in by
+     *  table()'s applyGroupingRows() from a `TableGroupLevel.totalsBorder`-configured totals
+     *  row; directly authorable by hand on any row too, same as `kind: 'header'`'s `repeat`
+     *  field already is. */
+    topBorder?: ContainerBorder;
+    bottomBorder?: ContainerBorder;
     /** @internal true if this row cannot be separated from the NEXT row by a page cut — set by
      *  table() (via resolveCellSpans()) when a rowSpan cell starting at or before this row still
      *  has rows left to cover after it. Unset for an ordinary table — every row is its own
@@ -870,6 +900,12 @@ export type TableRow = {
      *  tiling a `totals()` row gets. */
     cells?: TableCell[];
     background?: string;
+    /** Full-width accent line at this bar's own top/bottom edge — same field/semantics as the
+     *  `kind?: 'cells'` variant's `topBorder`/`bottomBorder` above. Baked in by table()'s
+     *  applyGroupingRows() from `TableGroupLevel.headerBorder`, or set directly on a
+     *  hand-authored banner row. */
+    topBorder?: ContainerBorder;
+    bottomBorder?: ContainerBorder;
     /** Already-resolved: whether this specific header instance re-appears at the top of a
      *  continuation page if the surrounding rows split across a page boundary. table-layout.ts
      *  reads this directly (`row.repeat ?? true`) — it has no awareness of `TableGroupLevel` or
@@ -879,7 +915,23 @@ export type TableRow = {
      *  row, set it directly (defaults to `true`, same as everywhere else). */
     repeat?: boolean;
 };
-export type TableBorderMode = 'none' | 'all' | 'outer' | 'horizontal' | 'vertical';
+/** `'horizontal'`/`'vertical'` are scoped to whichever line-group carries this mode: for
+ *  `TableNode.border.inner` they mean "only between-row lines"/"only between-column lines"; for
+ *  `TableNode.border.outer` they mean "only the top+bottom perimeter edges"/"only the left+right
+ *  perimeter edges." `'all'` draws every line in that group; `'none'` (or the group being entirely
+ *  absent) draws none. */
+export type TableBorderLineMode = 'none' | 'horizontal' | 'vertical' | 'all';
+/** One line-drawing config, shared shape for both `TableNode.border.inner` and `.outer`. `mode`
+ *  defaults to `'all'` whenever the surrounding line-group object is present (even with `mode`
+ *  itself unset) — same "object present = mode defaults to all" rule the old single `border.mode`
+ *  used, now applied to `inner`/`outer` independently. `thickness`/`color`/`style` each default
+ *  independently too (`1`/`'#000000'`/`'solid'`) — inner and outer no longer have to match. */
+export type TableBorderLine = {
+    mode?: TableBorderLineMode;
+    thickness?: number;
+    color?: string;
+    style?: LineStyle;
+};
 export type TableNode = Interactive & {
     type: 'table';
     columns: TableColumn[];
@@ -905,15 +957,31 @@ export type TableNode = Interactive & {
      *  own — default `true` (every group level's header bar repeats on a continuation page unless
      *  that level, or this, opts out). */
     repeatGroupHeaders?: boolean;
-    /** Omitted entirely = no borders (same as `{mode: 'none'}`). `mode` defaults to 'all' when the
-     *  object is present but `mode` isn't specified. `style` defaults to `'solid'` — see
-     *  `LineStyle`; applies to every grid line this mode draws, table-wide (an individual cell's own
-     *  `TableCell.border` sets its own style independently via `ContainerBorder.style`). */
+    /** Omitted entirely = no borders at all. `inner` (grid lines between rows/columns) and `outer`
+     *  (the table's own perimeter) are fully independent — set one without the other, with their own
+     *  mode/thickness/color/style each. To reproduce the old single-`mode` shorthand: old `'outer'`
+     *  is `{ inner: { mode: 'none' }, outer: {} }`; old `'horizontal'`/`'vertical'`/`'all'`/`'none'`
+     *  is the same mode set on BOTH `inner` and `outer`. `headerSeparator` draws one more line at the
+     *  boundary between the table's `headerRows` prefix and its body — `true` reuses `inner`'s own
+     *  thickness/color/style, an object is fully custom; silently skipped if `headerRows` is 0 (no
+     *  boundary exists). An individual cell's own `TableCell.border` (full rect) and a
+     *  `TableGroupLevel.headerBorder`/`totalsBorder` accent line (which overrides whatever `inner`/
+     *  `headerSeparator` would otherwise draw at that one row boundary) are both independent of, and
+     *  drawn on top of, everything here. `generateDocx()`/`generateXlsx()` support independent
+     *  inner/outer thickness/color/style but not `headerSeparator` or a row's own `topBorder`/
+     *  `bottomBorder` — those are silently skipped there with a one-time console warning, same
+     *  precedent as `outer.borderRadius` already has. */
     border?: {
-        mode?: TableBorderMode;
-        thickness?: number;
-        color?: string;
-        style?: LineStyle;
+        inner?: TableBorderLine;
+        outer?: TableBorderLine & {
+            /** Rounds the outer perimeter's 4 corners and real-clips cell/row/header backgrounds and
+             *  content to match (same clipping `ContainerNode.borderRadius` does) — only meaningful when
+             *  `outer.mode` is `'all'` (the only mode that draws a closed rectangle); `table()` throws
+             *  otherwise. `generateDocx()`/`generateXlsx()` ignore it (draw square corners) with a
+             *  one-time console warning — neither format has a rounded-table-border primitive. */
+            borderRadius?: number;
+        };
+        headerSeparator?: ContainerBorder | boolean;
     };
     cellPadding?: number;
     /** Alternating row background, desugared entirely at table() build time into per-row

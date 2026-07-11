@@ -12,7 +12,8 @@
 // magenta) fall under 3:1 contrast on a white surface — the "relief" mitigation for that is applied
 // throughout the renderers by never coloring TEXT with a series color (labels/ticks/legend text
 // always use an ink role; only swatches/marks/fills carry the series hue).
-export const CHART_FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+import { DEFAULT_FONT_FAMILY } from "./font-registry.js";
+export const CHART_FONT_FAMILY = DEFAULT_FONT_FAMILY;
 // dataviz skill reference palette, categorical theme, light mode — fixed order, never cycled per
 // the skill's "assign categorical hues in fixed order" rule; wraps via modulo only past 8 series/
 // slices, which is an explicit MVP simplification (the skill's own guidance is to fold a 9th series

@@ -7,7 +7,7 @@ import '../src/nodes/image.ts'
 import '../src/nodes/group.ts'
 import { definePage, group, image } from '../src/core/nodes.ts'
 import { paginate } from '../src/core/paginate.ts'
-import { buildHitRegistry, findById } from '../src/interaction/hit-registry.ts'
+import { buildHitRegistry, findById, findFragments, hitTest } from '../src/interaction/hit-registry.ts'
 
 const A4_MARGINS = { top: 20, right: 20, bottom: 20, left: 20 }
 
@@ -68,5 +68,38 @@ describe('findById()', () => {
     for (const m of matches) expect(m.node.id).toBe('long')
     const pageNumbers = matches.map(m => m.pageNumber)
     expect(pageNumbers).toEqual([...pageNumbers].sort((a, b) => a - b))
+  })
+})
+
+describe('findFragments()', () => {
+  test('a node split across pages resolves to one fragment per page, with no authored id at all', () => {
+    const { height: pageHeight } = paginate(definePage({ size: 'A4', margins: A4_MARGINS }, image({ src: 'x.png', width: 10, height: 10 }))).pageSize as { height: number }
+    const contentBoxHeight = pageHeight - A4_MARGINS.top - A4_MARGINS.bottom
+    const n = Math.ceil((contentBoxHeight * 2.5) / 100)
+    const doc = definePage(
+      { size: 'A4', margins: A4_MARGINS },
+      group(
+        { direction: 'column', interactive: true },
+        Array.from({ length: n }, (_, i) => image({ src: `${i}.png`, width: 100, height: 100 })),
+      ),
+    )
+    const result = paginate(doc)
+    expect(result.pages.length).toBeGreaterThanOrEqual(3)
+    const registry = buildHitRegistry(result)
+    const firstPageTarget = hitTest(registry, 1, A4_MARGINS.left + 1, A4_MARGINS.top + 1)
+    expect(firstPageTarget).not.toBeNull()
+    const fragments = findFragments(registry, firstPageTarget!)
+    expect(fragments.length).toBe(result.pages.length)
+    const pageNumbers = fragments.map(f => f.pageNumber)
+    expect(pageNumbers).toEqual([...pageNumbers].sort((a, b) => a - b))
+  })
+
+  test('a node that was never split degrades to just the target itself', () => {
+    const doc = definePage({ size: 'A4', margins: A4_MARGINS }, group({ direction: 'column', interactive: true }, [image({ src: 'a.png', width: 100, height: 50 })]))
+    const result = paginate(doc)
+    const registry = buildHitRegistry(result)
+    const target = hitTest(registry, 1, A4_MARGINS.left + 1, A4_MARGINS.top + 1)
+    expect(target).not.toBeNull()
+    expect(findFragments(registry, target!)).toEqual([target])
   })
 })

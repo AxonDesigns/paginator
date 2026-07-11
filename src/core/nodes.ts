@@ -1,5 +1,7 @@
 // Public document-tree node types and builder functions.
 
+import { DEFAULT_FONT_FAMILY } from '../render/font-registry.ts'
+
 export type Margins = { top: number; right: number; bottom: number; left: number }
 
 export type PageSize = 'A4' | 'Letter' | { width: number; height: number }
@@ -178,6 +180,13 @@ export type Interactive = {
    * always returns an array — one entry per matching page/fragment, in page order.
    */
   id?: string
+  /**
+   * Internal — auto-assigned by splitNode() in core/behavior.ts when this node is split across a
+   * page boundary. Not meant to be set by callers (same double-underscore convention as
+   * TextNode.__resumeCursor). Powers findFragments()'s automatic, id-free fragment lookup — the
+   * counterpart to the caller-assigned `id` + `findById()` above.
+   */
+  __splitGroupId?: string
 }
 
 type GroupCommon = Interactive & SelfAlignable & {
@@ -1430,7 +1439,7 @@ export function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode {
 }
 
 function defaultGroupHeader(value: string): Node {
-  return text({ content: value, fontFamily: 'Arial, sans-serif', fontSize: 12, fontWeight: 700, lineHeight: 15 })
+  return text({ content: value, fontFamily: DEFAULT_FONT_FAMILY, fontSize: 12, fontWeight: 700, lineHeight: 15 })
 }
 
 // Stable "global regroup by value": every row appends to its value's bucket regardless of its

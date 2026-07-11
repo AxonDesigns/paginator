@@ -14,6 +14,7 @@ function sameTarget(a, b) {
 }
 export function attachInteractions(result, host, options = {}) {
     const dragThreshold = options.dragThreshold ?? 4;
+    const getZoom = options.zoom ?? (() => 1);
     const registry = buildHitRegistry(result);
     const root = host.shadowRoot;
     if (root === null) {
@@ -41,7 +42,8 @@ export function attachInteractions(result, host, options = {}) {
         for (const [pageNumber, el] of pageElements) {
             const rect = el.getBoundingClientRect();
             if (clientX >= rect.left && clientX < rect.right && clientY >= rect.top && clientY < rect.bottom) {
-                return { pageNumber, x: clientX - rect.left, y: clientY - rect.top, rect };
+                const zoom = getZoom();
+                return { pageNumber, x: (clientX - rect.left) / zoom, y: (clientY - rect.top) / zoom, rect };
             }
         }
         return null;
@@ -102,8 +104,10 @@ export function attachInteractions(result, host, options = {}) {
             });
         }
         // Anchored to the START page's rect for the whole gesture, so straying across a page boundary
-        // mid-drag doesn't cause a coordinate-space discontinuity.
-        const current = { x: e.clientX - dragCandidate.pageRect.left, y: e.clientY - dragCandidate.pageRect.top };
+        // mid-drag doesn't cause a coordinate-space discontinuity. Divided by the current zoom, same as
+        // resolvePagePos, to stay in the same page-content px space as startPagePos.
+        const zoom = getZoom();
+        const current = { x: (e.clientX - dragCandidate.pageRect.left) / zoom, y: (e.clientY - dragCandidate.pageRect.top) / zoom };
         const delta = { dx: current.x - dragCandidate.startPagePos.x, dy: current.y - dragCandidate.startPagePos.y };
         // Live overDropTarget: resolved fresh at the CURRENT pointer position/page (may differ from
         // where the drag started), filtered by dragType the same way dropTarget is at release.
@@ -115,7 +119,8 @@ export function attachInteractions(result, host, options = {}) {
         if (dragCandidate === null || dragCandidate.pointerId !== e.pointerId)
             return;
         if (dragActive) {
-            const current = { x: e.clientX - dragCandidate.pageRect.left, y: e.clientY - dragCandidate.pageRect.top };
+            const zoom = getZoom();
+            const current = { x: (e.clientX - dragCandidate.pageRect.left) / zoom, y: (e.clientY - dragCandidate.pageRect.top) / zoom };
             const delta = { dx: current.x - dragCandidate.startPagePos.x, dy: current.y - dragCandidate.startPagePos.y };
             emit('dragend', { type: 'dragend', target: dragCandidate.target, start: dragCandidate.startPagePos, current, delta, cancelled, sourceEvent: e });
             if (!cancelled) {

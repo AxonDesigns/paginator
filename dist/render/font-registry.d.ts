@@ -28,3 +28,11 @@ export declare function registerFont(registry: FontRegistry, options: {
 /** Resolves a TextNode's `fontFamily` (a full CSS stack) + weight/style against `registry`, trying each family in order. */
 export declare function lookupFont(registry: FontRegistry, fontFamily: string, weight: number | string | undefined, style: FontStyle | undefined): RegisteredFont | undefined;
 export declare function listRegisteredFonts(registry: FontRegistry): RegisteredFont[];
+export declare const DEFAULT_FONT_FAMILY = "Helvetica";
+/**
+ * Resolves a `fontFamily` CSS stack against pdfkit's 14 standard fonts (Helvetica/Times/Courier,
+ * each with bold/italic/boldItalic variants, plus Symbol/ZapfDingbats with none) — trying each
+ * comma-separated name in turn, same order `lookupFont()` uses. Returns the exact pdfkit font name
+ * to pass to `doc.font()`, or `undefined` if nothing in the stack names a standard font.
+ */
+export declare function resolveStandardFontName(fontFamily: string, weight: number, style: FontStyle): string | undefined;

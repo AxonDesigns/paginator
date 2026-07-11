@@ -21,6 +21,14 @@ export declare function buildHitRegistry(result: PaginatedResult): HitRegistry;
  */
 export declare function findById(registry: HitRegistry, id: string): InteractionTarget[];
 /**
+ * Given an already-resolved target, returns every fragment of that same authored node across
+ * every page it was split onto — the automatic, id-free counterpart to findById(): no caller-
+ * assigned `id` required, since splitNode() (core/behavior.ts) already stamps every fragment of a
+ * split with a shared internal lineage id. A node that was never split has no such id, so this
+ * degrades to `[target]` — always safe to call unconditionally, e.g. on every `hover` event.
+ */
+export declare function findFragments(registry: HitRegistry, target: InteractionTarget): InteractionTarget[];
+/**
  * Finds the deepest geometric match at (x, y) on the given page, then walks back up toward the
  * root looking for the nearest node (self-or-ancestor) with `interactive: true`. Returns null if
  * nothing at that point is interactive, or if the point isn't over any rendered content at all.

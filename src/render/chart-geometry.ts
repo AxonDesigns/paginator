@@ -14,8 +14,9 @@
 // always use an ink role; only swatches/marks/fills carry the series hue).
 
 import type { ChartCandle, ChartGanttGroupStyle, ChartGanttTask, ChartNode, ChartRingSlice, ChartSeries, ChartText, ChartTextRun, ChartViewConfig } from '../core/nodes.ts'
+import { DEFAULT_FONT_FAMILY } from './font-registry.ts'
 
-export const CHART_FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+export const CHART_FONT_FAMILY = DEFAULT_FONT_FAMILY
 
 // dataviz skill reference palette, categorical theme, light mode — fixed order, never cycled per
 // the skill's "assign categorical hues in fixed order" rule; wraps via modulo only past 8 series/

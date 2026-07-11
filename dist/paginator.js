@@ -12,12 +12,13 @@
 // @chenglou/pretext — that library's own global, with no instance-scoped equivalent to wrap).
 import { paginate as corePaginate } from "./core/paginate.js";
 import { mount as coreMount, printDocument as corePrintDocument, renderPreview as coreRenderPreview } from "./render/shadow-dom.js";
+import { createZoomController as coreCreateZoomController } from "./render/zoom.js";
 import { generatePdf as coreGeneratePdf } from "./render/pdf-render.js";
 import { generateDocx as coreGenerateDocx } from "./export/docx-export.js";
 import { generateXlsx as coreGenerateXlsx } from "./export/xlsx-export.js";
 import { listRegisteredFonts as coreListRegisteredFonts, registerFont as coreRegisterFont } from "./render/font-registry.js";
 import { attachInteractions as coreAttachInteractions } from "./interaction/attach-interactions.js";
-import { buildHitRegistry as coreBuildHitRegistry, findById as coreFindById, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList, } from "./interaction/hit-registry.js";
+import { buildHitRegistry as coreBuildHitRegistry, findById as coreFindById, findFragments as coreFindFragments, hitTest as coreHitTest, hitTestDroppable as coreHitTestDroppable, toTypeList as coreToTypeList, } from "./interaction/hit-registry.js";
 import { openPdfInNewTab as coreOpenPdfInNewTab, showPdfDialog as coreShowPdfDialog } from "./render/pdf-view.js";
 export class Paginator {
     #fonts = new Map();
@@ -39,6 +40,9 @@ export class Paginator {
     printDocument(host) {
         corePrintDocument(host);
     }
+    createZoomController(host, options = {}) {
+        return coreCreateZoomController(host, options);
+    }
     attachInteractions(result, host, options = {}) {
         return coreAttachInteractions(result, host, options);
     }
@@ -53,6 +57,9 @@ export class Paginator {
     }
     findById(registry, id) {
         return coreFindById(registry, id);
+    }
+    findFragments(registry, target) {
+        return coreFindFragments(registry, target);
     }
     toTypeList(value) {
         return coreToTypeList(value);

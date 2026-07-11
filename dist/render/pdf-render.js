@@ -8,8 +8,9 @@
 // every line break by measuring against whatever font FILE the browser's canvas resolved for a
 // TextNode's `fontFamily` string (see measure-text.ts / font-registry.ts's header comment). For the
 // PDF's embedded vector glyphs to reproduce identical line breaks, it must embed that literal file —
-// see font-registry.ts / pdf-fonts.ts. When a family/weight/style was never registered, text nodes
-// fall back to a Helvetica standard font (warn once, not throw) rather than blocking generation.
+// see font-registry.ts / pdf-fonts.ts. A family/weight/style that was never registered can only still
+// draw if it names one of pdfkit's Standard-14 fonts (no file needed); anything else throws rather
+// than blocking generation with a silently substituted font.
 //
 // Coordinate system: pdfkit's page space is ALREADY top-left origin, y-down (it applies a
 // `1 0 0 -1 0 pageHeight` CTM flip once per page internally, confirmed by inspecting its output) —
@@ -30,8 +31,8 @@ import PDFDocument from 'pdfkit/js/pdfkit.standalone.js';
 import { drawPdfNode } from "../core/behavior.js";
 import { resolveWatermarkInstances } from "../core/watermark-layout.js";
 import { measureTextWidthPx } from "./text-measure.js";
-import { lookupFont, normalizeFontWeight } from "./font-registry.js";
-import { ensureRegisteredFont, measureFontMetricsPx, pickFallbackFont, warnMissingFontOnce } from "./pdf-fonts.js";
+import { DEFAULT_FONT_FAMILY, normalizeFontWeight } from "./font-registry.js";
+import { measureFontMetricsPx, resolveFontOrThrow } from "./pdf-fonts.js";
 export const PX_TO_PT = 0.75; // 96dpi px -> 72dpi pt (96/72). A4 794x1123px * 0.75 = 595.5x842.25pt, matching the standard PDF A4 size.
 export function pxToPt(n) {
     return n * PX_TO_PT;
@@ -213,21 +214,12 @@ export async function embedImage(ctx, node, boxWidthPx, boxHeightPx) {
 function watermarkFontCss(watermark) {
     const style = watermark.fontStyle === 'italic' ? 'italic ' : '';
     const weight = watermark.fontWeight ?? 700;
-    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'Helvetica'}`;
+    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`;
 }
-// Falls back straight to a Helvetica standard font with no warning when `fontFamily` is omitted —
-// unlike resolveTextFont()/resolveChartFontName(), there was never a registered family this omission
-// could be missing relative to, so warnMissingFontOnce() would be pure noise here.
 function resolveWatermarkFontName(ctx, watermark) {
     const weight = normalizeFontWeight(watermark.fontWeight ?? 700);
     const style = watermark.fontStyle === 'italic' ? 'italic' : 'normal';
-    if (watermark.fontFamily === undefined)
-        return pickFallbackFont(ctx, weight, style);
-    const registered = lookupFont(ctx.fonts, watermark.fontFamily, weight, style);
-    if (registered !== undefined)
-        return ensureRegisteredFont(ctx, registered);
-    warnMissingFontOnce(ctx, watermark.fontFamily, weight, style);
-    return pickFallbackFont(ctx, weight, style);
+    return resolveFontOrThrow(ctx, watermark.fontFamily ?? DEFAULT_FONT_FAMILY, weight, style);
 }
 // Rasterizes watermark text to a transparent PNG (same RASTER_SCALE/canvas approach as
 // rasterizeImageToPng above) so it embeds as an ordinary image rather than real pdfkit glyphs —
@@ -375,8 +367,6 @@ export async function generatePdf(result, fonts, metadata) {
         fonts,
         registeredFontNames: new Map(),
         imageEmbedCache: new Map(),
-        fallbackFonts: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
-        warnedMissingFonts: new Set(),
     };
     const { margins, headerHeight, headerGap, footerHeight } = result;
     const headerOriginX = margins.left;

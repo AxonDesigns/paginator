@@ -22,6 +22,7 @@ import { renderNodeDom } from '../core/behavior.ts'
 import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { BASE_ELEMENT_STYLE } from './reset.ts'
 import { measureTextWidthPx } from './text-measure.ts'
+import { DEFAULT_FONT_FAMILY } from './font-registry.ts'
 
 export function styledDiv(style: Partial<CSSStyleDeclaration>): HTMLDivElement {
   const el = document.createElement('div')
@@ -37,7 +38,7 @@ export function styledDiv(style: Partial<CSSStyleDeclaration>): HTMLDivElement {
 function watermarkFontCss(watermark: Extract<Watermark, { kind: 'text' }>): string {
   const style = watermark.fontStyle === 'italic' ? 'italic ' : ''
   const weight = watermark.fontWeight ?? 700
-  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'sans-serif'}`
+  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`
 }
 
 function renderWatermark(watermark: Watermark, pageWidth: number, pageHeight: number, container: HTMLElement): void {

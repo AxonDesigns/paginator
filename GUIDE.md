@@ -182,7 +182,7 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | Method | Signature | Notes |
 |---|---|---|
 | `registerFont` | `(options: { family: string; url: string; weight?: number \| string; style?: 'normal' \| 'italic' }) => Promise<void>` | Fetches a font file, registers it on THIS instance's own registry for on-screen use AND later PDF embedding. Call before `paginate()` |
-| `generatePdf` | `(result: PaginatedResult, metadata?: PdfMetadata) => Promise<Uint8Array>` | Real vector PDF from the same data `mount()` renders, embedding fonts from this instance's own registry. Never throws on a missing font — warns once and falls back to Helvetica |
+| `generatePdf` | `(result: PaginatedResult, metadata?: PdfMetadata) => Promise<Uint8Array>` | Real vector PDF from the same data `mount()` renders, embedding fonts from this instance's own registry. Throws if a `fontFamily`/weight/style was neither registered nor one of pdfkit's Standard-14 fonts (Helvetica/Times/Courier/Symbol/ZapfDingbats — see "PDF export" below) |
 | `openPdfInNewTab` | `(bytes: Uint8Array) => void` | Opens PDF bytes in a new browser tab via an object URL |
 | `showPdfDialog` | `(bytes: Uint8Array, options?: { title?: string }) => { close(): void }` | Shows a modal `<dialog>` with an `<iframe>` displaying the PDF |
 | `listRegisteredFonts` | `() => RegisteredFont[]` | Inspects what's currently registered on this instance |
@@ -201,7 +201,9 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | `hitTest` | `(registry, pageNumber, x, y) => InteractionTarget \| null` | Resolves via `interactive: true`, bubble-up |
 | `hitTestDroppable` | `(registry, pageNumber, x, y, dragTypes?: string[]) => InteractionTarget \| null` | Resolves via `droppable: true` + `accepts` filter, bubble-up |
 | `findById` | `(registry: HitRegistry, id: string) => InteractionTarget[]` | Identity lookup, not geometric — one entry per matching page/fragment, in page order |
+| `findFragments` | `(registry: HitRegistry, target: InteractionTarget) => InteractionTarget[]` | Automatic, id-free counterpart to `findById` — every fragment of `target`'s node across every page it was split onto; `[target]` if it was never split |
 | `toTypeList` | `(value: string \| string[] \| undefined) => string[]` | Normalizes `dragType`/`accepts` shorthand |
+| `createZoomController` | `(host: HTMLElement, options?: ZoomOptions) => ZoomController` | Headless zoom primitive: applies an animated CSS `transform: scale()` to `host` and returns `getZoom`/`setZoom`/`zoomIn`/`zoomOut`/`reset` — no buttons/UI. Pass `{ zoom: controller.getZoom }` to `attachInteractions` so hit-testing stays aligned at any zoom level; `host` should be the same element passed to `mount()` |
 
 None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
 write instance state — they're grouped onto `Paginator` for one consistent object-oriented surface,
@@ -247,9 +249,9 @@ node tree).
 | `tile` | `boolean?` | Repeat in a grid across the whole page instead of a single centered instance. Default `false` |
 | `tileGapX` / `tileGapY` | `number?` | px gap between tiled repeats. Only meaningful when `tile: true` |
 
-Text watermark (`kind: 'text'`) additionally: `text: string`, `fontFamily?` (falls back to a
-built-in bold Helvetica/sans-serif with no `registerFont()` warning when omitted — no family was
-ever requested), `fontWeight?`, `fontStyle?`, `fontSize?` (default `72`), `color?` (default
+Text watermark (`kind: 'text'`) additionally: `text: string`, `fontFamily?` (defaults to Helvetica,
+pdfkit's built-in Standard-14 font, when omitted — any OTHER family must be `registerFont()`-ed or
+`generatePdf()` throws), `fontWeight?`, `fontStyle?`, `fontSize?` (default `72`), `color?` (default
 `#000000`), `selectable?: boolean` (default `false`: `generatePdf()` rasterizes the text to a
 transparent PNG and draws it as an image, so it can't be selected/copied out of the PDF — pdfkit's
 `.text()` otherwise embeds real, selectable/searchable glyphs like any other text in the document,
@@ -457,7 +459,7 @@ legend band that already varies with entry count.
 | `chartKind` | `'categorical' \| 'radial' \| 'scatter' \| 'gantt' \| 'radar' \| 'candlestick' \| 'treemap'` | Discriminant |
 | `width`, `height`, `aspectRatio` | `number?` | Same rule as `ImageNode`: needs `height` or `aspectRatio` |
 | `title` | `ChartText \| { text: ChartText; fontSize?; color? }` | Optional, centered above the chart, word-wrapped to fit — see "Rich chart text" above |
-| `fontFamily` | `string?` | Applies to every text role. Default a `system-ui` stack. On the PDF renderer, resolves through the SAME font registry `text()` nodes use (`registerFont()`) — an unregistered family falls back to Helvetica with the same one-time `console.warn` a `TextNode` gets |
+| `fontFamily` | `string?` | Applies to every text role. Default Helvetica, pdfkit's built-in Standard-14 font. On the PDF renderer, resolves through the SAME font registry `text()` nodes use (`registerFont()`) — an unregistered, non-Standard-14 family throws, same as a `TextNode` |
 | `legend` | `{ show?; position?: 'right'\|'bottom'; fontSize?; color? }?` | Default: on for `radial` and for any series-based kind with more than one series; off for `gantt`/`treemap` (nothing meaningful to show — Gantt's color is per-task, a treemap labels every rectangle inline) and for a single series. `fontSize` (px, default 11) sizes legend entry labels. `color` overrides the default secondary-ink legend text color |
 | `colors` | `string[]?` | Categorical palette override, cycled by index; falls back to the built-in default palette |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
@@ -1009,14 +1011,19 @@ instance's `generatePdf()` output being corrupted by the other's later `register
 "Multiple `Paginator` instances" above for the full picture, including the one part of this that's
 still unavoidably page-global (`document.fonts`).
 
-**Missing-font behavior is warn-and-fallback, not throw.** If a `TextNode`'s `fontFamily`/`fontWeight`/
-`fontStyle` was never registered, `generatePdf()` substitutes a Helvetica standard font (by weight/
-style, via pdfkit's Standard-14 name strings — no embedding step needed) and logs one `console.warn`
-per distinct missing family/weight/style (deduped per call) — generation always succeeds. The
-tradeoff: the substitute's glyph widths differ from what pretext actually measured, so that text's
-exact fit/alignment in the PDF can visually drift from the preview, even though the *line breaks
-themselves* were already fixed by pagination and don't change. Register every font actually used for
-guaranteed fidelity.
+**Missing-font behavior is Standard-14-or-throw.** If a `TextNode`'s `fontFamily`/`fontWeight`/
+`fontStyle` was never registered, `generatePdf()` (via `resolveStandardFontName()` in
+`font-registry.ts`) checks whether the requested family names one of pdfkit's 14 standard fonts —
+Helvetica, Times, Courier (each with regular/bold/italic/boldItalic variants), Symbol, or
+ZapfDingbats. Those need no font file at all: pdfkit ships their AFM metrics inline, so every PDF
+viewer already has them and `generatePdf()` can pass the name straight to `doc.font()`. Anything
+else — a family that was neither registered via `registerFont()` nor names a Standard-14 font — makes
+`generatePdf()` throw rather than silently substitute a different font's glyph widths (which would
+otherwise make that text's fit/alignment in the PDF visibly drift from what pretext actually measured
+on screen, even though the *line breaks themselves* were already fixed by pagination). The library's
+own defaults (`DEFAULT_FONT_FAMILY` in `font-registry.ts` — the default `TextNode`/chart/watermark
+family, and the row-group header default) are all Helvetica for exactly this reason: they're always
+drawable with zero setup. Register every non-Standard-14 font actually used for guaranteed fidelity.
 
 **Coordinate system.** `PaginatedResult`'s px values (96dpi, top-left origin, y-down — same as DOM)
 convert to PDF points (72dpi, top-left origin, y-down — pdfkit applies a `1 0 0 -1 0 pageHeight` CTM
@@ -1107,10 +1114,11 @@ included, wrapped in a `save()`/`translate(originPt)`/`scale(PX_TO_PT)`/`restore
 rather than any per-coordinate math — deliberately, since hand-rewriting the numbers inside an SVG path
 string would be one misplaced digit away from corrupting an arc command's `0`/`1` flag fields. Chart
 text (title/axis/legend) DOES go through the same font registry a `TextNode` gets — `resolveChartFontName()`
-in `pdf-fonts.ts` mirrors `resolveTextFont()`, mapping `ChartNode.fontFamily` (default a
-`system-ui` stack) plus a binary bold/regular weight (chart text has no arbitrary numeric weight
-the way body text does) through `lookupFont()`, falling back to Helvetica with the same one-time
-`console.warn` on a miss. `chart-geometry.ts`'s own `estimateTextWidth` heuristic (no real
+in `pdf-fonts.ts` mirrors `resolveTextFont()`, mapping `ChartNode.fontFamily` (default
+`DEFAULT_FONT_FAMILY`, i.e. Helvetica) plus a binary bold/regular weight (chart text has no arbitrary
+numeric weight the way body text does) through `lookupFont()`, falling back to the matching
+Standard-14 name on a miss (or throwing if the family isn't Standard-14 either). `chart-geometry.ts`'s
+own `estimateTextWidth` heuristic (no real
 measurement, by design — see that file's header comment) is unaffected by this; it only ever
 decides internal margins/truncation, never actual glyph rendering, so it never claimed font-exact
 fidelity to begin with and doesn't need to.
@@ -1324,6 +1332,15 @@ registry looking for nodes whose `id` matches, independent of `interactive`/`dro
 things like a table of contents — build the registry once, then look up an authored `id` to find
 which page(s)/box(es) it landed on.
 
+`findFragments(registry, target)` is `findById()`'s automatic sibling, for the common case of "I
+just hovered/clicked one fragment of a node — give me every fragment of that same node." It
+requires no authored `id` at all: `splitNode()` (`core/behavior.ts`) already stamps every fragment
+produced by a split with a shared internal lineage id, independent of the caller-facing `id`, so
+`findFragments()` just resolves that instead. A node that was never split has no such id, so this
+degrades to `[target]` — always safe to call unconditionally, e.g. on every `hover` handler, to
+highlight a split node's fragments across every page it spans instead of just the one under the
+pointer.
+
 ### Events (`InteractionEventMap`, via `controller.on(type, handler)`)
 | Event | Fires when | Key fields beyond `target`/`sourceEvent` |
 |---|---|---|
@@ -1485,9 +1502,12 @@ src/
                                           behavior.ts's drawPdfNode()
     pdf-view.ts                         — openPdfInNewTab(), showPdfDialog(): PDF-bytes-in, browser-
                                            chrome-out, decoupled from generatePdf() itself
+    zoom.ts                             — createZoomController(): headless CSS-transform zoom state
+                                           (getZoom/setZoom/zoomIn/zoomOut/reset), no UI of its own
   interaction/
     types.ts                         — InteractionTarget, all event payload types, InteractionController
-    hit-registry.ts                   — buildHitRegistry(), hitTest(), hitTestDroppable(), findById(), toTypeList()
+    hit-registry.ts                   — buildHitRegistry(), hitTest(), hitTestDroppable(), findById(),
+                                          findFragments(), toTypeList()
     attach-interactions.ts             — attachInteractions(): pointer event state machine (hover/
                                           click/drag/drop, threshold, dragTypes, overDropTarget)
   export/                             — Word/Excel export (see "Word/Excel export" above) —
@@ -1635,9 +1655,10 @@ type, splittable or not — this is the entire point of the registry pattern.
   round-trip that delegates to the browser's own CSS color parser rather than a hand-written
   named-color table or an hsl->rgb converter, same "trust the browser's own engine" approach
   `measureFontMetricsPx()` already uses for font metrics. A string that isn't a valid CSS color at
-  all still falls back to black with a `console.warn`. An unregistered font falls back to a Helvetica standard font
-  (warn, not throw — see "PDF export" above) rather than blocking generation, so a document with
-  unregistered fonts still produces a PDF, just not a font-exact one. Registered fonts ARE subsetted
+  all still falls back to black with a `console.warn`. An unregistered font falls back to the matching
+  Standard-14 name (Helvetica/Times/Courier/Symbol/ZapfDingbats — no file needed) and otherwise throws
+  (see "PDF export" above) rather than silently substituting a font pretext never measured against.
+  Registered fonts ARE subsetted
   (pdfkit always subsets, see "PDF export" above) — no known equivalent of the old pdf-lib-era
   subsetter bug has surfaced. PDF chart bars render with correctly ROUNDED corners — `drawChartPath()`
   feeds `barPath()`'s exact path string (including its `A`/arc corner-rounding commands) to pdfkit's

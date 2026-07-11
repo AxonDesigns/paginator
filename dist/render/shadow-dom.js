@@ -18,6 +18,7 @@ import { renderNodeDom } from "../core/behavior.js";
 import { resolveWatermarkInstances } from "../core/watermark-layout.js";
 import { BASE_ELEMENT_STYLE } from "./reset.js";
 import { measureTextWidthPx } from "./text-measure.js";
+import { DEFAULT_FONT_FAMILY } from "./font-registry.js";
 export function styledDiv(style) {
     const el = document.createElement('div');
     Object.assign(el.style, BASE_ELEMENT_STYLE, style);
@@ -31,7 +32,7 @@ export function styledDiv(style) {
 function watermarkFontCss(watermark) {
     const style = watermark.fontStyle === 'italic' ? 'italic ' : '';
     const weight = watermark.fontWeight ?? 700;
-    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? 'sans-serif'}`;
+    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`;
 }
 function renderWatermark(watermark, pageWidth, pageHeight, container) {
     const opacity = watermark.opacity ?? 0.15;

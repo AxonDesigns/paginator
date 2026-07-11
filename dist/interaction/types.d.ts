@@ -123,4 +123,11 @@ export type InteractionController = {
 export type AttachInteractionsOptions = {
     /** px of client-space pointer movement before a pointerdown-on-a-target promotes to a drag. Default 4. */
     dragThreshold?: number;
+    /**
+     * Live getter for the current CSS scale factor applied to the mounted document (e.g. via
+     * createZoomController's getZoom). Defaults to `() => 1`. getBoundingClientRect() reports
+     * post-transform screen px, so pointer coordinates are divided by this before hit-testing to
+     * recover the unscaled page-content px space every RenderedNode.box is expressed in.
+     */
+    zoom?: () => number;
 };

@@ -114,6 +114,29 @@ export function findById(registry, id) {
         collectMatches(entries, id, matches);
     return matches.map(toTarget);
 }
+function collectSplitFragments(entries, groupId, out) {
+    for (const entry of entries) {
+        if (entry.rendered.node.__splitGroupId === groupId)
+            out.push(entry);
+        collectSplitFragments(entry.children, groupId, out);
+    }
+}
+/**
+ * Given an already-resolved target, returns every fragment of that same authored node across
+ * every page it was split onto — the automatic, id-free counterpart to findById(): no caller-
+ * assigned `id` required, since splitNode() (core/behavior.ts) already stamps every fragment of a
+ * split with a shared internal lineage id. A node that was never split has no such id, so this
+ * degrades to `[target]` — always safe to call unconditionally, e.g. on every `hover` event.
+ */
+export function findFragments(registry, target) {
+    const groupId = target.node.__splitGroupId;
+    if (groupId === undefined)
+        return [target];
+    const matches = [];
+    for (const entries of registry.pages.values())
+        collectSplitFragments(entries, groupId, matches);
+    return matches.map(toTarget);
+}
 /**
  * Finds the deepest geometric match at (x, y) on the given page, then walks back up toward the
  * root looking for the nearest node (self-or-ancestor) with `interactive: true`. Returns null if

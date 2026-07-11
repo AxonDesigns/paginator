@@ -35,8 +35,6 @@ function makeFakePdfContext(fonts: FontRegistry, registerFontCalls: { name: stri
     fonts,
     registeredFontNames: new Map(),
     imageEmbedCache: new Map(),
-    fallbackFonts: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
-    warnedMissingFonts: new Set(),
   }
 }
 
@@ -82,5 +80,30 @@ describe('font registry isolation (two Paginator instances)', () => {
     expect(callsB).toHaveLength(1)
     expect(decode(callsA[0]!.bytes)).toBe('instance-A-bytes')
     expect(decode(callsB[0]!.bytes)).toBe('instance-B-bytes')
+  })
+})
+
+describe('unregistered fontFamily resolution (Standard-14 fallback vs. throw)', () => {
+  test('an unregistered "Helvetica" resolves directly to the matching Standard-14 name, no registerFont() call', () => {
+    const node = text({ content: 'hi', fontFamily: 'Helvetica', fontWeight: 700, fontSize: 12, lineHeight: 14 })
+    const calls: { name: string; bytes: Uint8Array }[] = []
+    const ctx = makeFakePdfContext(new Map(), calls)
+
+    expect(resolveTextFont(ctx, node)).toBe('Helvetica-Bold')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('a stack falling through to an unregistered "Times, serif" resolves to the Times-Italic variant', () => {
+    const node = text({ content: 'hi', fontFamily: 'Times, serif', fontStyle: 'italic', fontSize: 12, lineHeight: 14 })
+    const ctx = makeFakePdfContext(new Map(), [])
+
+    expect(resolveTextFont(ctx, node)).toBe('Times-Italic')
+  })
+
+  test('an unregistered, non-standard fontFamily throws instead of silently substituting a font', () => {
+    const node = text({ content: 'hi', fontFamily: 'Comic Sans MS', fontSize: 12, lineHeight: 14 })
+    const ctx = makeFakePdfContext(new Map(), [])
+
+    expect(() => resolveTextFont(ctx, node)).toThrow(/no font registered for family "Comic Sans MS"/)
   })
 })

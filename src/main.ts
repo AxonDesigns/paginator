@@ -15,7 +15,7 @@ import {
   table,
   text,
 } from './index.ts'
-import type { InteractionTarget, PageDef, PaginatedResult, TableCell, TableColumn, TableRow } from './index.ts'
+import type { InteractionTarget, PageDef, PaginatedResult, TableCell, TableColumn, TableRow, ZoomController } from './index.ts'
 
 // Raw TrueType files in public/fonts/ — see public/fonts/README.md for provenance/license.
 // registerFont() also accepts .woff/.woff2 directly; these are .ttf simply because that's how they
@@ -372,6 +372,14 @@ const interactionIntro = `Interactivity is opt-in per node and off by default �
 Drop zones can also filter by type: the image carries dragType "image" and the "Columns of Text" row only accepts "image", while "JD" carries dragType "avatar" and only the card below accepts "avatar". Drag the image over the card, or "JD" over the "Columns of Text" row, and nothing highlights — the mismatched type is filtered out and the drop resolves to nothing, live as you drag, not just at release. Drag each one over its matching zone instead and it highlights green the moment it's a valid target.`
 
 const cardIntro = `In this card, the outer row is interactive and droppable but its contents are plain — clicking the name or the email bubbles up and resolves to the whole card, since neither of them opted in themselves. The "JD" initials are the one exception: they are ALSO marked interactive and draggable, so clicking or dragging them resolves to that text specifically instead — the more specific match always wins over an interactive ancestor.`
+
+const splitFragmentIntro = `The paragraph below is marked "interactive: true" and is long enough that pagination splits it across several pages. Hover any fragment of it — here or several pages further down — and every fragment highlights at once, not just the one under the pointer: that's findFragments(), which recovers every page a split node landed on with zero authoring effort (no "id" needed), powered by an internal lineage id splitNode() stamps onto each fragment as it splits (src/core/behavior.ts).`
+
+const longSplitParagraph = Array.from(
+  { length: 24 },
+  (_, i) =>
+    `Fragment-highlighting filler sentence ${i + 1}: this run of repeated text exists purely to force this single text node to overflow one page and continue onto the next, so hovering any part of it demonstrates multi-page fragment highlighting.`,
+).join(' ')
 
 const doc = definePage(
   {
@@ -1170,6 +1178,10 @@ const doc = definePage(
         text({ content: 'jane@example.com', fontFamily: BODY_FONT, fontSize: 12, color: '#666666' }),
       ]),
     ]),
+    text({ content: 'Split-Node Fragment Highlighting', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, }),
+    separator({ thickness: 1, color: '#dddddd' }),
+    text({ content: splitFragmentIntro, fontFamily: BODY_FONT, fontSize: 13, }),
+    text({ content: longSplitParagraph, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20, interactive: true }),
   ]),
 )
 
@@ -1177,32 +1189,55 @@ const doc = definePage(
 // without opening devtools) plus console logging (for the full event payloads: node type, box,
 // page number, and — for clicks — the ancestor chain). This is a consumer of the public API only,
 // the same way an editor built on this library would be — nothing here reaches into internals.
-function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: HTMLDivElement): void {
-  const controller = pdfDoc.attachInteractions(result, host)
+function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: HTMLDivElement, zoom: ZoomController): void {
+  const controller = pdfDoc.attachInteractions(result, host, { zoom: zoom.getZoom })
+  const registry = pdfDoc.buildHitRegistry(result)
   const shadowRoot = host.shadowRoot!
 
-  const highlight = document.createElement('div')
-  Object.assign(highlight.style, {
-    position: 'absolute',
-    boxSizing: 'border-box',
-    border: '2px solid #4f7cff',
-    background: 'rgba(79, 124, 255, 0.10)',
-    pointerEvents: 'none',
-    display: 'none',
-    zIndex: '10',
-  })
-
-  function showHighlight(target: InteractionTarget): void {
-    const pageEl = shadowRoot.querySelector<HTMLElement>(`[data-page-number="${target.pageNumber}"]`)
-    if (pageEl === null) return
-    if (highlight.parentElement !== pageEl) pageEl.appendChild(highlight)
-    Object.assign(highlight.style, {
-      display: 'block',
-      left: `${target.box.x - 5}px`,
-      top: `${target.box.y - 5}px`,
-      width: `${target.box.width + 10}px`,
-      height: `${target.box.height + 10}px`,
+  function makeHighlightEl(): HTMLElement {
+    const el = document.createElement('div')
+    Object.assign(el.style, {
+      position: 'absolute',
+      boxSizing: 'border-box',
+      border: '2px solid #4f7cff',
+      background: 'rgba(79, 124, 255, 0.10)',
+      pointerEvents: 'none',
+      display: 'none',
+      zIndex: '10',
     })
+    return el
+  }
+
+  // A pool rather than one fixed div: a hovered node that was split across pages resolves (via
+  // findFragments()) to one InteractionTarget per fragment, each needing its own box on its own
+  // page — reused/grown across hovers instead of recreated every time.
+  const highlightPool: HTMLElement[] = []
+
+  // Highlights EVERY fragment of the hovered node, not just the one under the pointer — findFragments()
+  // is the automatic, id-free counterpart to findById(): degrades to just `target` for a node that
+  // was never split, so this is safe to call unconditionally on every hover.
+  function showHighlights(targets: InteractionTarget[]): void {
+    while (highlightPool.length < targets.length) highlightPool.push(makeHighlightEl())
+    highlightPool.forEach((el, i) => {
+      const target = targets[i]
+      const pageEl = target === undefined ? null : shadowRoot.querySelector<HTMLElement>(`[data-page-number="${target.pageNumber}"]`)
+      if (target === undefined || pageEl === null) {
+        el.style.display = 'none'
+        return
+      }
+      if (el.parentElement !== pageEl) pageEl.appendChild(el)
+      Object.assign(el.style, {
+        display: 'block',
+        left: `${target.box.x - 5}px`,
+        top: `${target.box.y - 5}px`,
+        width: `${target.box.width + 10}px`,
+        height: `${target.box.height + 10}px`,
+      })
+    })
+  }
+
+  function hideHighlights(): void {
+    for (const el of highlightPool) el.style.display = 'none'
   }
 
   // Separate from `highlight` (which tracks hover) so live valid-drop-zone feedback during a drag
@@ -1236,11 +1271,11 @@ function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: 
   }
 
   controller.on('hover', e => {
-    showHighlight(e.target)
+    showHighlights(pdfDoc.findFragments(registry, e.target))
     console.log('[hover]', e.target.node.type, e.target.box, `page ${e.target.pageNumber}`)
   })
   controller.on('hoverend', e => {
-    highlight.style.display = 'none'
+    hideHighlights()
     console.log('[hoverend]', e.target.node.type)
   })
   controller.on('click', e => {
@@ -1276,7 +1311,13 @@ function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: 
       position: 'fixed',
       zIndex: '1000',
       opacity: '0.85',
-      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+      // `boxShadow` is a non-starter here: it always follows the element's own rectangular box,
+      // but renderPreview()'s wrapper has no border-radius of its own (it can't — it's generic
+      // across every node type, not just a rounded container/table), so a plain box-shadow would
+      // cast a square-cornered halo poking out past a rounded node's actual clipped corners.
+      // `drop-shadow` instead follows the alpha shape of what's actually painted inside — the same
+      // rounded, clipped shape the borderRadius/overflow:hidden wrapper already produces.
+      filter: 'drop-shadow(0 4px 16px rgba(0, 0, 0, 0.3))',
       pointerEvents: 'none',
     })
     document.body.appendChild(preview)
@@ -1311,11 +1352,12 @@ function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult, host: 
     console.log('[drop]', e.target.node.type, '->', e.dropTarget === null ? 'nothing' : e.dropTarget.node.type)
     if (e.dropTarget === null) return
     // Brief green flash on the drop target so a drop landing somewhere is visible without the console.
-    const originalBorder = highlight.style.border
-    showHighlight(e.dropTarget)
-    highlight.style.border = '2px solid #2a9d5c'
+    showHighlights([e.dropTarget])
+    const el = highlightPool[0]!
+    const originalBorder = el.style.border
+    el.style.border = '2px solid #2a9d5c'
     setTimeout(() => {
-      highlight.style.border = originalBorder
+      el.style.border = originalBorder
     }, 250)
   })
 }
@@ -1357,6 +1399,56 @@ function demoButton(toolbar: HTMLDivElement, label: string): HTMLButtonElement {
   })
   toolbar.appendChild(button)
   return button
+}
+
+// Demo-only UI on top of the library's headless createZoomController(): the library owns zoom
+// state/clamping/animation and (via attachInteractions' `zoom` option, wired in
+// setupInteractionDemo above) keeping hit-testing aligned at any zoom level; buttons, the percentage
+// label, and disabling at the bounds are all just this demo's own choices, not library concerns.
+function setupZoomButtons(toolbar: HTMLDivElement, zoom: ZoomController): void {
+  const outButton = demoButton(toolbar, '−')
+  const label = document.createElement('span')
+  Object.assign(label.style, {
+    display: 'flex',
+    alignItems: 'center',
+    fontFamily: UI_FONT,
+    fontSize: '14px',
+    fontWeight: '700',
+    color: '#333333',
+    minWidth: '44px',
+    justifyContent: 'center',
+  })
+  toolbar.appendChild(label)
+  const inButton = demoButton(toolbar, '+')
+  const resetButton = demoButton(toolbar, 'Reset')
+
+  function refresh(): void {
+    const value = zoom.getZoom()
+    label.textContent = `${Math.round(value * 100)}%`
+    outButton.disabled = value <= 0.5
+    inButton.disabled = value >= 2.5
+  }
+
+  // getZoom() updates every animation frame while a zoom change is in flight (see zoom.ts) rather
+  // than jumping to the target immediately, so a single refresh() right after zoomIn()/zoomOut()/
+  // reset() would just show the pre-animation value and then never update again. Polling every frame
+  // until the live value reaches the target — itself the return value of those calls — keeps the
+  // label animating in step with the zoom instead of lagging a click behind.
+  let pollFrame: number | null = null
+  function trackTo(target: number): void {
+    if (pollFrame !== null) cancelAnimationFrame(pollFrame)
+    const tick = (): void => {
+      refresh()
+      pollFrame = Math.abs(zoom.getZoom() - target) > 0.001 ? requestAnimationFrame(tick) : null
+    }
+    tick()
+  }
+
+  outButton.addEventListener('click', () => trackTo(zoom.zoomOut()))
+  inButton.addEventListener('click', () => trackTo(zoom.zoomIn()))
+  resetButton.addEventListener('click', () => trackTo(zoom.reset()))
+
+  refresh()
 }
 
 function setupPrintButton(toolbar: HTMLDivElement, pdfDoc: Paginator, host: HTMLDivElement): void {
@@ -1480,8 +1572,10 @@ async function main(): Promise<void> {
   const app = document.querySelector<HTMLDivElement>('#app')
   if (app === null) throw new Error('#app not found')
   pdfDoc.mount(result, app)
-  setupInteractionDemo(pdfDoc, result, app)
+  const zoom = pdfDoc.createZoomController(app)
+  setupInteractionDemo(pdfDoc, result, app, zoom)
   const toolbar = createToolbar()
+  setupZoomButtons(toolbar, zoom)
   setupPrintButton(toolbar, pdfDoc, app)
   setupPdfButtons(toolbar, pdfDoc, result)
   setupExportButtons(toolbar, pdfDoc, doc)

@@ -14,6 +14,7 @@
 import type { PageDef } from './core/nodes.ts'
 import { paginate as corePaginate, type PaginatedResult } from './core/paginate.ts'
 import { mount as coreMount, printDocument as corePrintDocument, renderPreview as coreRenderPreview } from './render/shadow-dom.ts'
+import { createZoomController as coreCreateZoomController, type ZoomController, type ZoomOptions } from './render/zoom.ts'
 import type { RenderedNode } from './core/geometry.ts'
 import { generatePdf as coreGeneratePdf, type PdfMetadata } from './render/pdf-render.ts'
 import { generateDocx as coreGenerateDocx, type DocxMetadata } from './export/docx-export.ts'
@@ -23,6 +24,7 @@ import { attachInteractions as coreAttachInteractions } from './interaction/atta
 import {
   buildHitRegistry as coreBuildHitRegistry,
   findById as coreFindById,
+  findFragments as coreFindFragments,
   hitTest as coreHitTest,
   hitTestDroppable as coreHitTestDroppable,
   toTypeList as coreToTypeList,
@@ -58,6 +60,10 @@ export class Paginator {
     corePrintDocument(host)
   }
 
+  createZoomController(host: HTMLElement, options: ZoomOptions = {}): ZoomController {
+    return coreCreateZoomController(host, options)
+  }
+
   attachInteractions(result: PaginatedResult, host: HTMLElement, options: AttachInteractionsOptions = {}): InteractionController {
     return coreAttachInteractions(result, host, options)
   }
@@ -76,6 +82,10 @@ export class Paginator {
 
   findById(registry: HitRegistry, id: string): InteractionTarget[] {
     return coreFindById(registry, id)
+  }
+
+  findFragments(registry: HitRegistry, target: InteractionTarget): InteractionTarget[] {
+    return coreFindFragments(registry, target)
   }
 
   toTypeList(value: string | string[] | undefined): string[] {

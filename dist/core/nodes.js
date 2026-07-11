@@ -1,4 +1,5 @@
 // Public document-tree node types and builder functions.
+import { DEFAULT_FONT_FAMILY } from "../render/font-registry.js";
 // Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
 // new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 export function definePage(config, body) {
@@ -322,7 +323,7 @@ export function chart(config) {
     return { type: 'chart', ...config };
 }
 function defaultGroupHeader(value) {
-    return text({ content: value, fontFamily: 'Arial, sans-serif', fontSize: 12, fontWeight: 700, lineHeight: 15 });
+    return text({ content: value, fontFamily: DEFAULT_FONT_FAMILY, fontSize: 12, fontWeight: 700, lineHeight: 15 });
 }
 // Stable "global regroup by value": every row appends to its value's bucket regardless of its
 // position in `rows` (not just adjacent runs), while bucket ORDER follows each distinct value's
@@ -413,6 +414,8 @@ function applyGroupingRows(rows, groups, repeatGroupHeadersDefault, columnCount)
                     cells: resolved.cells,
                     background: groupConfig.background,
                     repeat: groupConfig.repeat ?? repeatGroupHeadersDefault,
+                    topBorder: groupConfig.headerBorder?.top,
+                    bottomBorder: groupConfig.headerBorder?.bottom,
                 });
             }
             else {
@@ -422,6 +425,8 @@ function applyGroupingRows(rows, groups, repeatGroupHeadersDefault, columnCount)
                     content: headerResult,
                     background: groupConfig.background,
                     repeat: groupConfig.repeat ?? repeatGroupHeadersDefault,
+                    topBorder: groupConfig.headerBorder?.top,
+                    bottomBorder: groupConfig.headerBorder?.bottom,
                 });
             }
             out.push(...recurse(bucket.rows, level + 1));
@@ -432,11 +437,15 @@ function applyGroupingRows(rows, groups, repeatGroupHeadersDefault, columnCount)
                 // implicit-flow tiling `resolveCellSpans()` already gives body rows; content-presence and
                 // occupancy validation come along for free from that one call. `rowSpan` on a totals cell
                 // has nothing to span into (it's always exactly one row) and falls out as a natural
-                // "extends past the last row of the table" throw from the same call.
+                // "extends past the last row of the table" throw from the same call. `topBorder`/
+                // `bottomBorder` are passed on the INPUT row (not bolted onto the output afterward) —
+                // resolveCellSpans() spreads `...row` first before overwriting `kind`/`cells`/
+                // `__atomicWithNext`, so they survive untouched, exactly like `groupValues` already does
+                // when spans and grouping coexist (see that function's own header comment).
                 let totalsRow;
                 try {
                     ;
-                    [totalsRow] = resolveCellSpans([{ cells: totalsCells }], columnCount);
+                    [totalsRow] = resolveCellSpans([{ cells: totalsCells, topBorder: groupConfig.totalsBorder?.top, bottomBorder: groupConfig.totalsBorder?.bottom }], columnCount);
                 }
                 catch (e) {
                     throw new Error(`[paginator] table() group "${bucket.value}" (level ${level})'s totals(): ${e.message}`);
@@ -528,6 +537,29 @@ export function rowGroup(groupValues, rows) {
 export function table(config) {
     const hasGroups = (config.groups?.length ?? 0) > 0;
     const hasStripe = config.stripe !== undefined;
+    if (config.border?.outer?.borderRadius !== undefined) {
+        const resolvedOuterMode = config.border.outer.mode ?? 'all';
+        if (resolvedOuterMode !== 'all') {
+            throw new Error(`[paginator] table() border.outer.borderRadius needs border.outer.mode "all" (got "${resolvedOuterMode}") — no rectangular outer perimeter exists to round otherwise`);
+        }
+        if (config.border.outer.borderRadius < 0) {
+            throw new Error('[paginator] table() border.outer.borderRadius cannot be negative');
+        }
+    }
+    if ((config.border?.inner?.thickness ?? 0) < 0) {
+        throw new Error('[paginator] table() border.inner.thickness cannot be negative');
+    }
+    if ((config.border?.outer?.thickness ?? 0) < 0) {
+        throw new Error('[paginator] table() border.outer.thickness cannot be negative');
+    }
+    if (typeof config.border?.headerSeparator === 'object' && (config.border.headerSeparator.thickness ?? 0) < 0) {
+        throw new Error('[paginator] table() border.headerSeparator.thickness cannot be negative');
+    }
+    config.groups?.forEach((g, level) => {
+        if (g.totalsBorder !== undefined && g.totals === undefined) {
+            throw new Error(`[paginator] table() groups[${level}].totalsBorder requires groups[${level}].totals to be set — there's no totals row to attach it to`);
+        }
+    });
     const hasAnySpan = config.rows.some(row => row.kind !== 'header' && row.cells.some(c => (c.colSpan ?? 1) !== 1 || (c.rowSpan ?? 1) !== 1));
     if (hasAnySpan && config.rows.some(r => r.kind === 'header')) {
         throw new Error('[paginator] table() cannot combine colSpan/rowSpan with a manually-authored `kind: "header"` row in the same table.');

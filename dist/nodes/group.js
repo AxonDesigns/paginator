@@ -31,26 +31,8 @@ function layoutGroupNode(node, width) {
     const children = result.children.map(c => layoutResolvedChild(c.node, c.box, node.direction === 'row' ? 'row' : 'column'));
     return { type: 'group', box: { x: 0, y: 0, width, height: result.contentHeight }, node, children };
 }
-// --- Row main-axis sizing: fixed (px flex, or 'shrink') vs flexible (numeric weight, default 1) ---
-// Fixed-vs-flex classification only — doesn't need an available width, since 'shrink' is fixed
-// regardless of what its resolved pixel size turns out to be. Kept separate from
-// resolveRowChildSizing() so rowHasFlexChild() (called from shrinkWrapWidth() while resolving some
-// OTHER 'shrink' child's size) never has to thread a width through just to answer "fixed or flex?".
-function rowChildKind(node) {
-    if (node.type === 'separator' || node.type === 'page-break')
-        return 'fixed'; // page-break inert as a row column — see nodes.ts
-    const flex = node.flex;
-    if (flex === 'shrink')
-        return 'fixed';
-    // `width` doubles as this node's row-slot size when `flex` is left unset — the same value that
-    // already governs its size in a column/shrink-wrap context now works unchanged as a row child too,
-    // so `flex: 'Npx'` is only needed to override `width` or to opt into flex-grow weighting.
-    if (flex === undefined && 'width' in node && node.width !== undefined)
-        return 'fixed';
-    if (typeof flex === 'string')
-        return 'fixed';
-    return 'flex';
-}
+// --- Row main-axis sizing: fixed (px flex, 'shrink', or a leaf node's own shrink-by-default) vs
+// flexible (numeric weight; a nested GROUP still defaults to weight 1) ---
 function resolveRowChildSizing(node, availableWidth) {
     if (node.type === 'separator')
         return { kind: 'fixed', size: separatorMainSize(node) };
@@ -63,6 +45,14 @@ function resolveRowChildSizing(node, availableWidth) {
         return { kind: 'fixed', size: node.width };
     if (typeof flex === 'string')
         return { kind: 'fixed', size: Number.parseFloat(flex) };
+    // Unset `flex`: a nested GROUP still defaults to flex-grow weight 1 — it's a layout container,
+    // closer to a block-level flex box that fills its row unless told otherwise. A leaf content node
+    // (text/image/etc.) defaults to 'shrink' instead, hugging its own natural width — matching CSS's
+    // actual flex-item default (flex-grow: 0, content-sized) rather than an equal-share weight, which
+    // can squeeze a child's content below what it needs and force it to wrap. See "Row flex sizing"
+    // in GUIDE.md.
+    if (flex === undefined && node.type !== 'group')
+        return { kind: 'fixed', size: shrinkWrapWidth(node, availableWidth) };
     return { kind: 'flex', weight: flex ?? 1 };
 }
 // Reads the per-child `alignSelf` override (see SelfAlignable in nodes.ts) — Node is a discriminated
@@ -81,18 +71,19 @@ function emptyContinuationFor(node, width) {
     const flex = sizing.kind === 'fixed' ? `${sizing.size}px` : sizing.weight;
     return { type: 'group', direction: 'column', flex, children: [] };
 }
-// Whether a row, considered as a shrink-wrap subtree (nested inside a column/row that isn't
-// stretching it), has a well-defined natural width at all. A row with any flexible (non-fixed)
-// child has no natural size of its own — flexible children always expand to fill whatever width
-// they're offered — so such a row "wants" the full width offered to it, not a content-derived sum.
-function rowHasFlexChild(node) {
-    return node.children.some(c => rowChildKind(c) === 'flex');
-}
-function sumFixedRowWidth(node, width) {
+// A row's own natural/shrink-wrap width — used when this row is nested inside a shrink-wrapping
+// ancestor (a `flex: 'shrink'` row child, or a column child whose cross width hugs its content)
+// rather than being handed a definite box by layoutRow()'s own fixed-then-flex distribution. Sums
+// each child's own natural contribution: fixed children (px/'shrink'/separator/bare `width`) via
+// resolveRowChildSizing()'s existing 'fixed' resolution, and flex children (default weight, or an
+// explicit numeric weight) via THEIR OWN shrink-wrap width — a flex child still has real content
+// with a real natural size; it's only layoutRow()'s two-pass distribution that treats it specially,
+// not its intrinsic size when nothing is actually flex-distributing space into it.
+function sumNaturalRowWidth(node, width) {
     const gap = node.gap ?? 0;
     const sum = node.children.reduce((acc, c) => {
         const sizing = resolveRowChildSizing(c, width);
-        return acc + (sizing.kind === 'fixed' ? sizing.size : 0);
+        return acc + (sizing.kind === 'fixed' ? sizing.size : shrinkWrapWidth(c, width));
     }, 0);
     return Math.min(sum + gap * Math.max(0, node.children.length - 1), width);
 }
@@ -105,12 +96,12 @@ function sumFixedRowWidth(node, width) {
 function shrinkWrapWidth(node, width) {
     if (node.type === 'group') {
         if (node.direction === 'row') {
-            return rowHasFlexChild(node) ? width : sumFixedRowWidth(node, width);
+            return sumNaturalRowWidth(node, width);
         }
         // A nested column that itself stretches its own children also wants the full width offered to
         // it — otherwise its `crossAlign: 'stretch'` would be silently inert whenever a shrink-wrapping
-        // ancestor hands it a content-sized box in the first place, mirroring the rowHasFlexChild check
-        // above for nested rows.
+        // ancestor hands it a content-sized box in the first place, the column counterpart to a nested
+        // row's flex children each contributing their own natural width above.
         if (node.crossAlign === 'stretch')
             return width;
         const max = node.children.reduce((acc, c) => Math.max(acc, childCrossWidthInColumn(c, width)), 0);
@@ -161,13 +152,17 @@ function distributeFreeSpace(freeSpace, gap, n, mainAlign) {
 // --- layoutColumn: main axis vertical, cross axis horizontal (definite width) ---
 export function layoutColumn(node, width, targetHeight) {
     const gap = node.gap ?? 0;
-    const crossAlign = node.crossAlign ?? 'start';
     const mainAlign = node.mainAlign ?? 'start';
     const n = node.children.length;
     const resolved = node.children.map(child => {
-        // A child's own `alignSelf` (see SelfAlignable in nodes.ts) overrides this column's `crossAlign`
-        // for that child alone — every other sibling still uses the column's own setting.
-        const effectiveCrossAlign = childAlignSelf(child) ?? crossAlign;
+        // A child's own `alignSelf` (see SelfAlignable in nodes.ts) always wins; otherwise this
+        // column's own explicit `crossAlign` applies uniformly to every child. Only when NEITHER is
+        // set does the default depend on the child's own type: a nested GROUP defaults to 'stretch' —
+        // it's a layout container, closer to a block-level flex box that fills the width it's given —
+        // while a leaf content node (text/image/etc.) defaults to 'start', hugging its own natural
+        // width the way inline/replaced content does. See "Row flex sizing" in GUIDE.md for the
+        // parallel default on the main axis.
+        const effectiveCrossAlign = childAlignSelf(child) ?? node.crossAlign ?? (child.type === 'group' ? 'stretch' : 'start');
         const resolvedWidth = effectiveCrossAlign === 'stretch' || child.type === 'separator' ? width : childCrossWidthInColumn(child, width);
         const height = measureNodeHeight(child, resolvedWidth);
         return { node: child, width: resolvedWidth, height, crossAlign: effectiveCrossAlign };

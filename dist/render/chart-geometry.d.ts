@@ -1,5 +1,5 @@
 import type { ChartCandle, ChartGanttGroupStyle, ChartGanttTask, ChartNode, ChartRingSlice, ChartSeries, ChartText, ChartViewConfig } from '../core/nodes.js';
-export declare const CHART_FONT_FAMILY = "system-ui, -apple-system, \"Segoe UI\", sans-serif";
+export declare const CHART_FONT_FAMILY = "Helvetica";
 export declare const DEFAULT_CHART_PALETTE: string[];
 export declare const INK_PRIMARY = "#0b0b0b";
 export declare const INK_SECONDARY = "#52514e";

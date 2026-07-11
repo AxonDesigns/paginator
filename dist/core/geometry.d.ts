@@ -33,12 +33,16 @@ export type RenderedTableRow = {
     kind: 'cells';
     box: Box;
     cells: RenderedTableCell[];
+    topBorder?: ContainerBorder;
+    bottomBorder?: ContainerBorder;
 } | {
     kind: 'header';
     box: Box;
     background?: string;
     content?: RenderedNode;
     cells?: RenderedTableCell[];
+    topBorder?: ContainerBorder;
+    bottomBorder?: ContainerBorder;
 };
 export type RenderedNode = {
     type: 'text';

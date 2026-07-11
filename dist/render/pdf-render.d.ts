@@ -14,13 +14,6 @@ export type PdfContext = {
     fonts: FontRegistry;
     registeredFontNames: Map<RegisteredFont, string>;
     imageEmbedCache: Map<string, string>;
-    fallbackFonts: {
-        regular: string;
-        bold: string;
-        italic: string;
-        boldItalic: string;
-    };
-    warnedMissingFonts: Set<string>;
 };
 export declare function toPdfRect(xPx: number, yPx: number, wPx: number, hPx: number): {
     x: number;

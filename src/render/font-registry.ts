@@ -101,3 +101,49 @@ export function lookupFont(
 export function listRegisteredFonts(registry: FontRegistry): RegisteredFont[] {
   return [...registry.values()]
 }
+
+// The library's own fallback/default fontFamily wherever a caller doesn't specify one — a pdfkit
+// Standard-14 name (see below), so it's always drawable with zero embedding regardless of what the
+// caller does or doesn't registerFont().
+export const DEFAULT_FONT_FAMILY = 'Helvetica'
+
+type StandardFontVariants = { regular: string; bold: string; italic: string; boldItalic: string }
+
+// pdfkit bundles these 14 fonts' AFM metrics directly (no font FILE involved), so they need no
+// registerFont() call and can never fail to embed — every PDF viewer already has them installed.
+// Base names below are matched case-insensitively against each entry of the caller's fontFamily
+// stack; only Helvetica/Times/Courier have weight/style variants, Symbol/ZapfDingbats do not.
+const STANDARD_FONT_FAMILIES: Record<string, StandardFontVariants> = {
+  helvetica: { regular: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', boldItalic: 'Helvetica-BoldOblique' },
+  times: { regular: 'Times-Roman', bold: 'Times-Bold', italic: 'Times-Italic', boldItalic: 'Times-BoldItalic' },
+  'times-roman': { regular: 'Times-Roman', bold: 'Times-Bold', italic: 'Times-Italic', boldItalic: 'Times-BoldItalic' },
+  courier: { regular: 'Courier', bold: 'Courier-Bold', italic: 'Courier-Oblique', boldItalic: 'Courier-BoldOblique' },
+}
+
+const STANDARD_FONT_NAMES_NO_VARIANTS: Record<string, string> = {
+  symbol: 'Symbol',
+  zapfdingbats: 'ZapfDingbats',
+}
+
+/**
+ * Resolves a `fontFamily` CSS stack against pdfkit's 14 standard fonts (Helvetica/Times/Courier,
+ * each with bold/italic/boldItalic variants, plus Symbol/ZapfDingbats with none) — trying each
+ * comma-separated name in turn, same order `lookupFont()` uses. Returns the exact pdfkit font name
+ * to pass to `doc.font()`, or `undefined` if nothing in the stack names a standard font.
+ */
+export function resolveStandardFontName(fontFamily: string, weight: number, style: FontStyle): string | undefined {
+  const bold = weight >= 600
+  const italic = style === 'italic'
+  for (const name of parseFontFamilyStack(fontFamily)) {
+    const key = name.toLowerCase()
+    const noVariant = STANDARD_FONT_NAMES_NO_VARIANTS[key]
+    if (noVariant !== undefined) return noVariant
+    const variants = STANDARD_FONT_FAMILIES[key]
+    if (variants === undefined) continue
+    if (bold && italic) return variants.boldItalic
+    if (bold) return variants.bold
+    if (italic) return variants.italic
+    return variants.regular
+  }
+  return undefined
+}
