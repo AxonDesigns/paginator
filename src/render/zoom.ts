@@ -40,6 +40,35 @@
 // `naturalHeight` (a no-op, letting Chromium's native handling do the work); at zoom < 1 it shrinks
 // `host`'s reserved layout footprint to match, and since content still overflows a too-small box, the
 // same native overflow-inclusion mechanism still resolves the total scrollable extent correctly.
+//
+// Both `host.style.transform` and `host.style.height` are pinned to whatever they were at the time
+// mount()'s print-mode CSS (`PRINT_MODE_STYLE`, shadow-dom.ts) last ran — a real, reproducible bug
+// this shipped with and only surfaced once mount()'s own screen-chrome-stripping was fixed: `height`
+// in particular is set from `naturalHeight = host.offsetHeight`, captured once at whatever moment
+// this ran (always in screen mode, since print CSS never applies outside an actual print), which
+// bakes in the screen-only wrapper padding/gap mount() strips for print. Once that stripping made
+// the shadow content genuinely shorter for print, this stale, too-tall inline `height` left a real
+// gap of dead space below the last page — on `host` itself, a light-DOM element, so it shows through
+// as the host page's own background, not the shadow-rendered white page background — which is
+// exactly enough to spill the document onto one extra, mostly-blank physical page. `transform` has
+// the same staleness problem for a non-1 zoom level (see the file's own reasoning above for why an
+// uncorrected `scale()` at print time is wrong regardless of this specific bug). Both need resetting
+// for print the same way mount() resets its own screen chrome: a `<style>` in `host.ownerDocument.
+// head` (light DOM, same placement reasoning as mount()'s `@page` rule) with a plain `@media print`
+// rule, `!important` (host's transform/height are also inline styles, which otherwise always win)
+// — not a `beforeprint`/`afterprint` JS listener, for the exact reliability reason documented next
+// to `PRINT_MODE_STYLE`.
+const PRINT_RESET_ATTR = 'data-paginator-zoom-host'
+const printResetStyleEls = new WeakMap<HTMLElement, HTMLStyleElement>()
+
+function ensurePrintResetStyle(host: HTMLElement): void {
+  host.setAttribute(PRINT_RESET_ATTR, '')
+  if (printResetStyleEls.has(host)) return
+  const style = document.createElement('style')
+  style.textContent = `@media print { [${PRINT_RESET_ATTR}] { height: auto !important; transform: none !important; } }`
+  printResetStyleEls.set(host, style)
+  host.ownerDocument.head.appendChild(style)
+}
 
 export type ZoomOptions = {
   /** Minimum allowed zoom factor. Default 0.5. */
@@ -130,6 +159,7 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
   host.style.overflow = 'visible'
   host.style.transform = `scale(${zoom})`
   host.style.height = `${naturalHeight * Math.min(1, zoom)}px`
+  ensurePrintResetStyle(host)
 
   function applyZoom(value: number, scrollParent: HTMLElement, startScrollTop: number, startZoom: number, localOffset: number): void {
     zoom = value
@@ -191,6 +221,8 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
       cancelAnimationFrame(animationFrame)
       animationFrame = null
     }
+    printResetStyleEls.get(host)?.remove()
+    printResetStyleEls.delete(host)
   }
 
   return {

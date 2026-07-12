@@ -17,6 +17,9 @@ body {
 
 @media print {
   .no-print {
-    display: none;
+    /* !important is required here: the toolbar sets `display` via inline style
+       (Object.assign(el.style, ...) in main.ts), which otherwise always wins over an external
+       stylesheet rule regardless of specificity or @media scoping. */
+    display: none !important;
   }
 }

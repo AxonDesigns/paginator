@@ -60,17 +60,36 @@ instances.
    clips it), with the render-time origin rebased to that wrapper's own top-left — the exact
    technique `renderPreview()` already established above. Safe specifically because hit-testing
    never relied on real DOM structure to begin with. Everything else stays flat.
-5. **Every element gets explicit inline styles only — no `<style>` tag, no class name, anywhere,**
-   with exactly one narrow exception: `mount()` injects a single shadow-root-scoped `<style>`
-   containing only an `@page` rule (page size + zero margin), because `@page` is a stylesheet-level
-   at-rule with no inline-style equivalent — see "Printing" below. `BASE_ELEMENT_STYLE`
-   (`src/render/reset.ts`) is applied first, then node-specific styles, via `Object.assign(el.style,
-   ...)`. Combined with mounting inside a Shadow DOM root, this is what makes rendering immune to
-   host-page CSS (Tailwind Preflight, aggressive resets, etc.) — verified by injecting `* {
-   box-sizing: content-box !important; margin: 8px !important; font-size: 40px !important; }` into
-   the host document and confirming zero visual change. The `@page` exception doesn't reopen that
-   hole: it stays inside the shadow root and only ever sets page geometry, never anything a host
-   stylesheet could use to reach into the document's own content.
+5. **Every element gets explicit inline styles only — no class name, anywhere,** with exactly two
+   narrow `<style>`-tag exceptions, both print-related, because two pieces of print behavior have no
+   inline-style equivalent at all — see "Printing" below for the full mechanism of each:
+   - `mount()` injects a single `<style>` containing only an `@page` rule (page size + zero margin),
+     because `@page` is a stylesheet-level at-rule with no inline-style equivalent. This `<style>`
+     lives in `host.ownerDocument.head` (light DOM), NOT inside the shadow root: Chromium's
+     print/page-box engine silently ignores an `@page` rule scoped inside a shadow root (confirmed
+     via `page.pdf({ preferCSSPageSize: true })` — a shadow-scoped `@page` rule has zero effect on
+     the resulting page size, while the identical rule in the document's own `<head>` is honored
+     exactly).
+   - `mount()` also injects a `<style>` containing one `@media print` rule (`PRINT_MODE_STYLE`) that
+     strips the screen-only wrapper chrome (padding/gap/background/page drop-shadow) for print. This
+     one DOES live inside the shadow root — it has to, since it targets elements that only exist
+     there — scoped to two private `data-*` marker attributes rather than a class name, `!important`
+     because the same properties are set via inline style for the screen case and inline styles
+     otherwise always beat an external/shadow stylesheet rule regardless of specificity. A prior
+     version of this same behavior used `matchMedia('print')`/`beforeprint`/`afterprint` JS listeners
+     instead of a CSS rule; that was abandoned once it was confirmed Chrome's print-preview/
+     print-to-PDF pipeline doesn't reliably run page JS before rendering for print, so a CSS media
+     query (synchronous with layout, no JS race) replaced it.
+
+   `BASE_ELEMENT_STYLE` (`src/render/reset.ts`) is applied first, then node-specific styles, via
+   `Object.assign(el.style, ...)`. Combined with mounting inside a Shadow DOM root, this is what
+   makes rendering immune to host-page CSS (Tailwind Preflight, aggressive resets, etc.) — verified
+   by injecting `* { box-sizing: content-box !important; margin: 8px !important; font-size: 40px
+   !important; }` into the host document and confirming zero visual change. Neither `<style>`
+   exception reopens that hole: `@page` has no selector of its own (it only ever sets page geometry,
+   never anything a host stylesheet could use to affect the document's own content), and the
+   `@media print` rule is scoped inside the shadow root to marker attributes nothing outside this
+   file sets or could plausibly target.
 6. **Images never auto-detect dimensions from the loaded asset.** `image()` throws unless given
    enough of `{width, height, aspectRatio}` to compute a box synchronously. Any mismatch between
    the computed box and the real image's shape is reconciled by the native `object-fit` CSS
@@ -214,7 +233,7 @@ of this library's API. See `src/main.ts`'s `openPdfInNewTab()`/`showPdfDialog()`
 | `findById` | `(registry: HitRegistry, id: string) => InteractionTarget[]` | Identity lookup, not geometric — one entry per matching page/fragment, in page order |
 | `findFragments` | `(registry: HitRegistry, target: InteractionTarget) => InteractionTarget[]` | Automatic, id-free counterpart to `findById` — every fragment of `target`'s node across every page it was split onto; `[target]` if it was never split |
 | `toTypeList` | `(value: string \| string[] \| undefined) => string[]` | Normalizes `dragType`/`accepts` shorthand |
-| `createZoomController` | `(host: HTMLElement, options?: ZoomOptions) => ZoomController` | Headless zoom primitive: applies an animated CSS `transform: scale()` to `host` and returns `getZoom`/`setZoom`/`zoomIn`/`zoomOut`/`reset`/`fitWidth`/`refresh`/`destroy` — no buttons/UI. Pass `{ zoom: controller.getZoom }` to `attachInteractions` so hit-testing stays aligned at any zoom level; `host` should be the same element passed to `mount()`. `fitWidth(pageWidth, availableWidth?)` computes-and-animates-to the zoom that fits a page's own unscaled px width (e.g. `result.pageSize.width`) within `availableWidth` (defaults to `host.clientWidth`). `refresh()` re-measures `host`'s natural height — call it after re-`mount()`ing different content into `host` while the same controller is still in use, since `naturalHeight` is otherwise captured once at creation. `destroy()` cancels any in-flight zoom animation — call it when discarding `host` |
+| `createZoomController` | `(host: HTMLElement, options?: ZoomOptions) => ZoomController` | Headless zoom primitive: applies an animated CSS `transform: scale()` to `host` and returns `getZoom`/`setZoom`/`zoomIn`/`zoomOut`/`reset`/`fitWidth`/`refresh`/`destroy` — no buttons/UI. Pass `{ zoom: controller.getZoom }` to `attachInteractions` so hit-testing stays aligned at any zoom level; `host` should be the same element passed to `mount()`. `fitWidth(pageWidth, availableWidth?)` computes-and-animates-to the zoom that fits a page's own unscaled px width (e.g. `result.pageSize.width`) within `availableWidth` (defaults to `host.clientWidth`). `refresh()` re-measures `host`'s natural height — call it after re-`mount()`ing different content into `host` while the same controller is still in use, since `naturalHeight` is otherwise captured once at creation. `destroy()` cancels any in-flight zoom animation and removes the print-reset `<style>` described next — call it when discarding `host` |
 
 None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
 write instance state — they're grouped onto `Paginator` for one consistent object-oriented surface,
@@ -269,6 +288,24 @@ transparent PNG and draws it as an image, so it can't be selected/copied out of 
 rarely wanted for a stamp sitting over real body content. Set `true` to keep it as live vector text.
 Only affects `generatePdf()`; the on-screen preview's watermark is always `pointer-events: none`
 regardless, since it's decorative-only and never a hit-test target).
+
+On the DOM/screen renderer (`shadow-dom.ts`'s `renderWatermark()`), a text watermark's every tile
+instance is drawn onto ONE `<canvas>` sized exactly `pageWidth x pageHeight`, rather than one
+rotated, absolutely-positioned `<div>` per instance (the original approach, and still how a text
+watermark used to render before this was found). `resolveWatermarkInstances()` deliberately
+positions rotated tile instances from `-stepX`/`-stepY` out to `pageWidth/pageHeight + step` so a
+rotated tile still covers the corners, relying on the page container's `overflow: hidden` to clip
+the off-page parts — correct on screen, but confirmed (via a real Chrome print dialog; not
+reproducible through headless `page.pdf()`, and not fixed by adding `clip-path`/`contain: paint` to
+the clipping container either — both tried and both insufficient) to make Chromium's real print
+pipeline compute its printable/fragmentation content area from the unclipped ink extent of that
+rotated overflow content and auto-shrink the entire page to fit, producing a whitespace-framed page.
+A canvas's pixel buffer is a hard size limit nothing needs to be told to respect: nothing drawn past
+its own width/height edge exists at all, on screen or in print, sidestepping the Chromium quirk
+entirely rather than trying to hint around it. Image watermarks (`kind: 'image'`) still render as
+one `<img>` per tile instance and can in principle hit the same class of issue if `tile: true` is
+used aggressively enough — not yet fixed, since it hasn't been observed in practice; canvas
+rasterization (via `drawImage` once the image has loaded) would be the same fix if it ever is.
 
 Image watermark (`kind: 'image'`) additionally: `src: string`, `width: number`, `height: number`.
 
@@ -950,28 +987,72 @@ was never `mount()`-ed). What the library DOES do is make a plain `window.print(
 itself, so it fires correctly regardless of *how* printing gets triggered — a button calling
 `window.print()`, the browser's own Ctrl/Cmd+P, or a print icon in the OS UI:
 
-- **`@page` rule** (the one `<style>`-tag exception to invariant #5, injected fresh on every
-  `mount()` call): `size: {pageSize.width}px {pageSize.height}px; margin: 0`. `pageSize` is already
-  in physical px at the same 96dpi the whole engine assumes (`page-sizes.ts`), so the printed page
-  is pixel-for-pixel the same size as the on-screen one, and `margin: 0` stops the browser's own
-  default print margin from pushing content in from the physical edge.
+- **`@page` rule** (one of the two `<style>`-tag exceptions to invariant #5, injected/updated fresh
+  on every `mount()` call, into `host.ownerDocument.head` — see invariant #5 for why it must live
+  in the light DOM rather than the shadow root): `size: {pageSize.width}px {pageSize.height}px;
+  margin: 0`. `pageSize` is already in physical px at the same 96dpi the whole engine assumes
+  (`page-sizes.ts`), so the printed page is pixel-for-pixel the same size as the on-screen one, and
+  `margin: 0` stops the browser's own default print margin from pushing content in from the
+  physical edge. This one `<style>` element is reused across repeat `mount()` calls on the same
+  host (keyed by a `WeakMap<HTMLElement, HTMLStyleElement>`, `pageSizeStyleEls` in
+  `shadow-dom.ts`) rather than accumulating duplicates, and `unmount()` removes it from
+  `document.head`. Because `@page` is a genuinely document-global, unnamed page context, two
+  different `Paginator`-mounted hosts in the same document will contend for it — whichever host's
+  `<style>` was most recently written wins for the next `window.print()` call, the same
+  "last write wins" shape as any other single-slot browser global (see "Multiple `Paginator`
+  instances" above). Solving that would need CSS named pages (`@page name { }` plus a `page:`
+  property on every element) — out of scope unless a real multi-document-printing use case shows
+  up.
 - **Screen-only chrome stripped during print**: the wrapper `<div>` `mount()` creates has 24px
   padding/gap and a gray background purely so pages look like separate sheets on screen; each page
   also gets a drop shadow. None of that has any logical-page meaning to the browser's print
   engine — left in place, it just accumulates (one padding, N−1 gaps) until the drift pushes
-  trailing content onto an extra, mostly-blank physical page. `mount()` listens for
-  `matchMedia('print')` `change` plus `beforeprint`/`afterprint` (used together for cross-browser
-  reliability — real-world print-trigger behavior isn't perfectly consistent) and zeroes the
-  padding/gap/background and shadows for the duration of the print, restoring them after. Screen
-  presentation is untouched either way.
+  trailing content onto an extra, mostly-blank physical page. Stripped via the OTHER `<style>`-tag
+  exception to invariant #5 (`PRINT_MODE_STYLE` in `shadow-dom.ts`, a plain `@media print` rule
+  injected inside the shadow root itself, `!important` — the same properties are also set via
+  inline style for the screen case, and an inline style otherwise always wins over an external/
+  shadow stylesheet rule regardless of specificity), scoped to two private `data-*` marker
+  attributes (`data-paginator-wrapper`, and the per-page `data-page-number` already set for other
+  reasons) rather than a class name. This used to be done with `matchMedia('print')` `change` plus
+  `beforeprint`/`afterprint` JS listeners mutating inline styles instead of a CSS rule — abandoned
+  after finding that Chrome's print-preview/print-to-PDF pipeline doesn't reliably run page JS
+  before it renders the page for print, so the listener-driven version could silently fail to strip
+  this screen chrome depending on exactly how printing was triggered (confirmed both via
+  `page.pdf()` and a real Chrome print-preview screenshot showing the stale screen-mode gap around
+  an otherwise-correctly-sized page). A pure CSS media query has no such race — same reasoning
+  `break-after: page` below already relies on.
 - **`break-after: page`** (plus the legacy `page-break-after: always` for older engines) is set
   unconditionally on every page's container except the last — these are plain CSS fragmentation
   properties, inert outside paged/print or multicol contexts, so they cost nothing on screen. This
   is what forces the physical page cut to land exactly at each logical page boundary rather than
   relying on the zeroed spacing to divide evenly on its own.
+- **`createZoomController()`'s `host.style.height`/`transform` are ALSO reset for print** (`zoom.ts`,
+  same `<style>`-in-`host.ownerDocument.head`/`!important` technique as `@page` above, keyed by a
+  `data-paginator-zoom-host` marker attribute and its own `printResetStyleEls` WeakMap) — a real bug
+  that shipped and only surfaced once the wrapper-chrome stripping above was fixed: `host.style.
+  height` is set from `naturalHeight = host.offsetHeight`, captured once at whatever moment
+  `createZoomController()` ran (always in screen mode), which bakes in the screen-only wrapper
+  padding/gap the bullet above strips for print. Once the wrapper's own print-mode height genuinely
+  shrank, this stale, too-tall inline `height` on `host` (a light-DOM element, an ancestor of the
+  shadow root) left real dead space below the last page — showing through as the *host page's own*
+  background (not the shadow-rendered white page background, since it's outside the shadow root
+  entirely), exactly enough to spill onto one extra, mostly-blank physical page. A non-1 `zoom`'s
+  leftover `transform: scale()` has the analogous problem (see `zoom.ts`'s own header comment for
+  why an uncorrected scale at print time is wrong regardless of this specific height bug). Both are
+  reset the same way `PRINT_MODE_STYLE` is, for the same JS-listener-unreliability reason.
 - Net effect: an *N*-logical-page document prints as exactly *N* physical pages, each starting flush
-  with the physical page edge, matching the on-screen layout exactly — verified against a real
-  `page.pdf()` render, not just print-media emulation.
+  with the physical page edge, matching the on-screen layout exactly — verified with
+  `page.pdf({ preferCSSPageSize: true })` against the actual mounted demo (the resulting PDF's
+  `/MediaBox` matches `pageSize.width/height * 0.75`, 96dpi px -> 72dpi pt, exactly; `pdfinfo`
+  reports exactly *N* pages, not *N*+1; and rasterizing the PDF confirms both the first and the true
+  last page's own border/content touch all four physical edges with no residual gap).
+- The demo's own toolbar chrome (`src/main.ts`) hides itself during print via a `.no-print` class
+  (`src/style.css`, `@media print { .no-print { display: none !important; } }`) rather than
+  anything `mount()` does — that CSS rule needs `!important` for the same inline-style-precedence
+  reason as `PRINT_MODE_STYLE` above: the toolbar also sets `display` via inline style for its
+  on-screen flex layout, and an inline style otherwise always wins over an external stylesheet rule
+  regardless of specificity or `@media` scoping. This is
+  demo-only chrome, not something `mount()`/`unmount()` are responsible for.
 
 ## PDF export (`src/paginator.ts`, `src/render/pdf-render.ts`, `src/render/pdf-fonts.ts`, `src/render/font-registry.ts`)
 
