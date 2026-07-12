@@ -1,14 +1,31 @@
 // DOM renderer entry point. Mounts every page inside a shadow root (structural CSS isolation) and
-// gives every element explicit inline styles only — no <style> tag, no class name anywhere
-// (belt-and-suspenders isolation, see reset.ts) — with one narrow, deliberate exception: mount()
-// injects a single shadow-root-scoped <style> containing only an `@page` rule, because `@page` is a
-// stylesheet-level at-rule with no inline-style equivalent (there is no `element.style.page`), and
-// it's the only way to force the browser's print engine to use this document's exact page size with
-// zero margins instead of whatever margin the OS/browser print dialog defaults to. It stays inside
-// the shadow root and targets nothing but the page box itself, so it doesn't reopen the
-// host-CSS-bleed-through hole invariant #5 otherwise closes — see applyPrintMode() below, which
-// reacts to matchMedia('print')/beforeprint/afterprint so this stays correct however the consumer
-// triggers window.print() (that call itself is the consumer's responsibility, not this library's).
+// gives every element explicit inline styles only — no class name anywhere (belt-and-suspenders
+// isolation, see reset.ts) — with two narrow, deliberate `<style>`-tag exceptions, because two
+// pieces of print behavior have no inline-style equivalent at all:
+//
+// 1. `@page` (page size + zero margin) — there is no `element.style.page`. Injected into a
+//    `<style>` in `host.ownerDocument.head` (light DOM), NOT the shadow root — empirically,
+//    Chromium's print/page-box engine silently ignores an `@page` rule scoped inside a shadow root
+//    (confirmed via `page.pdf({ preferCSSPageSize: true })`: a shadow-scoped `@page` rule has zero
+//    effect on the resulting page size, even though the identical rule placed in the document's own
+//    `<head>` is honored exactly). `@page` only ever configures page geometry — it has no selector,
+//    so it can't reach into the document's content the way a host stylesheet leaking through
+//    invariant #5 could — so placing it in the light DOM doesn't reopen the host-CSS-bleed-through
+//    hole invariant #5 otherwise closes.
+// 2. `@media print` (stripping the screen-only wrapper padding/gap/background and each page's drop
+//    shadow — see PRINT_MODE_STYLE below) — there is no inline-style equivalent of a media query
+//    either. This one DOES live inside the shadow root (it has to: it targets elements that only
+//    exist there), and is scoped to two private `data-*` marker attributes rather than a class name,
+//    kept `!important` because these same properties are also set via inline style for the screen
+//    case, and an inline style otherwise always wins over an external/shadow stylesheet rule
+//    regardless of specificity. This used to be done with `matchMedia('print')`/`beforeprint`/
+//    `afterprint` JS listeners mutating inline styles instead — abandoned because Chrome's print
+//    preview/print-to-PDF pipeline doesn't reliably run page JS before it captures/renders the
+//    page for print, so the listener-driven approach silently failed to strip the screen chrome in
+//    exactly that pipeline (confirmed both via `page.pdf()` and a real Chrome print preview
+//    screenshot showing the stale screen-mode gap around an otherwise-correctly-sized page). A pure
+//    CSS media query has no such race: it's synchronous with whatever engine is doing the layout,
+//    the same reason `break-after: page` below already avoids JS entirely.
 //
 // Rendering is flat and page-absolute: since RenderedNode.box coordinates are already fully resolved
 // relative to their region's own origin by the time pagination finishes (see geometry.ts), every
@@ -21,13 +38,17 @@ import { resolveWatermarkInstances } from "../core/watermark-layout.js";
 import { BASE_ELEMENT_STYLE } from "./reset.js";
 import { measureTextWidthPx } from "./text-measure.js";
 import { DEFAULT_FONT_FAMILY, resolveActiveFontFamily } from "./font-registry.js";
-// mount() re-binds fresh window/matchMedia listeners on every call (a re-paginated doc gets a fresh
-// wrapper/pageEls each time) — without tracking them per-host, a consumer that re-mounts repeatedly
-// (e.g. a framework wrapper re-running mount() whenever its `doc` prop changes) would accumulate an
-// unbounded number of `beforeprint`/`afterprint`/`matchMedia('print')` listeners on `window`, since
-// nothing else ever removes them. Keyed by `host` (not module state) so multiple independently
-// mounted hosts on the same page don't clobber each other's cleanup.
-const printModeCleanups = new WeakMap();
+// The light-DOM `<style>` element carrying this host's `@page` rule (see this file's header
+// comment for why it can't live inside the shadow root). Keyed by `host` so a repeat mount() call
+// updates the same element's textContent instead of accumulating duplicate <style> tags in
+// document.head, and unmount() knows exactly which element to remove. `@page` is a genuinely
+// document-global, unnamed page context, so if more than one Paginator-mounted host exists in the
+// same document, whichever one's <style> was most recently written wins for any window.print()
+// call — the same "last write wins" shape as any other single-slot browser global (see "Multiple
+// Paginator instances" in GUIDE.md). Not solvable without CSS named pages (`@page name { }` plus a
+// `page:` property on every element); out of scope unless a real multi-document-printing use case
+// shows up.
+const pageSizeStyleEls = new WeakMap();
 export function styledDiv(style) {
     const el = document.createElement('div');
     Object.assign(el.style, BASE_ELEMENT_STYLE, style);
@@ -72,25 +93,43 @@ function renderWatermark(watermark, pageWidth, pageHeight, container) {
     const width = measureTextWidthPx(watermark.text, fontCss);
     const height = fontSize * 1.2;
     const instances = resolveWatermarkInstances(watermark, pageWidth, pageHeight, width, height);
-    for (const { x, y } of instances) {
-        const el = styledDiv({
-            left: `${x - width / 2}px`,
-            top: `${y - height / 2}px`,
-            width: `${width}px`,
-            height: `${height}px`,
-            font: fontCss,
-            lineHeight: `${height}px`,
-            color: watermark.color ?? '#000000',
-            opacity: `${opacity}`,
-            transform: `rotate(${rotation}deg)`,
-            transformOrigin: 'center',
-            whiteSpace: 'pre',
-            textAlign: 'center',
-            pointerEvents: 'none',
-        });
-        el.textContent = watermark.text;
-        container.appendChild(el);
+    // Rasterized onto ONE <canvas> sized exactly pageWidth x pageHeight, rather than one rotated,
+    // absolutely-positioned <div> per tile instance (as this used to do): resolveWatermarkInstances()
+    // deliberately positions rotated tile instances from -stepX/-stepY out to pageWidth/pageHeight +
+    // step so a rotated tile still covers the corners, relying on the page container's overflow to
+    // clip the off-page parts — correct on screen, but Chromium's real print pipeline (confirmed via
+    // a real print dialog; not reproducible through headless page.pdf(), and not fixed by adding
+    // clip-path/contain:paint to the clipping container either) can still compute its printable
+    // content area from the unclipped ink extent of that rotated overflow content and auto-shrink the
+    // whole page to fit. A canvas's pixel buffer is a hard size limit no CSS clipping hint is needed
+    // for and none of that DOM/overflow reasoning can second-guess: nothing drawn past its own
+    // width/height edge exists at all, on screen or in print.
+    const canvas = document.createElement('canvas');
+    canvas.width = pageWidth;
+    canvas.height = pageHeight;
+    Object.assign(canvas.style, BASE_ELEMENT_STYLE, {
+        left: '0px',
+        top: '0px',
+        width: `${pageWidth}px`,
+        height: `${pageHeight}px`,
+        pointerEvents: 'none',
+    });
+    const ctx = canvas.getContext('2d');
+    if (ctx !== null) {
+        ctx.font = fontCss;
+        ctx.fillStyle = watermark.color ?? '#000000';
+        ctx.globalAlpha = opacity;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (const { x, y } of instances) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate((rotation * Math.PI) / 180);
+            ctx.fillText(watermark.text, 0, 0);
+            ctx.restore();
+        }
     }
+    container.appendChild(canvas);
 }
 /**
  * Renders a standalone, self-contained copy of a single RenderedNode subtree (as returned on
@@ -116,40 +155,51 @@ export function renderPreview(rendered) {
 const SCREEN_WRAPPER_SPACING = '24px';
 const SCREEN_WRAPPER_BACKGROUND = '#e5e5e5';
 const SCREEN_PAGE_SHADOW = '0 1px 4px rgba(0, 0, 0, 0.25)';
+// Private structural hooks, not a "class name" in the invariant-#5 sense (nothing a host stylesheet
+// could plausibly target) — exist only so PRINT_MODE_STYLE below has something to select without
+// reaching outside this shadow root.
+const WRAPPER_MARKER_ATTR = 'data-paginator-wrapper';
+const PAGE_MARKER_ATTR = 'data-page-number'; // already set per-page for other purposes; reused here
 // The screen-only chrome around each page (the wrapper's padding/gap that visually separates
 // "sheets on a desk", plus its gray background and each page's drop shadow) has no logical-page
 // meaning to the browser's own print engine — it just fragments this one tall flex column every
 // physical-page-height. Left in place, that extra vertical space accumulates page over page (top
 // padding once, a gap after every page but the last) until the drift pushes trailing content onto
-// an extra, mostly-blank physical page. Stripping it specifically during print — via `matchMedia`
-// (`change`) and `beforeprint`/`afterprint` together, since real-world print-trigger reliability
-// differs across browsers — keeps the screen presentation untouched while making each logical page
-// occupy exactly one physical page. `breakAfter`/`pageBreakAfter` (unconditional; both properties
-// for engine coverage) do the complementary half: forcing the fragmentation cut to land exactly at
-// each page boundary rather than trusting height math alone. Both are plain inline style properties
-// — no `<style>` tag or `@media` block needed, keeping invariant #5 (inline styles only) intact.
-function applyPrintMode(wrapper, pageEls, isPrint) {
-    Object.assign(wrapper.style, {
-        padding: isPrint ? '0' : SCREEN_WRAPPER_SPACING,
-        gap: isPrint ? '0' : SCREEN_WRAPPER_SPACING,
-        background: isPrint ? '#ffffff' : SCREEN_WRAPPER_BACKGROUND,
-    });
-    for (const pageEl of pageEls) {
-        pageEl.style.boxShadow = isPrint ? 'none' : SCREEN_PAGE_SHADOW;
-    }
-}
+// an extra, mostly-blank physical page. Stripped via a plain `@media print` rule (`!important`,
+// since the same properties are also set via inline style for the screen case, and an inline style
+// otherwise always wins over an external/shadow stylesheet rule regardless of specificity) rather
+// than the `matchMedia('print')`/`beforeprint`/`afterprint` JS-listener approach this used to use —
+// abandoned because Chrome's print-preview/print-to-PDF pipeline doesn't reliably run page JS
+// before it renders the page for print, so the listener-driven version silently failed to strip
+// this chrome in exactly that pipeline. A CSS media query has no such race. `breakAfter`/
+// `pageBreakAfter` (unconditional inline styles, set once below) do the complementary half: forcing
+// the fragmentation cut to land exactly at each page boundary rather than trusting height math
+// alone.
+const PRINT_MODE_STYLE = `@media print {
+  [${WRAPPER_MARKER_ATTR}] { padding: 0 !important; gap: 0 !important; background: #ffffff !important; }
+  [${PAGE_MARKER_ATTR}] { box-shadow: none !important; }
+}`;
 export function mount(result, host) {
     const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
     root.replaceChildren();
     const { pageSize, margins, headerHeight, headerGap, footerHeight } = result;
-    // The one `<style>` exception in this file — see the header comment for why `@page` can't be
-    // expressed as an inline style. `size` in physical px at the same 96dpi this whole engine already
-    // assumes (see page-sizes.ts) makes the printed page dimensions match the on-screen ones exactly;
-    // `margin: 0` is what makes applyPrintMode()'s zeroed-out wrapper padding/gap actually reach the
-    // physical page edge instead of being pushed in by the browser's own default print margin.
-    const pageStyle = document.createElement('style');
+    // See the header comment for why `@page` can't be expressed as an inline style, and why it lives
+    // in the light DOM (host.ownerDocument.head) rather than the shadow root. `size` in physical px
+    // at the same 96dpi this whole engine already assumes (see page-sizes.ts) makes the printed page
+    // dimensions match the on-screen ones exactly; `margin: 0` is what makes PRINT_MODE_STYLE's
+    // zeroed-out wrapper padding/gap actually reach the physical page edge instead of being pushed in
+    // by the browser's own default print margin.
+    const pageStyle = pageSizeStyleEls.get(host) ?? document.createElement('style');
     pageStyle.textContent = `@page { size: ${pageSize.width}px ${pageSize.height}px; margin: 0; }`;
-    root.appendChild(pageStyle);
+    if (!pageSizeStyleEls.has(host)) {
+        pageSizeStyleEls.set(host, pageStyle);
+        host.ownerDocument.head.appendChild(pageStyle);
+    }
+    // The other `<style>` exception in this file — see the header comment for why the screen-vs-print
+    // chrome switch is plain CSS rather than a JS event listener.
+    const printModeStyle = document.createElement('style');
+    printModeStyle.textContent = PRINT_MODE_STYLE;
+    root.appendChild(printModeStyle);
     const wrapper = styledDiv({
         position: 'static',
         display: 'flex',
@@ -159,6 +209,7 @@ export function mount(result, host) {
         padding: SCREEN_WRAPPER_SPACING,
         background: SCREEN_WRAPPER_BACKGROUND,
     });
+    wrapper.setAttribute(WRAPPER_MARKER_ATTR, '');
     root.appendChild(wrapper);
     const headerOriginX = margins.left;
     const headerOriginY = margins.top;
@@ -166,7 +217,6 @@ export function mount(result, host) {
     const bodyOriginY = margins.top + headerHeight + headerGap;
     const footerOriginX = margins.left;
     const footerOriginY = pageSize.height - margins.bottom - footerHeight;
-    const pageEls = [];
     for (const [i, page] of result.pages.entries()) {
         const pageEl = styledDiv({
             position: 'relative',
@@ -188,7 +238,6 @@ export function mount(result, host) {
             pageEl.style.pageBreakAfter = 'always';
         }
         wrapper.appendChild(pageEl);
-        pageEls.push(pageEl);
         const ctx = { container: pageEl, unselectable: false };
         if (page.header !== null)
             renderNodeDom(page.header, headerOriginX, headerOriginY, ctx);
@@ -201,32 +250,18 @@ export function mount(result, host) {
         if (page.watermark !== null)
             renderWatermark(page.watermark, pageSize.width, pageSize.height, pageEl);
     }
-    // Tear down the previous call's listeners (if any) before attaching this call's — see
-    // printModeCleanups' header comment. Safe to call unconditionally; a no-op on first mount().
-    printModeCleanups.get(host)?.();
-    const mql = window.matchMedia('print');
-    const onPrint = () => applyPrintMode(wrapper, pageEls, mql.matches);
-    const onBeforePrint = () => applyPrintMode(wrapper, pageEls, true);
-    const onAfterPrint = () => applyPrintMode(wrapper, pageEls, false);
-    mql.addEventListener('change', onPrint);
-    window.addEventListener('beforeprint', onBeforePrint);
-    window.addEventListener('afterprint', onAfterPrint);
-    printModeCleanups.set(host, () => {
-        mql.removeEventListener('change', onPrint);
-        window.removeEventListener('beforeprint', onBeforePrint);
-        window.removeEventListener('afterprint', onAfterPrint);
-    });
 }
 /**
- * Tears down a host previously passed to `mount()`: removes the window-level print-mode listeners
- * `mount()` attaches and clears the shadow root's content. Call this from a framework wrapper's own
+ * Tears down a host previously passed to `mount()`: removes the light-DOM `@page` `<style>` element
+ * `mount()` wrote to `host.ownerDocument.head`, and clears the shadow root's content (which takes
+ * the shadow-scoped print-mode `<style>` with it). Call this from a framework wrapper's own
  * unmount/cleanup path (e.g. a React effect's cleanup, Vue's `onUnmounted`, a Svelte action's
- * `destroy`) — re-running `mount()` on the SAME host already self-cleans its own prior listeners, so
- * this is only needed when the host itself is being discarded for good. Safe to call on a host that
- * was never mounted (no-op).
+ * `destroy`) — re-running `mount()` on the SAME host already reuses the same light-DOM `<style>`
+ * element, so this is only needed when the host itself is being discarded for good. Safe to call on
+ * a host that was never mounted (no-op).
  */
 export function unmount(host) {
-    printModeCleanups.get(host)?.();
-    printModeCleanups.delete(host);
+    pageSizeStyleEls.get(host)?.remove();
+    pageSizeStyleEls.delete(host);
     host.shadowRoot?.replaceChildren();
 }

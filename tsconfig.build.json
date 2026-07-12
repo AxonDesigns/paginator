@@ -8,6 +8,5 @@
     "rootDir": "src",
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src"],
-  "exclude": ["src/main.ts"]
+  "include": ["src"]
 }

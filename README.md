@@ -42,18 +42,19 @@ mount(result, document.getElementById('app')!)
 
 ```sh
 bun install     # or npm/pnpm/yarn install
-bun run dev     # start the Vite dev server, opens the demo in src/main.ts
-bun run build   # type-check (tsc) then build for production
-bun run preview # preview the production build
+bun run dev     # start the Vite dev server, opens the demo in demo/main.ts
+bun run build   # type-check (tsc) then build the library for production
+bun run preview # preview the production demo build
 ```
 
-`src/main.ts` is a living demo app (not shipped library code) that exercises every feature: multi-
-page text splitting (including text decoration), header/footer pagination, all group/flex layout
-modes, containers (background/border/borderRadius/padding, min-height, splitting across a page
-boundary), images (including borderRadius/opacity), multi-page tables (header repetition, column
-grouping with totals, cell spans, per-cell border/padding, zebra striping), charts (including
-theming, custom fonts, and mark-geometry overrides), PDF export, and the full interaction system.
-Reading it top to bottom is a good way to see every API in realistic use.
+`demo/` is a living demo app (not shipped library code) that exercises every feature: multi-page
+text splitting (including text decoration), header/footer pagination, all group/flex layout modes,
+containers (background/border/borderRadius/padding, min-height, splitting across a page boundary),
+images (including borderRadius/opacity), multi-page tables (header repetition, column grouping with
+totals, cell spans, per-cell border/padding, zebra striping), charts (including theming, custom
+fonts, and mark-geometry overrides), PDF export, and the full interaction system. It's split into
+one file per topic under `demo/content/`, assembled by `demo/doc.ts`; reading that folder top to
+bottom is a good way to see every API in realistic use.
 
 ## Project layout
 
@@ -63,7 +64,10 @@ src/
   render/       DOM mounting (Shadow DOM), printing, PDF export, chart SVG rendering
   interaction/  opt-in hover/click/drag/drop layer over the computed layout
   index.ts      public API surface — import from here
-  main.ts       demo app
+demo/
+  content/      one file per demo section (tables, charts, containers, ...)
+  doc.ts        assembles the sections into the full demo PageDef
+  main.ts       demo app entry point
 ```
 
 ## Documentation

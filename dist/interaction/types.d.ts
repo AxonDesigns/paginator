@@ -23,7 +23,7 @@ export type InteractionTarget = {
      * there's no single real DOM element to hand back for "the element underneath." This is the data
      * equivalent: pass it to renderPreview() to get a standalone, pixel-identical copy of exactly
      * what's rendered on the page for this node, suitable for a drag-preview ghost that follows the
-     * cursor — see the dragstart handling in src/main.ts for a complete example.
+     * cursor — see the dragstart handling in demo/interaction-demo.ts for a complete example.
      */
     rendered: RenderedNode;
 };

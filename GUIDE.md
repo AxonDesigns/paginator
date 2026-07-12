@@ -215,7 +215,7 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 
 `generatePdf()` returns raw bytes — what a consumer does with them (open in a new tab via an object
 URL, show a `<dialog>` with an `<iframe>`, trigger a download) is plain browser-native code, not part
-of this library's API. See `src/main.ts`'s `openPdfInNewTab()`/`showPdfDialog()` for the pattern.
+of this library's API. See `demo/toolbar.ts`'s `openPdfInNewTab()`/`showPdfDialog()` for the pattern.
 
 ### Word/Excel export (`Paginator` instance methods, see full section below)
 | Method | Signature | Notes |
@@ -846,7 +846,7 @@ A ROW group's direct children are sized by a two-pass model, same mechanics as C
      the row into equal (or px-authored) columns, so `mainAlign: 'center'`/`'space-between'` on the
      row has real free space to distribute (see rule 3 below) — e.g. two headline `text()` nodes in a
      row both need `flex: 'shrink'` for `mainAlign: 'center'` to visually center them as a unit
-     (`src/main.ts`'s title row).
+     (`demo/content/intro.ts`'s title row).
    - `ImageNode`/`SvgNode`/`ChartNode`/`ContainerNode` also claim a fixed width here from their own
      `width` field whenever `flex` is left unset — the same value that already governs their size in
      a column/shrink-wrap context works unchanged as a row child too, so `flex: 'Npx'`/`'shrink'` is
@@ -981,7 +981,7 @@ Single recursive function `paginateNode(node, width, ctx)` handles every case un
 ## Printing
 
 Printing itself is just `window.print()` — this library has no API of its own for triggering it (see
-`src/main.ts`'s `printDocument()` helper for the demo's thin, validated wrapper: `throws` if `host`
+`demo/toolbar.ts`'s `printDocument()` helper for the demo's thin, validated wrapper: `throws` if `host`
 was never `mount()`-ed). What the library DOES do is make a plain `window.print()` call against a
 `mount()`-ed host come out correctly sized, with no extra blank pages — wired up live inside `mount()`
 itself, so it fires correctly regardless of *how* printing gets triggered — a button calling
@@ -1046,8 +1046,8 @@ itself, so it fires correctly regardless of *how* printing gets triggered — a 
   `/MediaBox` matches `pageSize.width/height * 0.75`, 96dpi px -> 72dpi pt, exactly; `pdfinfo`
   reports exactly *N* pages, not *N*+1; and rasterizing the PDF confirms both the first and the true
   last page's own border/content touch all four physical edges with no residual gap).
-- The demo's own toolbar chrome (`src/main.ts`) hides itself during print via a `.no-print` class
-  (`src/style.css`, `@media print { .no-print { display: none !important; } }`) rather than
+- The demo's own toolbar chrome (`demo/toolbar.ts`) hides itself during print via a `.no-print` class
+  (`demo/style.css`, `@media print { .no-print { display: none !important; } }`) rather than
   anything `mount()` does — that CSS rule needs `!important` for the same inline-style-precedence
   reason as `PRINT_MODE_STYLE` above: the toolbar also sets `display` via inline style for its
   on-screen flex layout, and an inline style otherwise always wins over an external stylesheet rule
@@ -1212,7 +1212,7 @@ fidelity to begin with and doesn't need to.
 
 **Viewing PDF bytes is entirely the consumer's responsibility** — this library stops at
 `generatePdf()` returning a `Uint8Array`; opening it in a new tab, showing a preview dialog, or
-triggering a download is plain browser-native code with no library API of its own (see `src/main.ts`'s
+triggering a download is plain browser-native code with no library API of its own (see `demo/toolbar.ts`'s
 `openPdfInNewTab()`/`showPdfDialog()` for the demo's pattern: an object URL opened via `window.open()`,
 or shown inside a native `<dialog>`/`<iframe>`, in the light DOM like the rest of the demo's toolbar
 chrome — page chrome, not paginated content, so invariant #5 doesn't apply).
@@ -1337,7 +1337,7 @@ put the literal substrings `'{{pageNumber}}'`/`'{{totalPages}}'` in header/foote
 splices these into docx's own `PageNumber.CURRENT`/`PageNumber.TOTAL_PAGES` fields (rendered as real
 `PAGE`/`NUMPAGES` field codes). Header/footer text that doesn't use the sentinel renders as literal,
 computed-once text — correct for a static label, wrong (frozen at "1") for an actual running count.
-The demo's own footer (`src/main.ts`) intentionally keeps its real-`pageNumber`-interpolating PDF/DOM
+The demo's own footer (`demo/toolbar.ts`) intentionally keeps its real-`pageNumber`-interpolating PDF/DOM
 footer separate from a sentinel-based `docxFooter()` used only for the `generateDocx()` call, since
 the same `PageDef.footer` function drives both the correctly-per-page PDF/DOM output and the
 once-resolved Word output.
