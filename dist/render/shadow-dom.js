@@ -153,7 +153,7 @@ export function renderPreview(rendered) {
     return container;
 }
 const SCREEN_WRAPPER_SPACING = '24px';
-const SCREEN_WRAPPER_BACKGROUND = '#e5e5e5';
+const SCREEN_WRAPPER_BACKGROUND = 'transparent';
 const SCREEN_PAGE_SHADOW = '0 1px 4px rgba(0, 0, 0, 0.25)';
 // Private structural hooks, not a "class name" in the invariant-#5 sense (nothing a host stylesheet
 // could plausibly target) — exist only so PRINT_MODE_STYLE below has something to select without

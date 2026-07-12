@@ -60,6 +60,16 @@ export function naturalWidth(node, availableWidth) {
     const def = entryFor(node.type);
     return def.naturalWidth === undefined ? availableWidth : Math.min(def.naturalWidth(node, availableWidth), availableWidth);
 }
+// A node's own explicit `cursor` wins; otherwise `interactive`/`draggable` resolve a sensible
+// default (`droppable` alone gets none — not obviously clickable). Returns undefined when this node
+// has no opinion of its own, so renderNodeDom() below falls back to whatever its ancestor resolved.
+function resolveCursor(node) {
+    if (node.cursor !== undefined)
+        return node.cursor;
+    if (node.interactive === true)
+        return node.draggable === true ? 'grab' : 'pointer';
+    return undefined;
+}
 export function renderNodeDom(rendered, originX, originY, ctx) {
     const x = originX + rendered.box.x;
     const y = originY + rendered.box.y;
@@ -67,7 +77,11 @@ export function renderNodeDom(rendered, originX, originY, ctx) {
     // so that's the same check that decides whether text here (or under here) should be unselectable.
     const isDraggable = rendered.node.interactive === true && rendered.node.draggable === true;
     const unselectable = ctx.unselectable || isDraggable;
-    entryFor(rendered.type).renderDom(rendered, x, y, { container: ctx.container, originX, originY, unselectable });
+    // Same bubble-down shape as `unselectable` above, but resolving a string instead of OR-ing a
+    // bool: a non-opinionated node inherits its nearest interactive/cursor-setting ancestor's value,
+    // matching hit-test's own "descendant wins if it has an opinion, else bubble up" resolution.
+    const cursor = resolveCursor(rendered.node) ?? ctx.cursor;
+    entryFor(rendered.type).renderDom(rendered, x, y, { container: ctx.container, originX, originY, unselectable, cursor });
 }
 export async function drawPdfNode(rendered, originX, originY, pdf) {
     const x = originX + rendered.box.x;

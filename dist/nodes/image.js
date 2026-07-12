@@ -45,6 +45,7 @@ function renderDom(rendered, x, y, ctx) {
         // no extra overflow:hidden wrapper needed, unlike a generic block-level box.
         ...(node.borderRadius !== undefined ? { borderRadius: `${node.borderRadius}px` } : {}),
         ...(node.opacity !== undefined ? { opacity: `${node.opacity}` } : {}),
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
     });
     el.src = node.src;
     if (node.alt !== undefined)

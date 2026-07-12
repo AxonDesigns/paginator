@@ -119,6 +119,7 @@ function renderDom(rendered, x, y, ctx) {
         width: `${rendered.box.width}px`,
         height: `${rendered.box.height}px`,
         ...(ctx.unselectable ? { userSelect: 'none' } : {}),
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
     });
     for (const line of rendered.lines) {
         for (const run of line.runs) {

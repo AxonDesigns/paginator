@@ -141,6 +141,7 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
     width: `${rendered.box.width}px`,
     height: `${rendered.box.height}px`,
     ...(ctx.unselectable ? { userSelect: 'none' as const } : {}),
+    ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
   })
 
   for (const line of rendered.lines) {

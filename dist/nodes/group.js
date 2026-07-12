@@ -348,7 +348,13 @@ function rowGroupSplit(node, width, availableHeight) {
 // boxes are already resolved relative to this SAME (originX, originY), not to the group's own box,
 // so recursion reuses the unchanged origin — see geometry.ts's translateRendered invariant.
 function renderDom(rendered, x, y, ctx) {
-    const groupEl = styledDiv({ left: `${x}px`, top: `${y}px`, width: `${rendered.box.width}px`, height: `${rendered.box.height}px` });
+    const groupEl = styledDiv({
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${rendered.box.width}px`,
+        height: `${rendered.box.height}px`,
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
+    });
     ctx.container.appendChild(groupEl);
     for (const child of rendered.children)
         renderNodeDom(child, ctx.originX, ctx.originY, ctx);

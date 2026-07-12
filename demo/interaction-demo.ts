@@ -109,13 +109,25 @@ export function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult,
   // include its children's visual content anyway. Positioned with `position: fixed` in viewport
   // coordinates so it tracks the cursor correctly regardless of scroll or which page it strays over.
   let dragPreviewEl: HTMLElement | null = null
+  // Logical (unscaled) offset between where the pointer grabbed the node and the node's own
+  // top-left — same coordinate space as `e.start`/`e.target.box` (both already divided by zoom,
+  // see attach-interactions.ts's getZoom usage). Converted to physical pixels on every position
+  // update by multiplying by the *current* zoom, so it stays correct even if the user zooms
+  // mid-drag rather than only reflecting the zoom level at dragstart.
   let dragPreviewOffsetX = 0
   let dragPreviewOffsetY = 0
 
   function positionPreview(clientX: number, clientY: number): void {
     if (dragPreviewEl === null) return
-    dragPreviewEl.style.left = `${clientX - dragPreviewOffsetX}px`
-    dragPreviewEl.style.top = `${clientY - dragPreviewOffsetY}px`
+    const currentZoom = zoom.getZoom()
+    // renderPreview() builds its copy at natural (unscaled) size — same as every other page
+    // element before the page-level `scale(zoom)` transform is applied (see render/zoom.ts). This
+    // preview lives outside that transformed subtree (appended to document.body so it can track
+    // the cursor via `position: fixed`), so it needs its own matching scale, or it renders at 1x
+    // regardless of the current zoom level while everything else on the page is zoomed.
+    dragPreviewEl.style.transform = `scale(${currentZoom})`
+    dragPreviewEl.style.left = `${clientX - dragPreviewOffsetX * currentZoom}px`
+    dragPreviewEl.style.top = `${clientY - dragPreviewOffsetY * currentZoom}px`
   }
 
   controller.on('dragstart', e => {
@@ -126,6 +138,7 @@ export function setupInteractionDemo(pdfDoc: Paginator, result: PaginatedResult,
       position: 'fixed',
       zIndex: '1000',
       opacity: '0.85',
+      transformOrigin: 'top left',
       // `boxShadow` is a non-starter here: it always follows the element's own rectangular box,
       // but renderPreview()'s wrapper has no border-radius of its own (it can't — it's generic
       // across every node type, not just a rounded container/table), so a plain box-shadow would

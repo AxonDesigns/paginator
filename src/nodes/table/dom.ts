@@ -161,6 +161,7 @@ export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: D
   // (replacing the 4 straight perimeter segments renderTableBorders would otherwise draw), and
   // `overflow: hidden` clips everything below to match.
   const wrapperStyle: Partial<CSSStyleDeclaration> = { left: `${x}px`, top: `${y}px`, width: `${rendered.box.width}px`, height: `${rendered.box.height}px` }
+  if (ctx.cursor !== undefined) wrapperStyle.cursor = ctx.cursor
   if (roundOuter) {
     const r = Math.max(0, Math.min(radius, rendered.box.width / 2, rendered.box.height / 2))
     wrapperStyle.border = `${outer.thickness}px ${outer.style} ${outer.color}`
@@ -181,7 +182,7 @@ export function renderTableNode(rendered: Rendered, x: number, y: number, ctx: D
     container = wrapperEl
     x = 0
     y = 0
-    ctx = { container, originX, originY, unselectable: ctx.unselectable }
+    ctx = { container, originX, originY, unselectable: ctx.unselectable, cursor: ctx.cursor }
   }
 
   // Shared by an ordinary 'cells' row AND a colSpan-aware 'header' row (see nodes.ts) — same

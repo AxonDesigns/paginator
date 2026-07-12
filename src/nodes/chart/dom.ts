@@ -16,6 +16,7 @@ export function renderChartNode(rendered: Rendered, x: number, y: number, ctx: D
     // this, a drag gesture starting on (or bubbling up through) a draggable chart can also select
     // its labels, exactly the problem text.ts's own `unselectable` threading solves for text nodes.
     ...(ctx.unselectable ? { userSelect: 'none' as const } : {}),
+    ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
   })
   ctx.container.appendChild(svg)
 }

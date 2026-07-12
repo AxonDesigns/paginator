@@ -13,6 +13,7 @@ export type DomRenderCtx = {
     originX: number;
     originY: number;
     unselectable: boolean;
+    cursor?: string;
 };
 export type PdfRenderCtx = {
     pdf: PdfContext;
@@ -52,5 +53,6 @@ export declare function naturalWidth(node: Node, availableWidth: number): number
 export declare function renderNodeDom(rendered: RenderedNode, originX: number, originY: number, ctx: {
     container: HTMLElement;
     unselectable: boolean;
+    cursor?: string;
 }): void;
 export declare function drawPdfNode(rendered: RenderedNode, originX: number, originY: number, pdf: PdfContext): Promise<void>;

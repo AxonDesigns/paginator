@@ -126,6 +126,7 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
     // gesture starting on (or bubbling up through) this text shouldn't also trigger native text
     // selection.
     ...(ctx.unselectable ? { userSelect: 'none' as const } : {}),
+    ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
   })
   const font = fontString(node)
 

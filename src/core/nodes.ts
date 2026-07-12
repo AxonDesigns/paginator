@@ -150,6 +150,18 @@ export type Interactive = {
    */
   droppable?: boolean
   /**
+   * Explicit CSS `cursor` value shown while hovering (or dragging) this node. Overrides the default
+   * that's otherwise resolved from `interactive`/`draggable`: `interactive: true` alone defaults to
+   * `'pointer'`, `interactive: true` + `draggable: true` defaults to `'grab'` — `droppable`-only
+   * nodes get no default (not obviously clickable) unless set here. Left unset on a plain
+   * (non-interactive) descendant of an interactive/cursor-setting node, the ANCESTOR's resolved
+   * cursor is what actually shows (DOM rendering is flat — see invariant #4 — so this can't rely on
+   * ordinary CSS inheritance; `core/behavior.ts`'s `renderNodeDom()` threads the resolved value down
+   * through `DomRenderCtx.cursor` instead), mirroring hit-test bubble-up: a more specific descendant
+   * wins if IT has an opinion, otherwise the nearest ancestor's applies.
+   */
+  cursor?: string
+  /**
    * Only meaningful when `draggable: true`. The type(s) this dragged item carries — checked
    * against a droppable node's `accepts` list to decide which drop zones are valid for it. A
    * single string is shorthand for a one-element list. Left unset, the drag is untyped and treated

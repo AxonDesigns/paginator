@@ -87,6 +87,8 @@ function renderDom(rendered, x, y, ctx) {
     // child's real painted content to match, not just the decorative background/border shape.
     if (needsClip)
         style.overflow = 'hidden';
+    if (ctx.cursor !== undefined)
+        style.cursor = ctx.cursor;
     const el = styledDiv(style);
     ctx.container.appendChild(el);
     if (needsClip) {
@@ -105,7 +107,7 @@ function renderDom(rendered, x, y, ctx) {
         // subtracted back out here to keep the child's position identical whether or not this container
         // happens to also have a borderRadius.
         const borderPx = node.border !== undefined ? node.border.thickness ?? 1 : 0;
-        renderNodeDom(rendered.child, ctx.originX - x - borderPx, ctx.originY - y - borderPx, { container: el, unselectable: ctx.unselectable });
+        renderNodeDom(rendered.child, ctx.originX - x - borderPx, ctx.originY - y - borderPx, { container: el, unselectable: ctx.unselectable, cursor: ctx.cursor });
         return;
     }
     // Same convention as group/table: rendered.child.box is already resolved relative to this SAME

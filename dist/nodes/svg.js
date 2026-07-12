@@ -51,6 +51,7 @@ function renderDom(rendered, x, y, ctx) {
         width: `${rendered.box.width}px`,
         height: `${rendered.box.height}px`,
         ...(node.opacity !== undefined ? { opacity: `${node.opacity}` } : {}),
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
     });
     // Overridden so the box (not the markup's own width/height attributes) drives the outer size —
     // the root's own viewBox + default preserveAspectRatio ('xMidYMid meet') then contain-fits the

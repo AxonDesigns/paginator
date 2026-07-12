@@ -92,6 +92,10 @@ export function attachInteractions(result, host, options = {}) {
                 return;
             dragActive = true;
             didDrag = true;
+            // `host` already holds pointer capture for this gesture (see onPointerDown), so setting its
+            // cursor directly is reliable regardless of which page element the pointer is visually over —
+            // reverted in endDrag() below once the gesture finishes (drop or cancel).
+            host.style.cursor = 'grabbing';
             // Resolved at the ORIGINAL down position/page, matching `start` — not wherever the pointer
             // happens to be once it's crossed the drag threshold.
             const startOverDropTarget = hitTestDroppable(registry, dragCandidate.startPageNumber, dragCandidate.startPagePos.x, dragCandidate.startPagePos.y, dragCandidate.dragTypes);
@@ -132,6 +136,9 @@ export function attachInteractions(result, host, options = {}) {
                 const dropTarget = releasePos === null ? null : hitTestDroppable(registry, releasePos.pageNumber, releasePos.x, releasePos.y, dragCandidate.dragTypes);
                 emit('drop', { type: 'drop', target: dragCandidate.target, dropTarget, start: dragCandidate.startPagePos, current, delta, sourceEvent: e });
             }
+            // Clears the inline override set at dragstart — host's cursor immediately reverts to whatever
+            // it'd otherwise resolve to (per-node `cursor` rendering, see behavior.ts's renderNodeDom).
+            host.style.cursor = '';
         }
         dragCandidate = null;
         dragActive = false;

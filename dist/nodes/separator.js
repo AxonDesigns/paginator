@@ -54,6 +54,8 @@ function renderDom(rendered, x, y, ctx) {
             borderLeftStyle: style,
             borderLeftColor: color,
         });
+    if (ctx.cursor !== undefined)
+        el.style.cursor = ctx.cursor;
     ctx.container.appendChild(el);
 }
 // pdfkit has no native border-style keyword, so 'dashed'/'dotted' are approximated by stroking the

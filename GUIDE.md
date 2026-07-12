@@ -1394,6 +1394,7 @@ hit registry.
 | `accepts?: string[]` | which drag types this zone matches | Only meaningful with `droppable: true`. Unset = accepts anything, including untyped drags |
 | `metadata?: Record<string, unknown>` | nothing — never read by paginator itself | Arbitrary caller data, along for the ride on `node`. Read it back off `InteractionTarget.node.metadata` in any event handler to recover app-specific context (e.g. a record id) without a side-table keyed by node identity |
 | `id?: string` | nothing directly — resolved via `findById()` | No uniqueness enforced (caller's responsibility). Splitting clones a node's continuation onto each new page, so one authored node with an `id` can produce several matches; `findById()` always returns an array, ordered by page |
+| `cursor?: string` | the CSS `cursor` shown on hover | Explicit override. Left unset, defaults to `'pointer'` for `interactive: true`, `'grab'` for `interactive: true` + `draggable: true`, and nothing for `droppable`-only. A non-opinionated descendant inherits its nearest interactive/cursor-setting ancestor's resolved value at render time (see "Mechanics worth knowing" below) |
 
 ### Bubble-up resolution — the core mechanism
 `hitTest()`/`hitTestDroppable()` (`src/interaction/hit-registry.ts`) find the deepest geometric
@@ -1453,6 +1454,14 @@ see invariant #4 for why a raw DOM element reference wouldn't work here.
   descendant's own flags) gets `user-select: none` (`shadow-dom.ts`'s `renderNode` threads a
   `draggableAncestor` boolean down through recursion) — otherwise starting a drag by pressing on a
   bubbling-up plain child would also trigger native text selection.
+- Cursor is threaded the same way, via `DomRenderCtx.cursor` (a string instead of an OR'd bool):
+  `renderNodeDom()` resolves each node's own `cursor` (explicit field, else a default from
+  `interactive`/`draggable`, see the Flags table above), falling back to the ambient value threaded
+  down from its nearest ancestor when it has no opinion of its own — necessary because DOM rendering
+  is flat (invariant #4), so plain CSS `cursor` inheritance can't do this on its own. While a drag
+  gesture is actually in progress, `attach-interactions.ts` additionally forces `host`'s own cursor
+  to `'grabbing'` for the whole gesture (host already holds pointer capture — see below), clearing it
+  back to the per-node resolution on `dragend`/cancel.
 - `resolvePagePos()` loops all page elements calling `getBoundingClientRect()` per relevant pointer
   event — fine at realistic page counts; flagged as the first thing to optimize (cache +
   `ResizeObserver`) if a very long document makes it a hot path. This is *not* a violation of "no

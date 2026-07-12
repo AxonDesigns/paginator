@@ -65,6 +65,7 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
           borderLeftColor: color,
         },
   )
+  if (ctx.cursor !== undefined) el.style.cursor = ctx.cursor
   ctx.container.appendChild(el)
 }
 
