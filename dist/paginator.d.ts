@@ -19,6 +19,13 @@ export declare class Paginator {
     listRegisteredFonts(): RegisteredFont[];
     paginate(doc: PageDef): PaginatedResult;
     mount(result: PaginatedResult, host: HTMLElement): void;
+    /**
+     * Tears down a host previously passed to `mount()` — removes the window-level print-mode listeners
+     * `mount()` attaches and clears the shadow root. Call this from a framework wrapper's own unmount
+     * path when discarding `host` for good; re-`mount()`ing the SAME host again already self-cleans its
+     * own prior listeners, so this is only needed when `host` itself won't be reused.
+     */
+    unmount(host: HTMLElement): void;
     renderPreview(rendered: RenderedNode): HTMLElement;
     createZoomController(host: HTMLElement, options?: ZoomOptions): ZoomController;
     attachInteractions(result: PaginatedResult, host: HTMLElement, options?: AttachInteractionsOptions): InteractionController;

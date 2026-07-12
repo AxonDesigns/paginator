@@ -66,6 +66,27 @@ export type ZoomController = {
   zoomOut(): number
   /** Restores the zoom factor to `initial`. Returns the target value. */
   reset(): number
+  /**
+   * Computes the zoom factor that fits `pageWidth` (a page's own unscaled px width, e.g.
+   * `PaginatedResult.pageSize.width`) within `availableWidth` (defaults to `host.clientWidth` — pass
+   * this explicitly if `host` isn't itself the exact width you want to fit within, e.g. it still has
+   * its own padding/toolbar chrome) and animates to it, clamped to [min, max] same as setZoom().
+   * Returns the target value.
+   */
+  fitWidth(pageWidth: number, availableWidth?: number): number
+  /**
+   * Re-measures `host`'s natural (unscaled) height. Call this after mounting different content into
+   * `host` (e.g. a re-paginated document) while this same controller is still in use — `naturalHeight`
+   * is otherwise captured once at creation and goes stale, which throws off the below-100%-zoom
+   * height compensation (see this file's header comment).
+   */
+  refresh(): void
+  /**
+   * Cancels any in-flight zoom animation. Call when unmounting/discarding `host` while a zoom change
+   * might still be animating, so the animation frame loop doesn't keep writing styles to a detached
+   * element.
+   */
+  destroy(): void
 }
 
 // Walks up from `host` for the nearest actually-scrollable overflow ancestor (the container whose
@@ -100,9 +121,10 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
     return Math.min(max, Math.max(min, value))
   }
 
-  // offsetHeight is a layout property, unaffected by transform — safe to read once, at any zoom
-  // level, as `host`'s permanent unscaled natural height (its shadow-rendered content's real size).
-  const naturalHeight = host.offsetHeight
+  // offsetHeight is a layout property, unaffected by transform — safe to read at any zoom level, as
+  // `host`'s current unscaled natural height (its shadow-rendered content's real size). Reassigned by
+  // refresh() below when that content changes after this controller was created.
+  let naturalHeight = host.offsetHeight
 
   host.style.transformOrigin = 'top center'
   host.style.overflow = 'visible'
@@ -149,11 +171,36 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
     return target
   }
 
+  function fitWidth(pageWidth: number, availableWidth?: number): number {
+    return setZoom((availableWidth ?? host.clientWidth) / pageWidth)
+  }
+
+  // Cancels any in-flight animation first — otherwise the next in-flight frame would immediately
+  // overwrite the freshly re-measured height with a stale-naturalHeight-derived one.
+  function refresh(): void {
+    if (animationFrame !== null) {
+      cancelAnimationFrame(animationFrame)
+      animationFrame = null
+    }
+    naturalHeight = host.offsetHeight
+    host.style.height = `${naturalHeight * Math.min(1, zoom)}px`
+  }
+
+  function destroy(): void {
+    if (animationFrame !== null) {
+      cancelAnimationFrame(animationFrame)
+      animationFrame = null
+    }
+  }
+
   return {
     getZoom: () => zoom,
     setZoom,
     zoomIn: () => setZoom(zoom + step),
     zoomOut: () => setZoom(zoom - step),
     reset: () => setZoom(initial),
+    fitWidth,
+    refresh,
+    destroy,
   }
 }

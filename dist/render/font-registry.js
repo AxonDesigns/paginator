@@ -7,11 +7,19 @@
 //
 // The registry itself is an explicit `FontRegistry` map owned by a `Paginator` instance (see
 // paginator.ts), not module state — two Paginators registering different files under the same
-// family/weight/style must not clobber each other's PDF output. `document.fonts.add()` below is the
-// one part of this that stays unavoidably page-global (no per-instance equivalent exists in the
-// FontFace API): on-screen measurement/painting still shares whichever file the browser last
-// resolved for a given family/weight/style across every instance, but PDF embedding reads bytes
-// straight from the owning instance's own map, so that part is correctly isolated.
+// family/weight/style must not clobber each other's PDF output. PDF embedding reads bytes straight
+// from the owning instance's own map, so that part was always correctly isolated. On-screen
+// measurement/painting is trickier: `document.fonts` (the CSS Font Loading API's `FontFaceSet`) is
+// one page-global set with no per-instance or per-shadow-root equivalent in the spec — a browser
+// platform limitation, not something pretext or pdfkit impose (pdfkit never touches document.fonts at
+// all; pretext just calls canvas.measureText() against whatever's currently loaded, same as any DOM
+// text render). Left alone, two Paginator instances registering DIFFERENT files under the identical
+// (family, weight, style) key would have on-screen rendering silently share whichever FontFace the
+// browser's own resolution order picks, for every instance, regardless of which one actually
+// registered it. registerFont() below closes that gap by registering each FontFace under a
+// per-instance-unique ALIAS rather than the literal family name — see resolveFontFamilyForRendering()
+// and withActiveFontRegistry() — so two instances' files can never collide in document.fonts by
+// construction, each instance's own alias always resolves to its own file.
 function registryKey(family, weight, style) {
     return `${family.trim().toLowerCase()}|${weight}|${style}`;
 }
@@ -37,12 +45,40 @@ function parseFontFamilyStack(fontFamily) {
         .map(name => name.trim().replace(/^["']|["']$/g, ''))
         .filter(name => name.length > 0);
 }
+// Assigns each distinct FontRegistry (i.e. each Paginator instance) a stable id the first time it
+// registers anything, purely so generated aliases below can never collide across instances — WeakMap
+// keyed by the registry itself rather than stored ON it, since FontRegistry is a plain Map with no
+// room of its own for bookkeeping fields.
+const registryInstanceIds = new WeakMap();
+let nextRegistryInstanceId = 0;
+let nextAliasSequence = 0;
+function nextAliasFor(registry) {
+    let instanceId = registryInstanceIds.get(registry);
+    if (instanceId === undefined) {
+        instanceId = nextRegistryInstanceId++;
+        registryInstanceIds.set(registry, instanceId);
+    }
+    // Deliberately a plain alphanumeric token (no spaces/punctuation) so it never needs CSS quoting
+    // wherever it's interpolated into a font-family stack below.
+    return `pgtrfont${instanceId}x${nextAliasSequence++}`;
+}
+function cssFamilyToken(name) {
+    return /[\s,"']/.test(name) ? `"${name.replace(/"/g, '\\"')}"` : name;
+}
 /**
- * Fetches `url`, registers a FontFace via document.fonts.add() + .load() (so canvas measurement AND
- * on-screen DOM rendering use this exact file — the same guarantee ready() already documents for
- * document.fonts.ready), and retains the raw bytes in `registry` for generatePdf() to later embed
- * identically. Must resolve before paginate() is called with text using this family/weight/style.
- * Idempotent by (family, weight, style) — calling again re-fetches and replaces the entry.
+ * Fetches `url`, registers a FontFace under a per-instance-unique alias via document.fonts.add() +
+ * .load() (so canvas measurement AND on-screen DOM rendering use this exact file — the same guarantee
+ * ready() already documents for document.fonts.ready), and retains the raw bytes in `registry` for
+ * generatePdf() to later embed identically. Must resolve before paginate() is called with text using
+ * this family/weight/style. Idempotent by (family, weight, style) — calling again re-fetches, mints a
+ * fresh alias, and replaces the entry.
+ *
+ * Registering under an alias rather than the literal `family` (see this file's header comment) means
+ * on-screen resolution needs an extra step: resolveFontFamilyForRendering()/withActiveFontRegistry()
+ * below rewrite a TextNode/RichTextNode/Watermark's literal fontFamily to this instance's own alias at
+ * measurement/render time, transparently to the document author (who never sees or writes the alias).
+ * PDF embedding is unaffected either way — it reads `bytes` straight from `registry`, never touching
+ * document.fonts.
  *
  * Accepts .ttf/.otf/.woff/.woff2 — pdfkit's bundled fontkit decodes all four to real sfnt glyph data
  * before embedding (unlike the previous pdf-lib backend, which wrote registerFont()'s bytes verbatim
@@ -57,10 +93,61 @@ export async function registerFont(registry, options) {
     }
     const buffer = await response.arrayBuffer();
     const bytes = new Uint8Array(buffer);
-    const fontFace = new FontFace(options.family, buffer, { weight: String(weight), style });
+    const alias = nextAliasFor(registry);
+    const fontFace = new FontFace(alias, buffer, { weight: String(weight), style });
     await fontFace.load();
     document.fonts.add(fontFace);
-    registry.set(registryKey(options.family, weight, style), { family: options.family, weight, style, bytes });
+    registry.set(registryKey(options.family, weight, style), { family: options.family, weight, style, bytes, alias });
+}
+// activeFontRegistry is set/cleared by withActiveFontRegistry() around a single SYNCHRONOUS call —
+// paginate()/mount()/renderPreview() never await internally, so there's no window for a second,
+// concurrent call to observe or clobber this module-level variable mid-run. Deliberately NOT used by
+// generatePdf() (which IS async, awaiting per-node draw calls) — that path already receives its own
+// registry explicitly via PdfContext.fonts and calls resolveFontFamilyForRendering() directly instead,
+// avoiding any risk of two concurrent generatePdf() calls (e.g. Promise.all across instances)
+// interleaving through shared module state.
+let activeFontRegistry = null;
+/** Runs `fn` (synchronously) with `registry` as the "active" registry resolveActiveFontFamily() below
+ *  consults — see that function and activeFontRegistry's own comment for why this is scoped to
+ *  synchronous callers only. */
+export function withActiveFontRegistry(registry, fn) {
+    const previous = activeFontRegistry;
+    activeFontRegistry = registry;
+    try {
+        return fn();
+    }
+    finally {
+        activeFontRegistry = previous;
+    }
+}
+/**
+ * Rewrites a CSS font-family stack (e.g. `"Inter, Arial, sans-serif"`) so any comma-separated name
+ * registered on `registry` at this (weight, style) resolves to THAT registry's own file — prepending
+ * its alias ahead of the literal name — rather than whichever file document.fonts happens to have most
+ * recently loaded under the same bare name from a different Paginator instance (see this file's header
+ * comment). Falls through to `fontFamily` completely unchanged for any name that was never registered
+ * on `registry` at this exact (weight, style) — including `registry === null`, e.g. no Paginator
+ * instance is involved at all.
+ */
+export function resolveFontFamilyForRendering(registry, fontFamily, weight, style) {
+    if (registry === null)
+        return fontFamily;
+    const normalizedWeight = normalizeFontWeight(weight);
+    const normalizedStyle = style ?? 'normal';
+    return parseFontFamilyStack(fontFamily)
+        .map(name => {
+        const found = registry.get(registryKey(name, normalizedWeight, normalizedStyle));
+        return found === undefined ? cssFamilyToken(name) : `${cssFamilyToken(found.alias)}, ${cssFamilyToken(name)}`;
+    })
+        .join(', ');
+}
+/** Ambient-registry convenience for the synchronous DOM/measurement call sites (text.ts, rich-text.ts,
+ *  shadow-dom.ts's watermark painting) that can't take an explicit FontRegistry parameter without
+ *  threading it through every NodeTypeDefinition signature — see withActiveFontRegistry(). Resolves to
+ *  `fontFamily` unchanged outside of a withActiveFontRegistry() call (e.g. the free `paginate`/`mount`
+ *  functions called directly, with no owning Paginator instance in the picture). */
+export function resolveActiveFontFamily(fontFamily, weight, style) {
+    return resolveFontFamilyForRendering(activeFontRegistry, fontFamily, weight, style);
 }
 /** Resolves a TextNode's `fontFamily` (a full CSS stack) + weight/style against `registry`, trying each family in order. */
 export function lookupFont(registry, fontFamily, weight, style) {

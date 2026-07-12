@@ -10,10 +10,15 @@ import { registerNode } from "../core/behavior.js";
 import { styledDiv } from "../render/shadow-dom.js";
 import { pxToPt, resolvePdfColor } from "../render/pdf-render.js";
 import { measureFontMetricsPx, resolveTextFont, textNodeFontString } from "../render/pdf-fonts.js";
+import { resolveActiveFontFamily } from "../render/font-registry.js";
+// resolveActiveFontFamily() substitutes the current Paginator instance's own per-instance font alias
+// (see font-registry.ts) when this family/weight/style was registerFont()-ed on it — outside of a
+// paginate()/mount() call (or when nothing was registered) it's a no-op, returning fontFamily as-is.
 function fontString(node) {
     const style = node.fontStyle === 'italic' ? 'italic ' : '';
     const weight = node.fontWeight ?? 400;
-    return `${style}${weight} ${node.fontSize}px ${node.fontFamily}`;
+    const family = resolveActiveFontFamily(node.fontFamily, weight, node.fontStyle);
+    return `${style}${weight} ${node.fontSize}px ${family}`;
 }
 function preparedFor(node) {
     if (node.__prepared)

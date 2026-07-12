@@ -14,6 +14,7 @@ import { styledDiv } from '../render/shadow-dom.ts'
 import { BASE_ELEMENT_STYLE } from '../render/reset.ts'
 import { pxToPt, resolvePdfColor } from '../render/pdf-render.ts'
 import { measureFontMetricsPx, richTextNodeFontString, resolveRunFont } from '../render/pdf-fonts.ts'
+import { resolveActiveFontFamily } from '../render/font-registry.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'richText' }>
 
@@ -22,11 +23,13 @@ type Rendered = Extract<RenderedNode, { type: 'richText' }>
 // force a wrap, same trick a binary-search-for-natural-width caller would use.
 const UNCONSTRAINED_WIDTH = 1_000_000
 
+// See text.ts's fontString() for what resolveActiveFontFamily() does and when it's a no-op.
 function runFontString(run: RichTextRun, node: RichTextNode): string {
   const style = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic ' : ''
   const weight = run.fontWeight ?? node.fontWeight ?? 400
   const size = run.fontSize ?? node.fontSize
-  const family = run.fontFamily ?? node.fontFamily
+  const rawFamily = run.fontFamily ?? node.fontFamily
+  const family = resolveActiveFontFamily(rawFamily, weight, run.fontStyle ?? node.fontStyle)
   return `${style}${weight} ${size}px ${family}`
 }
 

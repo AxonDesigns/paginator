@@ -34,7 +34,7 @@ import type { ImageNode, LineStyle, ObjectFit, Watermark } from '../core/nodes.t
 import { drawPdfNode } from '../core/behavior.ts'
 import { resolveWatermarkInstances } from '../core/watermark-layout.ts'
 import { measureTextWidthPx } from './text-measure.ts'
-import { DEFAULT_FONT_FAMILY, normalizeFontWeight } from './font-registry.ts'
+import { DEFAULT_FONT_FAMILY, normalizeFontWeight, resolveFontFamilyForRendering } from './font-registry.ts'
 import type { FontRegistry, FontStyle, RegisteredFont } from './font-registry.ts'
 import { measureFontMetricsPx, resolveFontOrThrow } from './pdf-fonts.ts'
 
@@ -235,10 +235,19 @@ export async function embedImage(ctx: PdfContext, node: Pick<ImageNode, 'src' | 
 // drawn underneath it. No line-wrapping/pagination involved: a single measured line (text) or
 // explicit box (image), repeated per resolveWatermarkInstances() when tiled. ----
 
-function watermarkFontCss(watermark: Extract<Watermark, { kind: 'text' }>): string {
+// Resolved via `ctx.fonts` explicitly (not the ambient withActiveFontRegistry() text.ts/shadow-dom.ts
+// use) since generatePdf() is async and awaits per-node draw calls — an ambient module-level "active
+// registry" would risk two concurrent generatePdf() calls (e.g. Promise.all across Paginator
+// instances) interleaving and observing each other's registry mid-run. See font-registry.ts's header
+// comment for why this rasterized-text canvas path needs per-instance resolution at all (only the
+// default, non-selectable watermark path rasterizes via canvas — same document.fonts dependency as any
+// canvas text; the `selectable: true` path's resolveWatermarkFontName() below reads registry bytes
+// directly and was already correctly isolated).
+function watermarkFontCss(ctx: PdfContext, watermark: Extract<Watermark, { kind: 'text' }>): string {
   const style = watermark.fontStyle === 'italic' ? 'italic ' : ''
   const weight = watermark.fontWeight ?? 700
-  return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`
+  const family = resolveFontFamilyForRendering(ctx.fonts, watermark.fontFamily ?? DEFAULT_FONT_FAMILY, weight, watermark.fontStyle)
+  return `${style}${weight} ${watermark.fontSize ?? 72}px ${family}`
 }
 
 function resolveWatermarkFontName(ctx: PdfContext, watermark: Extract<Watermark, { kind: 'text' }>): string {
@@ -297,7 +306,7 @@ async function drawWatermark(ctx: PdfContext, watermark: Watermark, pageWidthPx:
     return
   }
 
-  const fontCss = watermarkFontCss(watermark)
+  const fontCss = watermarkFontCss(ctx, watermark)
   const widthPx = measureTextWidthPx(watermark.text, fontCss)
   const color = resolvePdfColor(watermark.color ?? '#000000')
   const { ascentPx, descentPx } = measureFontMetricsPx(fontCss)

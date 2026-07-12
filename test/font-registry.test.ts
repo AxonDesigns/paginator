@@ -10,7 +10,7 @@
 // constraint test/behavior.test.ts's header comment documents for the built-in node types.
 
 import { describe, expect, test } from 'bun:test'
-import { listRegisteredFonts, lookupFont } from '../src/render/font-registry.ts'
+import { listRegisteredFonts, lookupFont, resolveActiveFontFamily, resolveFontFamilyForRendering, withActiveFontRegistry } from '../src/render/font-registry.ts'
 import type { FontRegistry, RegisteredFont } from '../src/render/font-registry.ts'
 import { resolveTextFont } from '../src/render/pdf-fonts.ts'
 import type { PdfContext } from '../src/render/pdf-render.ts'
@@ -21,8 +21,8 @@ import { text } from '../src/core/nodes.ts'
 // registerFont() call would each land on this same key in their own, separate Map.
 const INTER_400_NORMAL_KEY = 'inter|400|normal'
 
-function fakeFont(tag: string): RegisteredFont {
-  return { family: 'Inter', weight: 400, style: 'normal', bytes: new TextEncoder().encode(tag) }
+function fakeFont(tag: string, alias = `alias-${tag}`): RegisteredFont {
+  return { family: 'Inter', weight: 400, style: 'normal', bytes: new TextEncoder().encode(tag), alias }
 }
 
 function decode(bytes: Uint8Array): string {
@@ -105,5 +105,80 @@ describe('unregistered fontFamily resolution (Standard-14 fallback vs. throw)', 
     const ctx = makeFakePdfContext(new Map(), [])
 
     expect(() => resolveTextFont(ctx, node)).toThrow(/no font registered for family "Comic Sans MS"/)
+  })
+})
+
+// document.fonts (the CSS Font Loading API's FontFaceSet) is one page-global set with no per-instance
+// equivalent — registerFont() itself (untestable here, see this file's header comment) works around
+// that by registering each FontFace under a per-instance-unique alias rather than the literal family
+// name. These tests exercise the resolution half of that mechanism directly against hand-built
+// registries carrying distinct aliases, standing in for what two real registerFont() calls on two
+// different Paginator instances would produce.
+describe('resolveFontFamilyForRendering() — per-instance alias substitution', () => {
+  test('a registered (family, weight, style) resolves to "alias, family" — alias tried first, literal name kept as fallback', () => {
+    const registry: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    expect(resolveFontFamilyForRendering(registry, 'Inter', 400, 'normal')).toBe('pgtrfont0x0, Inter')
+  })
+
+  test('only the registered entry in a multi-name stack gets aliased — the rest pass through unchanged', () => {
+    const registry: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    expect(resolveFontFamilyForRendering(registry, 'Inter, Arial, sans-serif', 400, 'normal')).toBe('pgtrfont0x0, Inter, Arial, sans-serif')
+  })
+
+  test('a weight/style that was never registered falls through unchanged, even when the family name matches', () => {
+    const registry: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    expect(resolveFontFamilyForRendering(registry, 'Inter', 700, 'normal')).toBe('Inter')
+    expect(resolveFontFamilyForRendering(registry, 'Inter', 400, 'italic')).toBe('Inter')
+  })
+
+  test('a null registry (no owning Paginator instance) leaves fontFamily completely unchanged', () => {
+    expect(resolveFontFamilyForRendering(null, 'Inter, Arial', 400, 'normal')).toBe('Inter, Arial')
+  })
+
+  test('a multi-word family name is re-quoted in the fallback position, matching valid CSS font-family syntax', () => {
+    const registry: FontRegistry = new Map()
+    expect(resolveFontFamilyForRendering(registry, '"Source Serif 4", Georgia', 400, 'normal')).toBe('"Source Serif 4", Georgia')
+  })
+})
+
+describe('withActiveFontRegistry() / resolveActiveFontFamily() — the ambient hook text.ts/rich-text.ts/shadow-dom.ts consult', () => {
+  test('resolves against whichever registry is currently active', () => {
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    const registryB: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('B', 'pgtrfont1x0')]])
+
+    withActiveFontRegistry(registryA, () => {
+      expect(resolveActiveFontFamily('Inter', 400, 'normal')).toBe('pgtrfont0x0, Inter')
+    })
+    withActiveFontRegistry(registryB, () => {
+      expect(resolveActiveFontFamily('Inter', 400, 'normal')).toBe('pgtrfont1x0, Inter')
+    })
+  })
+
+  test('two instances\' calls never leak into each other, run back to back — the exact scenario a framework wrapper mounting multiple previews hits', () => {
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    const registryB: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('B', 'pgtrfont1x0')]])
+    const seenByA = withActiveFontRegistry(registryA, () => resolveActiveFontFamily('Inter', 400, 'normal'))
+    const seenByB = withActiveFontRegistry(registryB, () => resolveActiveFontFamily('Inter', 400, 'normal'))
+
+    expect(seenByA).toBe('pgtrfont0x0, Inter')
+    expect(seenByB).toBe('pgtrfont1x0, Inter')
+  })
+
+  test('restores the previous active registry after returning, including across nested calls', () => {
+    const registryA: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('A', 'pgtrfont0x0')]])
+    const registryB: FontRegistry = new Map([[INTER_400_NORMAL_KEY, fakeFont('B', 'pgtrfont1x0')]])
+
+    withActiveFontRegistry(registryA, () => {
+      expect(resolveActiveFontFamily('Inter', 400, 'normal')).toBe('pgtrfont0x0, Inter')
+      withActiveFontRegistry(registryB, () => {
+        expect(resolveActiveFontFamily('Inter', 400, 'normal')).toBe('pgtrfont1x0, Inter')
+      })
+      // Back to registryA after the nested call returns, not left on registryB or cleared to null.
+      expect(resolveActiveFontFamily('Inter', 400, 'normal')).toBe('pgtrfont0x0, Inter')
+    })
+  })
+
+  test('outside any withActiveFontRegistry() call, resolves to fontFamily unchanged (no active registry)', () => {
+    expect(resolveActiveFontFamily('Inter, Arial', 400, 'normal')).toBe('Inter, Arial')
   })
 })

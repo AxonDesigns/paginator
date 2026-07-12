@@ -20,7 +20,14 @@ import { renderNodeDom } from "../core/behavior.js";
 import { resolveWatermarkInstances } from "../core/watermark-layout.js";
 import { BASE_ELEMENT_STYLE } from "./reset.js";
 import { measureTextWidthPx } from "./text-measure.js";
-import { DEFAULT_FONT_FAMILY } from "./font-registry.js";
+import { DEFAULT_FONT_FAMILY, resolveActiveFontFamily } from "./font-registry.js";
+// mount() re-binds fresh window/matchMedia listeners on every call (a re-paginated doc gets a fresh
+// wrapper/pageEls each time) — without tracking them per-host, a consumer that re-mounts repeatedly
+// (e.g. a framework wrapper re-running mount() whenever its `doc` prop changes) would accumulate an
+// unbounded number of `beforeprint`/`afterprint`/`matchMedia('print')` listeners on `window`, since
+// nothing else ever removes them. Keyed by `host` (not module state) so multiple independently
+// mounted hosts on the same page don't clobber each other's cleanup.
+const printModeCleanups = new WeakMap();
 export function styledDiv(style) {
     const el = document.createElement('div');
     Object.assign(el.style, BASE_ELEMENT_STYLE, style);
@@ -34,7 +41,8 @@ export function styledDiv(style) {
 function watermarkFontCss(watermark) {
     const style = watermark.fontStyle === 'italic' ? 'italic ' : '';
     const weight = watermark.fontWeight ?? 700;
-    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`;
+    const family = resolveActiveFontFamily(watermark.fontFamily ?? DEFAULT_FONT_FAMILY, weight, watermark.fontStyle);
+    return `${style}${weight} ${watermark.fontSize ?? 72}px ${family}`;
 }
 function renderWatermark(watermark, pageWidth, pageHeight, container) {
     const opacity = watermark.opacity ?? 0.15;
@@ -193,14 +201,32 @@ export function mount(result, host) {
         if (page.watermark !== null)
             renderWatermark(page.watermark, pageSize.width, pageSize.height, pageEl);
     }
-    // Not deduped across repeated mount() calls, same caveat as attachInteractions — each call binds
-    // fresh listeners to its own wrapper/pageEls; stale listeners from a prior mount() become no-ops
-    // once their closed-over elements are detached, but aren't removed. Fine for this library's
-    // call-mount-once-or-rarely usage; a caller re-paginating in a hot loop would want to track and
-    // remove these itself.
+    // Tear down the previous call's listeners (if any) before attaching this call's — see
+    // printModeCleanups' header comment. Safe to call unconditionally; a no-op on first mount().
+    printModeCleanups.get(host)?.();
     const mql = window.matchMedia('print');
     const onPrint = () => applyPrintMode(wrapper, pageEls, mql.matches);
+    const onBeforePrint = () => applyPrintMode(wrapper, pageEls, true);
+    const onAfterPrint = () => applyPrintMode(wrapper, pageEls, false);
     mql.addEventListener('change', onPrint);
-    window.addEventListener('beforeprint', () => applyPrintMode(wrapper, pageEls, true));
-    window.addEventListener('afterprint', () => applyPrintMode(wrapper, pageEls, false));
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+    printModeCleanups.set(host, () => {
+        mql.removeEventListener('change', onPrint);
+        window.removeEventListener('beforeprint', onBeforePrint);
+        window.removeEventListener('afterprint', onAfterPrint);
+    });
+}
+/**
+ * Tears down a host previously passed to `mount()`: removes the window-level print-mode listeners
+ * `mount()` attaches and clears the shadow root's content. Call this from a framework wrapper's own
+ * unmount/cleanup path (e.g. a React effect's cleanup, Vue's `onUnmounted`, a Svelte action's
+ * `destroy`) — re-running `mount()` on the SAME host already self-cleans its own prior listeners, so
+ * this is only needed when the host itself is being discarded for good. Safe to call on a host that
+ * was never mounted (no-op).
+ */
+export function unmount(host) {
+    printModeCleanups.get(host)?.();
+    printModeCleanups.delete(host);
+    host.shadowRoot?.replaceChildren();
 }

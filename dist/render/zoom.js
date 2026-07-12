@@ -68,9 +68,10 @@ export function createZoomController(host, options = {}) {
     function clamp(value) {
         return Math.min(max, Math.max(min, value));
     }
-    // offsetHeight is a layout property, unaffected by transform — safe to read once, at any zoom
-    // level, as `host`'s permanent unscaled natural height (its shadow-rendered content's real size).
-    const naturalHeight = host.offsetHeight;
+    // offsetHeight is a layout property, unaffected by transform — safe to read at any zoom level, as
+    // `host`'s current unscaled natural height (its shadow-rendered content's real size). Reassigned by
+    // refresh() below when that content changes after this controller was created.
+    let naturalHeight = host.offsetHeight;
     host.style.transformOrigin = 'top center';
     host.style.overflow = 'visible';
     host.style.transform = `scale(${zoom})`;
@@ -111,11 +112,33 @@ export function createZoomController(host, options = {}) {
         animationFrame = requestAnimationFrame(step);
         return target;
     }
+    function fitWidth(pageWidth, availableWidth) {
+        return setZoom((availableWidth ?? host.clientWidth) / pageWidth);
+    }
+    // Cancels any in-flight animation first — otherwise the next in-flight frame would immediately
+    // overwrite the freshly re-measured height with a stale-naturalHeight-derived one.
+    function refresh() {
+        if (animationFrame !== null) {
+            cancelAnimationFrame(animationFrame);
+            animationFrame = null;
+        }
+        naturalHeight = host.offsetHeight;
+        host.style.height = `${naturalHeight * Math.min(1, zoom)}px`;
+    }
+    function destroy() {
+        if (animationFrame !== null) {
+            cancelAnimationFrame(animationFrame);
+            animationFrame = null;
+        }
+    }
     return {
         getZoom: () => zoom,
         setZoom,
         zoomIn: () => setZoom(zoom + step),
         zoomOut: () => setZoom(zoom - step),
         reset: () => setZoom(initial),
+        fitWidth,
+        refresh,
+        destroy,
     };
 }

@@ -9,15 +9,18 @@ import { styledDiv } from "../render/shadow-dom.js";
 import { BASE_ELEMENT_STYLE } from "../render/reset.js";
 import { pxToPt, resolvePdfColor } from "../render/pdf-render.js";
 import { measureFontMetricsPx, richTextNodeFontString, resolveRunFont } from "../render/pdf-fonts.js";
+import { resolveActiveFontFamily } from "../render/font-registry.js";
 // No equivalent of measureNaturalWidth() exists for rich-inline, so a very wide probe width stands
 // in for "effectively unconstrained" — wide enough that no realistic document width would ever
 // force a wrap, same trick a binary-search-for-natural-width caller would use.
 const UNCONSTRAINED_WIDTH = 1_000_000;
+// See text.ts's fontString() for what resolveActiveFontFamily() does and when it's a no-op.
 function runFontString(run, node) {
     const style = (run.fontStyle ?? node.fontStyle) === 'italic' ? 'italic ' : '';
     const weight = run.fontWeight ?? node.fontWeight ?? 400;
     const size = run.fontSize ?? node.fontSize;
-    const family = run.fontFamily ?? node.fontFamily;
+    const rawFamily = run.fontFamily ?? node.fontFamily;
+    const family = resolveActiveFontFamily(rawFamily, weight, run.fontStyle ?? node.fontStyle);
     return `${style}${weight} ${size}px ${family}`;
 }
 function preparedFor(node) {

@@ -31,7 +31,7 @@ import PDFDocument from 'pdfkit/js/pdfkit.standalone.js';
 import { drawPdfNode } from "../core/behavior.js";
 import { resolveWatermarkInstances } from "../core/watermark-layout.js";
 import { measureTextWidthPx } from "./text-measure.js";
-import { DEFAULT_FONT_FAMILY, normalizeFontWeight } from "./font-registry.js";
+import { DEFAULT_FONT_FAMILY, normalizeFontWeight, resolveFontFamilyForRendering } from "./font-registry.js";
 import { measureFontMetricsPx, resolveFontOrThrow } from "./pdf-fonts.js";
 export const PX_TO_PT = 0.75; // 96dpi px -> 72dpi pt (96/72). A4 794x1123px * 0.75 = 595.5x842.25pt, matching the standard PDF A4 size.
 export function pxToPt(n) {
@@ -211,10 +211,19 @@ export async function embedImage(ctx, node, boxWidthPx, boxHeightPx) {
 // background, or chart's white surface elsewhere on the page can otherwise fully hide a watermark
 // drawn underneath it. No line-wrapping/pagination involved: a single measured line (text) or
 // explicit box (image), repeated per resolveWatermarkInstances() when tiled. ----
-function watermarkFontCss(watermark) {
+// Resolved via `ctx.fonts` explicitly (not the ambient withActiveFontRegistry() text.ts/shadow-dom.ts
+// use) since generatePdf() is async and awaits per-node draw calls — an ambient module-level "active
+// registry" would risk two concurrent generatePdf() calls (e.g. Promise.all across Paginator
+// instances) interleaving and observing each other's registry mid-run. See font-registry.ts's header
+// comment for why this rasterized-text canvas path needs per-instance resolution at all (only the
+// default, non-selectable watermark path rasterizes via canvas — same document.fonts dependency as any
+// canvas text; the `selectable: true` path's resolveWatermarkFontName() below reads registry bytes
+// directly and was already correctly isolated).
+function watermarkFontCss(ctx, watermark) {
     const style = watermark.fontStyle === 'italic' ? 'italic ' : '';
     const weight = watermark.fontWeight ?? 700;
-    return `${style}${weight} ${watermark.fontSize ?? 72}px ${watermark.fontFamily ?? DEFAULT_FONT_FAMILY}`;
+    const family = resolveFontFamilyForRendering(ctx.fonts, watermark.fontFamily ?? DEFAULT_FONT_FAMILY, weight, watermark.fontStyle);
+    return `${style}${weight} ${watermark.fontSize ?? 72}px ${family}`;
 }
 function resolveWatermarkFontName(ctx, watermark) {
     const weight = normalizeFontWeight(watermark.fontWeight ?? 700);
@@ -268,7 +277,7 @@ async function drawWatermark(ctx, watermark, pageWidthPx, pageHeightPx) {
         }
         return;
     }
-    const fontCss = watermarkFontCss(watermark);
+    const fontCss = watermarkFontCss(ctx, watermark);
     const widthPx = measureTextWidthPx(watermark.text, fontCss);
     const color = resolvePdfColor(watermark.color ?? '#000000');
     const { ascentPx, descentPx } = measureFontMetricsPx(fontCss);

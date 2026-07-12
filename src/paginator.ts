@@ -3,9 +3,11 @@
 // pagination/render/interaction pipeline as instance methods, so multiple independent Paginators can
 // run side by side without one instance's registerFont()/generatePdf() calls corrupting another's.
 //
-// Everything else this delegates to (paginate(), mount(), attachInteractions(), the hit-registry
-// functions) has no module-level state of its own — they're grouped here as methods purely for one
-// consistent object-oriented entry point, not because they need `this`.
+// Everything else this delegates to (attachInteractions(), the hit-registry functions) has no
+// module-level state of its own — they're grouped here as methods purely for one consistent
+// object-oriented entry point, not because they need `this`. paginate()/mount()/renderPreview() are
+// the one exception: they wrap their delegate call in withActiveFontRegistry(this.#fonts, ...) so
+// text/richText/watermark font resolution can see this instance's own registry — see font-registry.ts.
 //
 // Deliberately NOT part of this class: node builders (definePage/text/group/... — pure content
 // constructors with no state, see core/nodes.ts), setLocale/clearCache (re-exported directly from
@@ -17,13 +19,20 @@
 
 import type { PageDef } from './core/nodes.ts'
 import { paginate as corePaginate, type PaginatedResult } from './core/paginate.ts'
-import { mount as coreMount, renderPreview as coreRenderPreview } from './render/shadow-dom.ts'
+import { mount as coreMount, renderPreview as coreRenderPreview, unmount as coreUnmount } from './render/shadow-dom.ts'
 import { createZoomController as coreCreateZoomController, type ZoomController, type ZoomOptions } from './render/zoom.ts'
 import type { RenderedNode } from './core/geometry.ts'
 import { generatePdf as coreGeneratePdf, type PdfMetadata } from './render/pdf-render.ts'
 import { generateDocx as coreGenerateDocx, type DocxMetadata } from './export/docx-export.ts'
 import { generateXlsx as coreGenerateXlsx, type XlsxMetadata } from './export/xlsx-export.ts'
-import { listRegisteredFonts as coreListRegisteredFonts, registerFont as coreRegisterFont, type FontRegistry, type FontStyle, type RegisteredFont } from './render/font-registry.ts'
+import {
+  listRegisteredFonts as coreListRegisteredFonts,
+  registerFont as coreRegisterFont,
+  withActiveFontRegistry,
+  type FontRegistry,
+  type FontStyle,
+  type RegisteredFont,
+} from './render/font-registry.ts'
 import { attachInteractions as coreAttachInteractions } from './interaction/attach-interactions.ts'
 import {
   buildHitRegistry as coreBuildHitRegistry,
@@ -47,16 +56,33 @@ export class Paginator {
     return coreListRegisteredFonts(this.#fonts)
   }
 
+  // Wrapped in withActiveFontRegistry() so text/richText/watermark font resolution can transparently
+  // substitute this instance's own per-instance font alias wherever a family/weight/style was
+  // registerFont()-ed on it — see font-registry.ts's header comment for why that's needed at all
+  // (document.fonts is one page-global set, not scoped per Paginator instance). Safe here specifically
+  // because both calls are fully synchronous (no internal `await`), so there's no window for a second,
+  // concurrent Paginator's call to observe this instance's registry — unlike generatePdf(), which is
+  // async and threads its own registry through PdfContext.fonts explicitly instead.
   paginate(doc: PageDef): PaginatedResult {
-    return corePaginate(doc)
+    return withActiveFontRegistry(this.#fonts, () => corePaginate(doc))
   }
 
   mount(result: PaginatedResult, host: HTMLElement): void {
-    coreMount(result, host)
+    withActiveFontRegistry(this.#fonts, () => coreMount(result, host))
+  }
+
+  /**
+   * Tears down a host previously passed to `mount()` — removes the window-level print-mode listeners
+   * `mount()` attaches and clears the shadow root. Call this from a framework wrapper's own unmount
+   * path when discarding `host` for good; re-`mount()`ing the SAME host again already self-cleans its
+   * own prior listeners, so this is only needed when `host` itself won't be reused.
+   */
+  unmount(host: HTMLElement): void {
+    coreUnmount(host)
   }
 
   renderPreview(rendered: RenderedNode): HTMLElement {
-    return coreRenderPreview(rendered)
+    return withActiveFontRegistry(this.#fonts, () => coreRenderPreview(rendered))
   }
 
   createZoomController(host: HTMLElement, options: ZoomOptions = {}): ZoomController {

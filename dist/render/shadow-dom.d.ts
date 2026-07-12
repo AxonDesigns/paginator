@@ -14,3 +14,12 @@ export declare function styledDiv(style: Partial<CSSStyleDeclaration>): HTMLDivE
  */
 export declare function renderPreview(rendered: RenderedNode): HTMLElement;
 export declare function mount(result: PaginatedResult, host: HTMLElement): void;
+/**
+ * Tears down a host previously passed to `mount()`: removes the window-level print-mode listeners
+ * `mount()` attaches and clears the shadow root's content. Call this from a framework wrapper's own
+ * unmount/cleanup path (e.g. a React effect's cleanup, Vue's `onUnmounted`, a Svelte action's
+ * `destroy`) — re-running `mount()` on the SAME host already self-cleans its own prior listeners, so
+ * this is only needed when the host itself is being discarded for good. Safe to call on a host that
+ * was never mounted (no-op).
+ */
+export declare function unmount(host: HTMLElement): void;

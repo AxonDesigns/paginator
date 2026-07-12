@@ -130,16 +130,25 @@ every instance:
   collide on an unqualified gradient id.
 
 So two `Paginator`s run side by side safely: register different fonts on each, paginate/mount/
-generate PDFs from each independently, and neither instance's `generatePdf()` output picks up the
-other's fonts. The one caveat that isn't fixable from this side: `registerFont()` still calls
-`document.fonts.add()`, and `document.fonts` is the browser's own page-wide font registry with no
-per-instance equivalent — on-screen text (`paginate()`'s pretext measurement, `mount()`'s painted
-DOM) still resolves whichever file the browser most recently associated with a given family/weight/
-style, regardless of which instance registered it last. Only PDF **embedding** reads bytes straight
-from the owning instance's own map, so that part — the part that was actually silently corrupting
-output before this was fixed — is correctly isolated per instance. Similarly, `setLocale`/
-`clearCache` (re-exported straight from `@chenglou/pretext`) are that dependency's own process-global
-state; there's no instance-scoped equivalent to wrap without forking pretext itself.
+generate PDFs from each independently, and neither instance's output picks up the other's fonts —
+including on-screen text, not just PDF embedding. `document.fonts` (the CSS Font Loading API's
+`FontFaceSet`) is still the browser's own one page-wide set with no per-instance or per-shadow-root
+equivalent in the spec — that part is a genuine platform limitation, not a choice this library or
+pretext/pdfkit make (pdfkit never touches `document.fonts`; pretext just calls
+`canvas.measureText()` against whatever's currently loaded). `registerFont()` works around it rather
+than accepting it: each `FontFace` is registered under a per-instance-unique internal alias, never the
+literal family name, so two instances' files can never collide in `document.fonts` by construction.
+`paginate()`/`mount()`/`renderPreview()` transparently rewrite a `TextNode`/`RichTextNode`/
+`Watermark`'s literal `fontFamily` to the CALLING instance's own alias at measurement/render time (via
+`withActiveFontRegistry()`/`resolveActiveFontFamily()` in `font-registry.ts`) — the document author
+never sees or writes the alias, and PDF embedding is untouched by any of this (it already read bytes
+straight from the owning instance's own map). The one gap still open: chart title/axis/legend text
+(`ChartNode.fontFamily`) isn't yet routed through this alias resolution on the DOM/SVG preview path —
+two instances registering different files under the same family for CHART text specifically can still
+collide on screen; PDF chart text is unaffected (it already reads registry bytes directly, same as
+everything else in the PDF path). Similarly, `setLocale`/`clearCache` (re-exported straight from
+`@chenglou/pretext`) are that dependency's own process-global state; there's no instance-scoped
+equivalent to wrap without forking pretext itself.
 
 ## Public API reference (`src/index.ts`)
 
@@ -174,7 +183,8 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | Method | Signature | Notes |
 |---|---|---|
 | `paginate` | `(doc: PageDef) => PaginatedResult` | Pure, synchronous |
-| `mount` | `(result: PaginatedResult, host: HTMLElement) => void` | Creates/reuses an open Shadow DOM on `host`, replaces its content. Also wires up the `@page` size/margin rule and print-mode CSS so a plain `window.print()` against a mounted host prints correctly — see "Printing" below |
+| `mount` | `(result: PaginatedResult, host: HTMLElement) => void` | Creates/reuses an open Shadow DOM on `host`, replaces its content. Also wires up the `@page` size/margin rule and print-mode CSS so a plain `window.print()` against a mounted host prints correctly — see "Printing" below. Self-cleans its own window-level print-mode listeners on repeat calls against the SAME `host` (safe to call every time a reactive `doc` prop changes) |
+| `unmount` | `(host: HTMLElement) => void` | Removes `mount()`'s window-level print-mode listeners and clears the shadow root. Only needed when discarding `host` for good (e.g. a framework wrapper's own unmount/cleanup path) — re-`mount()`ing the same host again already self-cleans, see above |
 | `renderPreview` | `(rendered: RenderedNode) => HTMLElement` | Standalone, pixel-identical re-render of one subtree, re-based to (0,0) — for drag-preview ghosts |
 
 ### PDF export (`Paginator` instance methods, see full section below)
@@ -204,7 +214,7 @@ of this library's API. See `src/main.ts`'s `openPdfInNewTab()`/`showPdfDialog()`
 | `findById` | `(registry: HitRegistry, id: string) => InteractionTarget[]` | Identity lookup, not geometric — one entry per matching page/fragment, in page order |
 | `findFragments` | `(registry: HitRegistry, target: InteractionTarget) => InteractionTarget[]` | Automatic, id-free counterpart to `findById` — every fragment of `target`'s node across every page it was split onto; `[target]` if it was never split |
 | `toTypeList` | `(value: string \| string[] \| undefined) => string[]` | Normalizes `dragType`/`accepts` shorthand |
-| `createZoomController` | `(host: HTMLElement, options?: ZoomOptions) => ZoomController` | Headless zoom primitive: applies an animated CSS `transform: scale()` to `host` and returns `getZoom`/`setZoom`/`zoomIn`/`zoomOut`/`reset` — no buttons/UI. Pass `{ zoom: controller.getZoom }` to `attachInteractions` so hit-testing stays aligned at any zoom level; `host` should be the same element passed to `mount()` |
+| `createZoomController` | `(host: HTMLElement, options?: ZoomOptions) => ZoomController` | Headless zoom primitive: applies an animated CSS `transform: scale()` to `host` and returns `getZoom`/`setZoom`/`zoomIn`/`zoomOut`/`reset`/`fitWidth`/`refresh`/`destroy` — no buttons/UI. Pass `{ zoom: controller.getZoom }` to `attachInteractions` so hit-testing stays aligned at any zoom level; `host` should be the same element passed to `mount()`. `fitWidth(pageWidth, availableWidth?)` computes-and-animates-to the zoom that fits a page's own unscaled px width (e.g. `result.pageSize.width`) within `availableWidth` (defaults to `host.clientWidth`). `refresh()` re-measures `host`'s natural height — call it after re-`mount()`ing different content into `host` while the same controller is still in use, since `naturalHeight` is otherwise captured once at creation. `destroy()` cancels any in-flight zoom animation — call it when discarding `host` |
 
 None of the methods above except `registerFont`/`listRegisteredFonts`/`generatePdf` actually read or
 write instance state — they're grouped onto `Paginator` for one consistent object-oriented surface,
@@ -1002,9 +1012,10 @@ Chromium's own viewer).
 the actual `Map` and threads it through every method that needs it — `registerFont`,
 `listRegisteredFonts`, and `generatePdf()`'s `PdfContext.fonts`. This is what lets two independent
 `Paginator` instances register different files under the same family/weight/style without one
-instance's `generatePdf()` output being corrupted by the other's later `registerFont()` call — see
-"Multiple `Paginator` instances" above for the full picture, including the one part of this that's
-still unavoidably page-global (`document.fonts`).
+instance's `generatePdf()` output being corrupted by the other's later `registerFont()` call.
+`registerFont()` additionally registers each `FontFace` under a per-instance-unique `alias` (a new
+field on `RegisteredFont`) rather than the literal family name, so on-screen resolution is isolated
+too, not just PDF embedding — see "Multiple `Paginator` instances" above for the full mechanism.
 
 **Missing-font behavior is Standard-14-or-throw.** If a `TextNode`'s `fontFamily`/`fontWeight`/
 `fontStyle` was never registered, `generatePdf()` (via `resolveStandardFontName()` in
