@@ -11,7 +11,7 @@ const containerSplitParagraph = `${longParagraph1} ${longParagraph2} ${longParag
 export const containersSection: Node[] = [
   text({ content: 'Containers', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: containerIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: containerIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   container(
     { background: '#f7f9fc', border: { thickness: 1, color: '#dddddd' }, borderRadius: 8, padding: 16 },
     group({ direction: 'column', gap: 4 }, [
@@ -60,7 +60,7 @@ export const containersSection: Node[] = [
   ]),
   container(
     { background: '#fafafa', border: { thickness: 1, color: '#dddddd' }, padding: 16 },
-    text({ content: containerSplitParagraph, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+    text({ content: containerSplitParagraph, fontFamily: BODY_FONT, fontSize: 13 }),
   ),
   table({
     columns: [{ width: 3, content: headerCaption('Item') }, { width: '120px', content: headerCaption('Status') }],

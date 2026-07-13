@@ -7,11 +7,10 @@ const richTextIntro = `A richText node mixes styled runs inline within a single 
 export const richTextSection: Node[] = [
   text({ content: 'Rich Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: richTextIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: richTextIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   richText({
     fontFamily: BODY_FONT,
     fontSize: 14,
-    lineHeight: 20,
     runs: [
       { text: 'This paragraph starts in plain text, then switches to a ' },
       { text: 'bold run', fontWeight: 700 },

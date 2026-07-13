@@ -36,7 +36,7 @@ export const introSection: Node[] = [
     text({ content: 'Text Flows Without Touching the DOM', fontFamily: UI_FONT, fontSize: 24, fontWeight: 700 }),
   ]),
   separator({ thickness: 1, margin: 0, color: '#dddddd', style: 'dashed' }),
-  text({ content: longParagraph1, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: longParagraph1, fontFamily: BODY_FONT, fontSize: 13, }),
   // Same story: the row stretches to full width by default (it's a GROUP), and each text child
   // shrinks to its own content by default (it's a leaf) — `mainAlign: 'start'` then left-packs
   // them with the separators, matching a compact metadata line instead of spreading across the
@@ -48,7 +48,7 @@ export const introSection: Node[] = [
     separator({ thickness: 1, color: '#cccccc' }),
     text({ content: 'Status: Draft', fontFamily: UI_FONT, fontSize: 12, color: '#2a7a2a' }),
   ]),
-  text({ content: longParagraph2, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: longParagraph2, fontFamily: BODY_FONT, fontSize: 13 }),
   // A nested GROUP column child now defaults to 'stretch' (fills the page width) and its own
   // leaf text children default to 'shrink' (hug their own content) — no explicit alignSelf/flex
   // needed for either anymore.
@@ -59,11 +59,11 @@ export const introSection: Node[] = [
   ]),
   text({ content: 'Isolation From Host CSS', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: longParagraph3, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: longParagraph3, fontFamily: BODY_FONT, fontSize: 13 }),
   text({ content: 'Group Layout as a Small, Literal Flexbox', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: longParagraph4, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
-  text({ content: longParagraph5, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: longParagraph4, fontFamily: BODY_FONT, fontSize: 13 }),
+  text({ content: longParagraph5, fontFamily: BODY_FONT, fontSize: 13 }),
   text({ content: 'Columns of Text', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
   group({ direction: 'row', gap: 16, crossAlign: 'start', splitColumns: true, interactive: true, droppable: true, accepts: ['image'] }, [
@@ -81,9 +81,9 @@ export const introSection: Node[] = [
   pageBreak(),
   text({ content: 'Forcing a Page Break', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: pageBreakIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: pageBreakIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   pageBreak(),
   text({ content: 'This Page Starts Deliberately, Not by Accident', fontFamily: UI_FONT, fontSize: 18, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: pageBreakOutro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: pageBreakOutro, fontFamily: BODY_FONT, fontSize: 13 }),
 ]

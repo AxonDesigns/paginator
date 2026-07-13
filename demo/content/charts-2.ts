@@ -9,7 +9,6 @@ export const chartsSection2: Node[] = [
     content: `The y-axis domain is controlled by "view", separate from "axis" (which only ever draws chrome — ticks/gridlines/labels — on top of whatever domain view resolves). view.domain defaults to 'zero': auto-computed, always including 0. 'auto' instead computes a domain tight to the data's own min/max — not forced through zero — then widened by view.padding (a fraction of that range, default 0.1) on each side, so the lowest/highest mark isn't flush against the plot's own edge. An explicit { min, max } object overrides either mode outright. Below, the same daily-temperature line is plotted three ways: the default zero-based domain, where a tight real-world range of 68-79°F reads as a nearly flat line; an explicit view: { domain: { min: 50, max: 80 } } zoomed in by hand; and view: { domain: 'auto' } letting the chart pick that same kind of tight range automatically. Bars behave the same way — if zero falls outside the resolved domain, a bar simply grows from whichever domain edge is nearer instead of from zero, since zero is no longer on the visible axis to grow from.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [
@@ -137,7 +136,6 @@ export const chartsSection2: Node[] = [
     content: `chartKind: "scatter" is this library's first chart with two genuinely independent NUMERIC axes — every other kind has at most one (the other side is a category band), so scatter draws a full axis frame (a left baseline for y, a bottom baseline for x) instead of a single baseline on whichever edge carries the category axis. xView/yView default to 'auto' rather than 'zero' (unlike every other chart's y-domain) since scatter data routinely sits far from either axis' zero. Points can optionally be sized by an arbitrary data value via sizeScale — its mere presence (even {}) opts every point WITH a "size" into bubble sizing, mapped through a sqrt (area-proportional, the standard bubble-chart convention) or linear scale onto a px radius range.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [

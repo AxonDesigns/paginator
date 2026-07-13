@@ -47,7 +47,7 @@ export const mediaSection: Node[] = [
   pageBreak(),
   text({ content: 'Images', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700, align: 'center', alignSelf: 'stretch' }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: imageIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: imageIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   image({
     src: DEMO_IMAGE_SRC,
     aspectRatio: DEMO_IMAGE_ASPECT_RATIO,
@@ -56,7 +56,7 @@ export const mediaSection: Node[] = [
     draggable: true,
     dragType: 'image',
   }),
-  text({ content: objectFitIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: objectFitIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [
       image({ src: DEMO_IMAGE_SRC, height: 140, objectFit: 'cover', alt: 'objectFit: cover' }),
@@ -88,7 +88,7 @@ export const mediaSection: Node[] = [
   ]),
   text({ content: 'SVG', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: svgIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: svgIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   // alignSelf: 'stretch' claims the full column width for this row alone (the outer body column
   // defaults to crossAlign: 'start', which would otherwise shrink-wrap the row to its content —
   // here, just the svg's own fixed 160px — leaving mainAlign: 'center' nothing to center within).

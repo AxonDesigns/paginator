@@ -106,7 +106,7 @@ const groupedTableColumns: TableColumn[] = [
 const groupedDemoTable = table({
   columns: groupedTableColumns,
   cellPadding: 8,
-  border: { inner: { mode: 'horizontal', color: '#dddddd' }, outer: { mode: 'horizontal', color: '#dddddd' }, headerSeparator: true },
+  border: { inner: { mode: 'horizontal', color: '#dddddd' }, outer: { mode: 'all', color: '#dddddd', thickness: 2 }, headerSeparator: true },
   headerBackground: '#eef1f6',
   groups: [
     {
@@ -266,18 +266,18 @@ const stylingTable = table({
 export const tablesSection: Node[] = [
   text({ content: 'Tables', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: tableIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: tableIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   demoTable,
   text({ content: 'Column Grouping', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: groupingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: groupingIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   groupedDemoTable,
   text({ content: 'Cell Spans', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: spansIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: spansIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   receiptTable,
   text({ content: 'Table Styling', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: tableStylingIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: tableStylingIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   stylingTable,
 ]

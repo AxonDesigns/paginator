@@ -10,7 +10,7 @@ const chartIntro = `A chart node is an SVG built entirely by hand at render time
 export const chartsSection1: Node[] = [
   text({ content: 'Charts', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
-  text({ content: chartIntro, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20 }),
+  text({ content: chartIntro, fontFamily: BODY_FONT, fontSize: 13 }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [
       chart({
@@ -49,7 +49,6 @@ export const chartsSection1: Node[] = [
     content: `chartKind: "radial" merges what used to be separate pie and donut chart kinds into one — a hole is now just innerRadiusRatio (default 0 = a solid pie), not a different kind. Every radial chart is authored as "rings": a single-ring pie/donut is just rings: [{ slices: [...] }], since there's no separate top-level "slices" shorthand anymore. Below: a plain single-ring pie; a single-ring donut (innerRadiusRatio, title/axis/legend all off); and a two-ring sunburst, where the outer ring's slices each declare a parentIndex into the inner ring, nesting their arc inside their parent's own — a ring's slices are either ALL parented or NONE (chart() throws on a ring that mixes both), so "some nested, some not" only ever means different rings.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [
@@ -139,7 +138,6 @@ export const chartsSection1: Node[] = [
     content: `Every chart text role has an independently configurable size: axis.tickFontSize (y-axis numbers), axis.categoryFontSize (x-axis labels), legend.fontSize, and title's own fontSize — set unevenly below (large category labels, small tick numbers, larger legend) to prove margins/row-heights/baselines all recompute from whatever size you pick, rather than a fixed layout that only happens to fit the default 11px.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   chart({
     chartKind: 'categorical',
@@ -157,7 +155,6 @@ export const chartsSection1: Node[] = [
     content: `Bar charts also take a barMode: the default "grouped" places each category's series side by side (see "Quarterly Revenue by Region" above); "stacked" below sums them into one bar per category instead, positive segments growing up from zero and negative ones growing down, each in series order, with the rounded bar-end reserved for the outermost segment only. Segments render fully flush by default — opt into a gap between them with barSegmentGap (px), shown on the right below. Pie/donut slices similarly default to flush at sliceGap: 0 (no stroke, no residual seam) and take an explicit "colors" palette override, replacing the default categorical palette wholesale — see the donut further down.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [

@@ -45,5 +45,5 @@ export const interactionEventsSection: Node[] = [
   text({ content: 'Split-Node Fragment Highlighting', fontFamily: UI_FONT, fontSize: 20, fontWeight: 700 }),
   separator({ thickness: 1, color: '#dddddd' }),
   text({ content: splitFragmentIntro, fontFamily: BODY_FONT, fontSize: 13 }),
-  text({ content: longSplitParagraph, fontFamily: BODY_FONT, fontSize: 13, lineHeight: 20, interactive: true }),
+  text({ content: longSplitParagraph, fontFamily: BODY_FONT, fontSize: 13, interactive: true }),
 ]

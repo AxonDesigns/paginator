@@ -9,7 +9,6 @@ export const chartsSection3: Node[] = [
     content: `chartKind: "gantt" plots tasks as pill-shaped bars over a single numeric time axis (xAxis/xView — the same ChartNumericAxisConfig scatter's axes use, defaulting to 'auto' rather than 'zero' for the same reason). Task start/end are plain numbers, never Date objects — this library does no date math anywhere, so a real schedule is pre-converted to numeric offsets by the caller, with xAxis.formatTick rendering them back as dates. Tasks sharing a "group" value in a CONTIGUOUS run get a header band above them — deliberately much simpler than table's column grouping: no reordering, no aggregation, just a divider wherever the group value changes. Header bands are themeable: groupHeaderColor/groupHeaderBackground set a chart-wide default, and a "groups" lookup (keyed by group name) overrides either for one group's own band specifically — below, "Build" gets its own color while every other band falls back to the chart-level default. Task row-label text is independently themeable too: taskLabelColor sets a chart-wide default, and a task's own labelColor overrides it — independent of that task's bar color entirely (below, "Launch" gets a red label to flag it as the critical milestone, while its bar stays the default palette color).`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   chart({
     chartKind: 'gantt',
@@ -45,7 +44,6 @@ export const chartsSection3: Node[] = [
     content: `chartKind: "radar" (spider chart) reuses the familiar categories/series shape — each category becomes a spoke arranged evenly around the circle (0°=top, clockwise, same convention the radial chart's own slices use), each series becomes one closed polygon connecting a vertex per spoke. The shared radial domain reuses the exact same zero/auto/explicit resolution as a categorical chart's y-domain, so unlike a pie's always-positive slice values, radar values CAN go negative — the domain's own minimum simply becomes the center (radius 0), not a hard-coded literal zero. A polygon's fill (series.fill) is flat solid-color-at-opacity rather than line's gradient-to-baseline fade, since a closed radial shape has no single edge that reads as "the baseline."`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   group({ direction: 'row', gap: 16 }, [
     group({ direction: 'column', gap: 6 }, [
@@ -78,7 +76,6 @@ export const chartsSection3: Node[] = [
     content: `chartKind: "candlestick" plots OHLC (open/high/low/close) bars over the same category-band x-axis a categorical chart's vertical orientation uses — always vertical, since real candlestick charts have no meaningful horizontal-orientation counterpart. Each candle's data is entirely caller-supplied (this library computes no statistics anywhere) — chart() only validates the shape is internally consistent (low <= min(open,close), high >= max(open,close)). A candle's fill color comes from whether it closed up or down (close >= open), not from a series identity, defaulting to green/red with per-series upColor/downColor overrides. Like scatter/gantt, view defaults to 'auto' rather than 'zero', since real price data rarely sits near zero.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   chart({
     chartKind: 'candlestick',
@@ -106,7 +103,6 @@ export const chartsSection3: Node[] = [
     content: `chartKind: "treemap" is the last new kind, and the odd one out: no axis, no domain, no ticks — the whole plot box IS the chart. Rectangle area is proportional to each item's value, packed via the standard squarified layout algorithm (Bruls/Huizing/van Wijk) to keep rectangles close to square instead of the thin slivers a naive left-to-right slice-and-dice would produce. Flat, single level only — a hierarchical drill-down treemap was considered and deliberately scoped out. formatLabel lets the caller format each rectangle's own content as rich ChartText — receiving the whole item, not just its label, so a name run and a value run can be styled independently (bigger/bolder name, smaller/faded value on the line below). A rectangle too small to fit its own (possibly multi-line) content at labelFontSize simply omits it rather than overflowing past its own edge or wrapping; formatLabel returning "" does the same on purpose, hiding the label for the smallest items below.`,
     fontFamily: BODY_FONT,
     fontSize: 13,
-    lineHeight: 20,
   }),
   chart({
     chartKind: 'treemap',
