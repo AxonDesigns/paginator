@@ -73,8 +73,13 @@ function drawTableBorders(ctx, node, rendered, colWidths, colX, originX, originY
             continue;
         const straddling = cellBoxes.filter(b => b.top < lineY - BORDER_EPSILON && lineY + BORDER_EPSILON < b.bottom);
         const segments = subtractIntervals([tableLeft, tableRight], straddling.map(b => [b.left, b.right]));
+        // Every segment grows in the +y direction from its lineCoord. That's inward at tableTop, but
+        // outward (past the table's own box) at tableBottom — leaving the bottom-right corner's
+        // thickness×thickness square unpainted by either the bottom or right segment. Flip the bottom
+        // edge to grow upward (-thickness) so it meets the right edge's own inward growth at the corner.
+        const drawY = Math.abs(lineY - tableBottom) < BORDER_EPSILON ? lineY - resolved.thickness : lineY;
         for (const [segStart, segEnd] of segments)
-            drawGridSegment(doc, 'horizontal', lineY, segStart, segEnd, resolved.thickness, resolvePdfColor(resolved.color), resolved.style);
+            drawGridSegment(doc, 'horizontal', drawY, segStart, segEnd, resolved.thickness, resolvePdfColor(resolved.color), resolved.style);
     }
     const vLines = [];
     if (outerV && !roundOuter)
@@ -87,8 +92,11 @@ function drawTableBorders(ctx, node, rendered, colWidths, colX, originX, originY
         const straddling = cellBoxes.filter(b => b.left < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < b.right);
         const headerHoles = tableLeft < lineX - BORDER_EPSILON && lineX + BORDER_EPSILON < tableRight ? headerRowVRanges : [];
         const segments = subtractIntervals([tableTop, tableBottom], [...straddling.map(b => [b.top, b.bottom]), ...headerHoles]);
+        // Same corner fix as the horizontal loop above, mirrored on the x axis: the right edge grows
+        // leftward (-thickness) instead of outward past tableRight.
+        const drawX = Math.abs(lineX - tableRight) < BORDER_EPSILON ? lineX - line.thickness : lineX;
         for (const [segStart, segEnd] of segments)
-            drawGridSegment(doc, 'vertical', lineX, segStart, segEnd, line.thickness, resolvePdfColor(line.color), line.style);
+            drawGridSegment(doc, 'vertical', drawX, segStart, segEnd, line.thickness, resolvePdfColor(line.color), line.style);
     }
 }
 export async function drawTableNode(rendered, x, y, ctx) {

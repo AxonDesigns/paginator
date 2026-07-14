@@ -10,6 +10,7 @@ import { chartsSection1 } from './content/charts-1.ts'
 import { chartsSection2 } from './content/charts-2.ts'
 import { chartsSection3 } from './content/charts-3.ts'
 import { interactionEventsSection } from './content/interaction-events.ts'
+import { salesTable } from './content/table-test.ts'
 
 // The full demo document, assembled from one section per topic (see demo/content/). Section order
 // here is the order sections appear on the page.
@@ -62,5 +63,6 @@ export const doc: PageDef = definePage(
     ...chartsSection2,
     ...chartsSection3,
     ...interactionEventsSection,
+    salesTable,
   ]),
 )
