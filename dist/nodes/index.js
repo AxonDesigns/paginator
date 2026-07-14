@@ -12,6 +12,8 @@ import "./separator.js";
 import "./page-break.js";
 import "./image.js";
 import "./svg.js";
+import "./qrcode.js";
+import "./barcode.js";
 import "./container.js";
 import "./group.js";
 import "./table/index.js";

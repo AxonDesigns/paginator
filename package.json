@@ -35,6 +35,7 @@
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
     "pdfkit": "^0.19.1",
+    "qrcode-generator": "^2.0.4",
     "svg-to-pdfkit": "^0.1.8"
   }
 }

@@ -1,5 +1,7 @@
 // Public document-tree node types and builder functions.
 import { DEFAULT_FONT_FAMILY } from "../render/font-registry.js";
+import { encodeBarcodeValue } from "../render/barcode-encode.js";
+import { buildQrMatrix } from "../render/qrcode-encode.js";
 // Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
 // new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 export function definePage(config, body) {
@@ -45,6 +47,47 @@ export function svg(config) {
         throw new Error('[paginator] svg() needs "height" or "aspectRatio" to determine its height — dimensions are never auto-detected from the markup.');
     }
     return { type: 'svg', ...config };
+}
+export function qrcode(config) {
+    if (config.value.length === 0) {
+        throw new Error('[paginator] qrcode() needs a non-empty "value".');
+    }
+    const hasHeight = config.height !== undefined;
+    const hasAspectRatio = config.aspectRatio !== undefined;
+    const hasWidth = config.width !== undefined;
+    // Always validate `value` can actually be encoded upfront, whether or not it's also needed to
+    // derive a size — same "fail fast at construction" contract svg()'s markup check has.
+    if (hasHeight || hasAspectRatio || hasWidth) {
+        buildQrMatrix(config.value, config.errorCorrectionLevel ?? 'M');
+        return { type: 'qrcode', ...config };
+    }
+    if (config.moduleSize === undefined) {
+        throw new Error('[paginator] qrcode() needs "width"/"height"/"aspectRatio", or "moduleSize", to determine its size.');
+    }
+    const matrix = buildQrMatrix(config.value, config.errorCorrectionLevel ?? 'M');
+    const quietZone = config.quietZone ?? 4;
+    const side = (matrix.moduleCount + quietZone * 2) * config.moduleSize;
+    return { type: 'qrcode', ...config, width: side, height: side };
+}
+export function barcode(config) {
+    const symbology = config.symbology ?? 'code128';
+    // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
+    // and (when `barWidth` is used) supplies the module count needed to derive `width`.
+    const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit);
+    let width = config.width;
+    if (width === undefined) {
+        if (config.barWidth === undefined) {
+            throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.');
+        }
+        const quietZone = config.quietZone ?? 10;
+        width = quietZone * 2 + pattern.totalModules * config.barWidth;
+    }
+    const hasHeight = config.height !== undefined;
+    const hasAspectRatio = config.aspectRatio !== undefined;
+    if (!hasHeight && !hasAspectRatio) {
+        throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.');
+    }
+    return { type: 'barcode', ...config, width };
 }
 export function container(config, child) {
     return { type: 'container', ...config, child };

@@ -48,7 +48,16 @@ export declare function measureNodeHeight(node: Node, width: number): number;
 export declare function isSplittable(node: Node): boolean;
 export declare function splitNode(node: Node, width: number, availableHeight: number): SplitOutcome<Node>;
 export declare function layoutNodeFull(node: Node, width: number): RenderedNode;
-/** Shrink-to-fit width for cross/main-axis sizing in Group/Table layout. */
+/**
+ * Shrink-to-fit width for cross/main-axis sizing in Group/Table layout. Every registered type's
+ * `naturalWidth()` is expected to return a value consistent with its own `layout()` — i.e.
+ * `layout(node, naturalWidth(node, W)).box.width === naturalWidth(node, W)` — the same way ordinary
+ * (non-swapping) types already satisfy this by construction (box.width is just the width parameter
+ * echoed back). Vertical text (see TextNode.orientation, nodes/text.ts) satisfies it a different
+ * way: by ignoring the ambient width entirely and always sizing itself from its own intrinsic
+ * natural width, so its `layout()`/`measureHeight()`/`naturalWidth()` agree no matter what width
+ * any caller passes in.
+ */
 export declare function naturalWidth(node: Node, availableWidth: number): number;
 export declare function renderNodeDom(rendered: RenderedNode, originX: number, originY: number, ctx: {
     container: HTMLElement;

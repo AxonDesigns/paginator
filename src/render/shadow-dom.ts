@@ -265,6 +265,9 @@ export function mount(result: PaginatedResult, host: HTMLElement): void {
     if (page.header !== null) renderNodeDom(page.header, headerOriginX, headerOriginY, ctx)
     for (const node of page.body) renderNodeDom(node, bodyOriginX, bodyOriginY, ctx)
     if (page.footer !== null) renderNodeDom(page.footer, footerOriginX, footerOriginY, ctx)
+    // Free-positioned margin content — x/y are already page-absolute (resolved in paginate.ts), so
+    // no region origin to add here, unlike header/footer/body above.
+    for (const note of page.marginNotes) renderNodeDom(note.rendered, note.x, note.y, ctx)
     // Drawn last, on top of everything — an opaque table/container/chart background elsewhere on the
     // page would otherwise fully hide a watermark painted underneath it. Matches pdf-render.ts.
     if (page.watermark !== null) renderWatermark(page.watermark, pageSize.width, pageSize.height, pageEl)

@@ -1,4 +1,4 @@
-import type { ChartNode, ContainerBorder, ContainerNode, GroupNode, ImageNode, PageBreakNode, RichTextNode, SeparatorNode, SvgNode, TableNode, TextNode } from './nodes.js';
+import type { BarcodeNode, ChartNode, ContainerBorder, ContainerNode, GroupNode, ImageNode, PageBreakNode, QrcodeNode, RichTextNode, SeparatorNode, SvgNode, TableNode, TextNode } from './nodes.js';
 export type Box = {
     x: number;
     y: number;
@@ -76,6 +76,14 @@ export type RenderedNode = {
     type: 'svg';
     box: Box;
     node: SvgNode;
+} | {
+    type: 'qrcode';
+    box: Box;
+    node: QrcodeNode;
+} | {
+    type: 'barcode';
+    box: Box;
+    node: BarcodeNode;
 } | {
     type: 'table';
     box: Box;

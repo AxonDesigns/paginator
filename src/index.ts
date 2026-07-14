@@ -1,6 +1,6 @@
 import './nodes/index.ts'
 
-export { definePage, group, text, richText, separator, pageBreak, image, svg, container, table, chart, rowGroup } from './core/nodes.ts'
+export { definePage, group, text, richText, separator, pageBreak, image, svg, qrcode, barcode, container, table, chart, rowGroup } from './core/nodes.ts'
 export { ready } from './ready.ts'
 // Pretext's own module-global locale/measurement-cache state — no instance-scoped equivalent
 // exists, so this is deliberately not wrapped by Paginator (see paginator.ts's header comment).
@@ -30,6 +30,11 @@ export type {
   PageBreakNode,
   ImageNode,
   SvgNode,
+  QrcodeNode,
+  QrErrorCorrectionLevel,
+  BarcodeNode,
+  BarcodeSymbology,
+  BarcodeCheckDigitMode,
   ContainerNode,
   ContainerBorder,
   TableNode,
@@ -76,9 +81,15 @@ export type {
   TextAlign,
   FlexSize,
   Interactive,
+  MarginContent,
+  MarginNote,
+  MarginPosition,
+  MarginRegion,
+  MarginCross,
+  MarginAlong,
 } from './core/nodes.ts'
 export type { RenderedNode, Box, PositionedLine, PositionedRun, PositionedRichLine, RenderedTableRow, RenderedTableCell } from './core/geometry.ts'
-export type { PaginatedResult, PaginatedPage } from './core/paginate.ts'
+export type { PaginatedResult, PaginatedPage, PaginatedMarginNote } from './core/paginate.ts'
 export type {
   InteractionController,
   InteractionTarget,

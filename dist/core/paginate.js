@@ -5,7 +5,7 @@
 // this function recursing on `rest` repeatedly.
 import { translateRendered } from "./geometry.js";
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from "./behavior.js";
-import { layoutColumn, subtreeHasPageBreak } from "../nodes/group.js";
+import { childCrossWidthInColumn, layoutColumn, subtreeHasPageBreak } from "../nodes/group.js";
 import { resolvePageSize } from "./page-sizes.js";
 const EPSILON = 0.01;
 function startNewPage(ctx) {
@@ -98,6 +98,65 @@ function resolvePerPageValue(content, pageNumber, totalPages) {
     const resolved = typeof content === 'function' ? content({ pageNumber, totalPages }) : content;
     return resolved ?? null;
 }
+// Resolves a MarginPosition to a concrete page-relative (x, y) — the box's own top-left corner —
+// given the note's already-known resolved box size (from layoutNodeFull, called before this).
+// Absolute positions pass through unchanged; the anchor form aligns the box against one of the 4
+// margin strips' own geometry (not the page's corners) — see MarginPosition's doc comment in
+// nodes.ts for the full `cross`/`along` vocabulary and worked examples.
+function resolveMarginNotePosition(position, pageWidth, pageHeight, margins, boxWidth, boxHeight) {
+    if ('x' in position)
+        return { x: position.x, y: position.y };
+    const { region, cross = 'center', along = 'center', offsetX = 0, offsetY = 0 } = position;
+    let x;
+    let y;
+    if (region === 'left' || region === 'right') {
+        const stripStart = region === 'left' ? 0 : pageWidth - margins.right;
+        const stripWidth = region === 'left' ? margins.left : margins.right;
+        // cross axis (horizontal): 'inner' = toward the body content box, 'outer' = toward the
+        // physical page edge — which physical side that maps to flips between 'left' and 'right'.
+        const innerX = region === 'left' ? stripStart + stripWidth - boxWidth : stripStart;
+        const outerX = region === 'left' ? stripStart : stripStart + stripWidth - boxWidth;
+        const centerX = stripStart + (stripWidth - boxWidth) / 2;
+        x = cross === 'inner' ? innerX : cross === 'outer' ? outerX : centerX;
+        // along axis (vertical, full page height): start = top, end = bottom.
+        y = along === 'start' ? 0 : along === 'end' ? pageHeight - boxHeight : (pageHeight - boxHeight) / 2;
+    }
+    else {
+        const stripStart = region === 'top' ? 0 : pageHeight - margins.bottom;
+        const stripHeight = region === 'top' ? margins.top : margins.bottom;
+        // cross axis (vertical): 'inner' = toward the body content box, 'outer' = toward the physical
+        // page edge — which physical side that maps to flips between 'top' and 'bottom'.
+        const innerY = region === 'top' ? stripStart + stripHeight - boxHeight : stripStart;
+        const outerY = region === 'top' ? stripStart : stripStart + stripHeight - boxHeight;
+        const centerY = stripStart + (stripHeight - boxHeight) / 2;
+        y = cross === 'inner' ? innerY : cross === 'outer' ? outerY : centerY;
+        // along axis (horizontal, full page width): start = left, end = right.
+        x = along === 'start' ? 0 : along === 'end' ? pageWidth - boxWidth : (pageWidth - boxWidth) / 2;
+    }
+    return { x: x + offsetX, y: y + offsetY };
+}
+// Always shrink-wrapped to the note's own natural width via childCrossWidthInColumn() (src/nodes/
+// group.ts) — the SAME function a non-stretch column child's cross width already goes through —
+// capped at the full page width, since a margin note has no ambient container of its own to
+// inherit a width from. Deliberately NOT behavior.ts's generic naturalWidth() dispatcher directly:
+// that one has no opinion on `group` nodes (a group's own shrink-wrap math lives entirely in
+// group.ts, keyed off its direction/crossAlign/children, not something a single per-type hook could
+// express), so calling it on a margin note wrapping e.g. a row group would silently fall through to
+// "wants the full page width." childCrossWidthInColumn() special-cases `group` itself before
+// falling back to the generic dispatcher for every other type, so it's correct for BOTH cases. This
+// makes every node type (text, image, group, container, ...) self-size correctly with no
+// author-specified width, and — critically for a rotated text node — self-consistent with
+// layoutNodeFull() (see measureTextNaturalWidth()'s own doc comment in nodes/text.ts, and
+// naturalWidth()'s own doc comment in core/behavior.ts).
+function renderMarginNotesForPage(notes, pageWidth, pageHeight, margins, pageNumber, totalPages) {
+    return notes.map(note => {
+        const resolvedNode = typeof note.node === 'function' ? note.node({ pageNumber, totalPages }) : note.node;
+        const width = childCrossWidthInColumn(resolvedNode, pageWidth);
+        const rendered = layoutNodeFull(resolvedNode, width);
+        const { x, y } = resolveMarginNotePosition(note.position, pageWidth, pageHeight, margins, rendered.box.width, rendered.box.height);
+        return { rendered, x, y };
+    });
+}
 // Single-page body `mainAlign` centering: applied as an isolated post-processing pass so the
 // pagination recursion itself never special-cases it. For multi-page documents this has no
 // well-defined single-page meaning and is left as `start`-equivalent packing (documented).
@@ -130,6 +189,7 @@ export function paginate(doc) {
         header: renderHeaderFooterForPage(doc.header, contentBoxWidth, i + 1, totalPages),
         body,
         footer: renderHeaderFooterForPage(doc.footer, contentBoxWidth, i + 1, totalPages),
+        marginNotes: renderMarginNotesForPage(resolvePerPageValue(doc.marginContent, i + 1, totalPages) ?? [], pageWidth, pageHeight, doc.margins, i + 1, totalPages),
         watermark: resolvePerPageValue(doc.watermark, i + 1, totalPages),
         background: resolvePerPageValue(doc.background, i + 1, totalPages),
         border: resolvePerPageValue(doc.border, i + 1, totalPages),

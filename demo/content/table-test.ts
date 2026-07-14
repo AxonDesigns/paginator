@@ -45,7 +45,7 @@ export const salesTable = table({
     headerBackground: "#f1f5f9",
     border: {
         inner: { mode: "horizontal", color: "#e2e8f0" },
-        outer: { mode: "all", color: "#cbd5e1", thickness: 10 },
+        outer: { mode: "all", color: "#cbd5e1", thickness: 2 },
     },
     stripe: { even: "#ffffff", odd: "#f8fafc" },
     cellPadding: 8,

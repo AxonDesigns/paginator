@@ -1,6 +1,6 @@
 import type { Node } from '../core/nodes.js';
 import type { Box, RenderedNode } from '../core/geometry.js';
-export type InteractionRegion = 'header' | 'body' | 'footer';
+export type InteractionRegion = 'header' | 'body' | 'footer' | 'marginContent';
 /** A page-relative point, in the same coordinate space InteractionTarget.box uses. */
 export type PagePoint = {
     x: number;

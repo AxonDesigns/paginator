@@ -5,6 +5,8 @@
 // between competing matches in practice; the tie-break below is defensive insurance, not a load-
 // bearing algorithm.
 import { translateRendered } from "../core/geometry.js";
+// 'marginContent' has no region origin of its own — its notes are already page-absolute (resolved
+// in paginate.ts), unlike header/footer/body — so it's deliberately excluded here.
 function regionOrigins(result) {
     const { pageSize, margins, headerHeight, headerGap, footerHeight } = result;
     return {
@@ -47,6 +49,11 @@ export function buildHitRegistry(result) {
         }
         if (page.footer !== null) {
             roots.push(flatten(translateRendered(page.footer, origins.footer.x, origins.footer.y), page.pageNumber, 'footer', []));
+        }
+        // x/y are already page-absolute (resolved in paginate.ts), unlike header/footer/body above, so
+        // no region origin to translate by here.
+        for (const note of page.marginNotes) {
+            roots.push(flatten(translateRendered(note.rendered, note.x, note.y), page.pageNumber, 'marginContent', []));
         }
         pages.set(page.pageNumber, roots);
     }

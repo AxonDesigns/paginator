@@ -3,11 +3,13 @@
 // content, so this walks the same Node tree paginate()/generatePdf() start from, translating each
 // node type into `docx` library primitives instead of pixel positions.
 //
-// v1 scope: text/richText/separator/page-break/image/group/container/table/chart are supported. svg
-// is out of scope (skipped with a one-time warning) — rasterizing raw SVG markup to an embedded
-// image is the natural next extension (see warnUnsupportedNodeOnce below); chart already gets this
-// treatment (see rasterizeChart/chartNodeParagraph) by reusing chart-render.ts's existing DOM/SVG
-// chart renderer, needing no chart-specific drawing code of its own.
+// v1 scope: text/richText/separator/page-break/image/group/container/table/chart/qrcode/barcode
+// are supported. svg is out of scope (skipped with a one-time warning) — rasterizing raw SVG
+// markup to an embedded image is the natural next extension (see warnUnsupportedNodeOnce below);
+// chart already gets this treatment (see rasterizeChart/chartNodeParagraph) by reusing
+// chart-render.ts's existing DOM/SVG chart renderer, needing no chart-specific drawing code of its
+// own. qrcode/barcode (see rasterizeQrcode/rasterizeBarcode) draw straight to an OffscreenCanvas
+// instead — simpler than chart's SVG round trip, since their content is just filled rects.
 import {
   AlignmentType,
   BorderStyle,
@@ -31,6 +33,7 @@ import {
 } from 'docx'
 import type { IBorderOptions, ITableCellBorders, ParagraphChild } from 'docx'
 import type {
+  BarcodeNode,
   ChartNode,
   ContainerNode,
   CrossAlign,
@@ -40,6 +43,7 @@ import type {
   LineStyle,
   Node,
   PageDef,
+  QrcodeNode,
   RichTextNode,
   RichTextRun,
   SeparatorNode,
@@ -53,6 +57,8 @@ import { resolvePageSize } from '../core/page-sizes.ts'
 import { resolveFlexWidths } from '../core/flex-widths.ts'
 import type { RowChildSizing } from '../core/flex-widths.ts'
 import { renderChartSvg } from '../render/chart-render.ts'
+import { buildQrMatrix, qrcodeRunsForRow } from '../render/qrcode-encode.ts'
+import { encodeBarcodeValue } from '../render/barcode-encode.ts'
 import { borderSides } from './table-grid.ts'
 import type { BorderSide, BorderSides } from './table-grid.ts'
 import { resolveExportColor } from './export-color.ts'
@@ -83,6 +89,20 @@ function warnChartUnsupportedOnce(): void {
   if (warnedChartUnsupported) return
   warnedChartUnsupported = true
   console.warn('[paginator] generateDocx(): chart rendering needs a browser (DOM + OffscreenCanvas) to rasterize — skipping in this environment.')
+}
+
+let warnedQrcodeUnsupported = false
+function warnQrcodeUnsupportedOnce(): void {
+  if (warnedQrcodeUnsupported) return
+  warnedQrcodeUnsupported = true
+  console.warn('[paginator] generateDocx(): qrcode rendering needs a browser (OffscreenCanvas) to rasterize — skipping in this environment.')
+}
+
+let warnedBarcodeUnsupported = false
+function warnBarcodeUnsupportedOnce(): void {
+  if (warnedBarcodeUnsupported) return
+  warnedBarcodeUnsupported = true
+  console.warn('[paginator] generateDocx(): barcode rendering needs a browser (OffscreenCanvas) to rasterize — skipping in this environment.')
 }
 
 let warnedShrinkUnsupported = false
@@ -127,6 +147,13 @@ function warnTableRowBorderOnce(): void {
 //   warnedWatermarkUnsupported = true
 //   console.warn('[paginator] generateDocx(): watermark rendering needs a browser (OffscreenCanvas) to rasterize — skipping in this environment.')
 // }
+
+let warnedMarginContentUnsupported = false
+function warnMarginContentUnsupportedOnce(): void {
+  if (warnedMarginContentUnsupported) return
+  warnedMarginContentUnsupported = true
+  console.warn('[paginator] generateDocx(): PageDef.marginContent has no Word equivalent (Word has no free-positioned page-overlay concept) — skipping.')
+}
 
 // --- Small local helpers, deliberately NOT imported from src/nodes/*.ts or src/render/*.ts: those
 // modules self-register into behavior.ts at import time and (for separator/group specifically) pull
@@ -362,6 +389,96 @@ async function chartNodeParagraph(node: ChartNode, availableWidthPx: number): Pr
   })
 }
 
+// qrcode/barcode rasterization draws straight to an OffscreenCanvas (fillRect per module/bar run)
+// — unlike rasterizeChart, there's no SVG/<img>/data-URI round trip needed first (nothing here
+// goes through real SVG DOM at all), so the guard only needs OffscreenCanvas, not `document` too.
+async function rasterizeQrcode(node: QrcodeNode, widthPx: number, heightPx: number): Promise<{ data: Uint8Array; widthPx: number; heightPx: number } | null> {
+  if (typeof OffscreenCanvas === 'undefined') {
+    warnQrcodeUnsupportedOnce()
+    return null
+  }
+  const matrix = buildQrMatrix(node.value, node.errorCorrectionLevel ?? 'M')
+  const quietZone = node.quietZone ?? 4
+  const side = matrix.moduleCount + quietZone * 2
+  const scaledWidth = Math.max(1, Math.round(widthPx * CHART_RASTER_SCALE))
+  const scaledHeight = Math.max(1, Math.round(heightPx * CHART_RASTER_SCALE))
+  const moduleWidth = scaledWidth / side
+  const moduleHeight = scaledHeight / side
+
+  const canvas = new OffscreenCanvas(scaledWidth, scaledHeight)
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = node.backgroundColor ?? '#ffffff'
+  ctx.fillRect(0, 0, scaledWidth, scaledHeight)
+  ctx.fillStyle = node.moduleColor ?? '#000000'
+  for (let row = 0; row < matrix.moduleCount; row++) {
+    for (const run of qrcodeRunsForRow(matrix, row)) {
+      ctx.fillRect((quietZone + run.startCol) * moduleWidth, (quietZone + row) * moduleHeight, run.length * moduleWidth, moduleHeight)
+    }
+  }
+  const blob = await canvas.convertToBlob({ type: 'image/png' })
+  return { data: new Uint8Array(await blob.arrayBuffer()), widthPx, heightPx }
+}
+
+async function qrcodeNodeParagraph(node: QrcodeNode, availableWidthPx: number): Promise<Paragraph> {
+  const { width, height } = resolveBoxSize(node.width, node.height, node.aspectRatio, availableWidthPx)
+  const rasterized = await rasterizeQrcode(node, Math.round(width), Math.round(height))
+  if (rasterized === null) return new Paragraph({})
+  return new Paragraph({
+    children: [new ImageRun({ type: 'png', data: rasterized.data, transformation: { width: rasterized.widthPx, height: rasterized.heightPx }, outline: NO_IMAGE_OUTLINE })],
+  })
+}
+
+// Same bar-geometry rule as src/nodes/barcode.ts's own barGeometry() (fixed px quiet zone, bars
+// scale to fill the rest, text line reserves a fixed band) — kept as its own small copy here
+// rather than imported, since importing from src/nodes/ would pull registerNode() wiring this
+// export-only module has no use for (see that file's own header comment for the rationale).
+async function rasterizeBarcode(node: BarcodeNode, widthPx: number, heightPx: number): Promise<{ data: Uint8Array; widthPx: number; heightPx: number } | null> {
+  if (typeof OffscreenCanvas === 'undefined') {
+    warnBarcodeUnsupportedOnce()
+    return null
+  }
+  const pattern = encodeBarcodeValue(node.symbology ?? 'code128', node.value, node.checkDigit)
+  const quietZone = node.quietZone ?? 10
+  const showText = node.showText ?? true
+  const textSize = node.textSize ?? 10
+  const textBand = showText ? textSize * 1.4 + 4 : 0
+  const barHeight = node.barHeight ?? Math.max(0, heightPx - textBand)
+  const usableWidth = Math.max(0, widthPx - quietZone * 2)
+  const moduleWidth = pattern.totalModules > 0 ? usableWidth / pattern.totalModules : 0
+
+  const scaledWidth = Math.max(1, Math.round(widthPx * CHART_RASTER_SCALE))
+  const scaledHeight = Math.max(1, Math.round(heightPx * CHART_RASTER_SCALE))
+  const canvas = new OffscreenCanvas(scaledWidth, scaledHeight)
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = node.backgroundColor ?? '#ffffff'
+  ctx.fillRect(0, 0, scaledWidth, scaledHeight)
+  ctx.fillStyle = node.barColor ?? '#000000'
+  let cursor = quietZone
+  pattern.runs.forEach((runLength, i) => {
+    const runWidth = runLength * moduleWidth
+    if (i % 2 === 0) ctx.fillRect(cursor * CHART_RASTER_SCALE, 0, runWidth * CHART_RASTER_SCALE, barHeight * CHART_RASTER_SCALE)
+    cursor += runWidth
+  })
+  if (showText) {
+    ctx.fillStyle = node.textColor ?? node.barColor ?? '#000000'
+    ctx.font = `${textSize * CHART_RASTER_SCALE}px sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText(pattern.text, (widthPx / 2) * CHART_RASTER_SCALE, (barHeight + textSize) * CHART_RASTER_SCALE)
+  }
+  const blob = await canvas.convertToBlob({ type: 'image/png' })
+  return { data: new Uint8Array(await blob.arrayBuffer()), widthPx, heightPx }
+}
+
+async function barcodeNodeParagraph(node: BarcodeNode, availableWidthPx: number): Promise<Paragraph> {
+  const { width, height } = resolveBoxSize(node.width, node.height, node.aspectRatio, availableWidthPx)
+  const rasterized = await rasterizeBarcode(node, Math.round(width), Math.round(height))
+  if (rasterized === null) return new Paragraph({})
+  return new Paragraph({
+    children: [new ImageRun({ type: 'png', data: rasterized.data, transformation: { width: rasterized.widthPx, height: rasterized.heightPx }, outline: NO_IMAGE_OUTLINE })],
+  })
+}
+
 // --- Border/shading helpers shared by the table(), row-as-table, and container-as-table paths ---
 
 const NONE_BORDER: IBorderOptions = { style: BorderStyle.NONE }
@@ -415,6 +532,10 @@ async function nodeToBlocks(node: Node, widthPx: number): Promise<(Paragraph | D
       return [await tableNodeToTable(node, widthPx)]
     case 'chart':
       return [await chartNodeParagraph(node, widthPx)]
+    case 'qrcode':
+      return [await qrcodeNodeParagraph(node, widthPx)]
+    case 'barcode':
+      return [await barcodeNodeParagraph(node, widthPx)]
     case 'svg':
       warnUnsupportedNodeOnce(node.type)
       return []
@@ -763,6 +884,7 @@ export async function generateDocx(doc: PageDef, metadata?: DocxMetadata): Promi
   const contentWidthPx = pageSize.width - doc.margins.left - doc.margins.right
 
   if (doc.background !== undefined) warnPageBackgroundOnce()
+  if (doc.marginContent !== undefined) warnMarginContentUnsupportedOnce()
 
   const bodyChildren = await nodeToBlocks(doc.body, contentWidthPx)
   const headerBlocks = doc.header !== undefined ? await headerFooterBlocks(doc.header, contentWidthPx) : []

@@ -1,3 +1,4 @@
+import type { BarcodeSymbology } from '../render/barcode-encode.js';
 export type Margins = {
     top: number;
     right: number;
@@ -55,6 +56,32 @@ export type Watermark = TextWatermark | ImageWatermark;
 export type WatermarkContent = Watermark | ((ctx: HeaderFooterContext) => Watermark | undefined | null);
 export type PageBackgroundContent = string | ((ctx: HeaderFooterContext) => string | undefined | null);
 export type PageBorderContent = ContainerBorder | ((ctx: HeaderFooterContext) => ContainerBorder | undefined | null);
+export type MarginRegion = 'top' | 'bottom' | 'left' | 'right';
+export type MarginCross = 'inner' | 'center' | 'outer';
+export type MarginAlong = 'start' | 'center' | 'end';
+export type MarginPosition = {
+    x: number;
+    y: number;
+} | {
+    region: MarginRegion;
+    cross?: MarginCross;
+    along?: MarginAlong;
+    offsetX?: number;
+    offsetY?: number;
+};
+export type MarginNote = {
+    node: HeaderFooterContent;
+    /**
+     * No explicit width — always shrink-wrapped to `node`'s own natural width, the same
+     * `childCrossWidthInColumn()` shrink-wrap sizing a non-stretch column child already goes through
+     * (`src/nodes/group.ts`), capped at the full page width. Works for any node type, including a
+     * `group` (e.g. a row of several labels side by side). An inner `container`/fixed-`width` node
+     * still controls its own size exactly as it would as a column child; there's nothing extra to
+     * configure here.
+     */
+    position: MarginPosition;
+};
+export type MarginContent = MarginNote[] | ((ctx: HeaderFooterContext) => MarginNote[] | undefined | null);
 export type PageDef = {
     size: PageSize;
     margins: Margins;
@@ -72,6 +99,10 @@ export type PageDef = {
     border?: PageBorderContent;
     /** Decorative overlay drawn on top of every page's content (e.g. a "DRAFT" stamp or logo). */
     watermark?: WatermarkContent;
+    /** Free-positioned content inside the page margin whitespace (side annotations, running vertical
+     *  titles, etc.) — see MarginNote. Painted after header/body/footer, before the watermark (which
+     *  always stays the topmost layer). */
+    marginContent?: MarginContent;
     body: Node;
 };
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -196,6 +227,26 @@ export type TextNode = Interactive & SelfAlignable & {
     wordBreak?: 'normal' | 'keep-all';
     /** Only meaningful when this node is itself a ROW child; ignored for column children. */
     flex?: FlexSize;
+    /**
+     * Rotates the whole laid-out text block 90° for sideways labels (e.g. a running side-title in a
+     * margin) — `'vertical'` reads top-to-bottom (rotated clockwise), `'vertical-inverted'` reads
+     * bottom-to-top (rotated counter-clockwise), unset is the ordinary horizontal default. Unlike
+     * every other sizing in this engine, vertical text ignores whatever ambient width it's handed
+     * (a parent column's width, a row's flex slot, a MarginNote's shrink-wrap width, ...) and always
+     * wraps against its OWN intrinsic natural width instead — the only thing its layout is ever
+     * concerned with is its own post-rotation size, the same way Image/Chart/Svg's dimensions are
+     * never derived from the ambient width either. This is deliberate, not a limitation to fix later:
+     * a row/column child's ambient width does double duty as both "the slot reserved for
+     * positioning siblings" and "the width fed into layout" for every other type because those are
+     * the same number by construction — for a ROTATED node they can't be (the slot needs the
+     * POST-rotation thickness, wrapping needs the PRE-rotation width), so there is no single ambient
+     * width that could serve both purposes correctly. One consequence: `alignSelf`/`crossAlign:
+     * 'stretch'` has no effect on vertical text (there's no ambient width left for it to stretch
+     * into). Restricted to quarter turns so the box's width/height swap is always exact (an arbitrary
+     * angle would need a larger enclosing box, breaking the "sibling boxes never overlap" layout
+     * invariant). Vertical text is atomic (never splits across a page boundary).
+     */
+    orientation?: 'vertical' | 'vertical-inverted';
     /** @internal memoized PreparedTextWithSegments, set lazily by the measure layer */
     __prepared?: unknown;
     /** @internal set on synthetic continuation nodes produced by splitting across a page break */
@@ -298,6 +349,90 @@ export type SvgNode = Interactive & SelfAlignable & {
     height?: number;
     /** width / height. Used to derive whichever of width/height is missing. */
     aspectRatio?: number;
+    /** 0-1. */
+    opacity?: number;
+    /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+     *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+     *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
+    flex?: FlexSize;
+};
+export type QrErrorCorrectionLevel = 'L' | 'M' | 'Q' | 'H';
+export type QrcodeNode = Interactive & SelfAlignable & {
+    type: 'qrcode';
+    /** Data to encode. */
+    value: string;
+    /**
+     * At least one of {width & height}, {width & aspectRatio}, {height & aspectRatio}, or
+     * {aspectRatio alone} is required — see qrcode(), same rule as ImageNode — UNLESS `moduleSize`
+     * is given instead, in which case qrcode() derives a square `width`/`height` directly from the
+     * encoded module count.
+     */
+    width?: number;
+    height?: number;
+    /** width / height. Used to derive whichever of width/height is missing. */
+    aspectRatio?: number;
+    /** px per QR module — an alternative to width/height/aspectRatio: qrcode() encodes `value` once
+     *  upfront to learn its module count, and derives a square box from it. Ignored once
+     *  width/height/aspectRatio are given (explicitly or already resolved). */
+    moduleSize?: number;
+    /** Default 'M'. */
+    errorCorrectionLevel?: QrErrorCorrectionLevel;
+    /** Default '#000000'. */
+    moduleColor?: string;
+    /** Default '#ffffff' — always painted; a transparent background isn't supported. */
+    backgroundColor?: string;
+    /** Modules of blank border on all 4 sides. Default 4 (the ISO/IEC 18004 minimum recommendation). */
+    quietZone?: number;
+    /** 0-1. */
+    opacity?: number;
+    /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+     *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+     *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
+    flex?: FlexSize;
+};
+export type { BarcodeSymbology };
+export type BarcodeCheckDigitMode = 'auto' | 'validate' | 'omit';
+export type BarcodeNode = Interactive & SelfAlignable & {
+    type: 'barcode';
+    /** Data to encode. */
+    value: string;
+    /** Default 'code128'. */
+    symbology?: BarcodeSymbology;
+    /**
+     * `height` or `aspectRatio` is always required (barcode dimensions are never auto-detected —
+     * there's no natural "shape" for a linear barcode the way a QR code is naturally square).
+     * `width` is required too, UNLESS `barWidth` is given instead — see barcode().
+     */
+    width?: number;
+    /** Total box height, including the human-readable text line underneath if `showText` is true. */
+    height?: number;
+    /** width / height. Used to derive whichever of width/height is missing. */
+    aspectRatio?: number;
+    /** px per narrow-bar module — an alternative to `width`: barcode() encodes `value` once upfront
+     *  to learn its module count, and derives `width` from it. Ignored once `width` is given. */
+    barWidth?: number;
+    /** px height of the bars themselves. Defaults to `height` minus a reserved text band (if
+     *  `showText`) or the full `height` otherwise. */
+    barHeight?: number;
+    /** Default '#000000'. */
+    barColor?: string;
+    /** Default '#ffffff'. */
+    backgroundColor?: string;
+    /** px of blank border on both sides. Default 10. */
+    quietZone?: number;
+    /** Human-readable value printed under the bars. Default true. */
+    showText?: boolean;
+    /** Default 10. */
+    textSize?: number;
+    /** Default `barColor`. */
+    textColor?: string;
+    /** EAN-13/Code39 only — ignored for `code128`, which always computes its own mandatory
+     *  checksum. 'auto' computes and appends a check digit/character; 'validate' verifies a
+     *  caller-supplied one (the last digit of `value` for ean13, or the last character for code39)
+     *  and throws on mismatch; 'omit' takes `value` as-is. Default 'auto' for ean13 (a 12-digit
+     *  `value` always needs a computed 13th digit regardless), 'omit' for code39 (Code 39 is
+     *  self-checking and conventionally printed without one). */
+    checkDigit?: BarcodeCheckDigitMode;
     /** 0-1. */
     opacity?: number;
     /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
@@ -1008,7 +1143,7 @@ export type TableNode = Interactive & {
     /** Only meaningful when this node is itself a ROW child; ignored for column children. */
     flex?: FlexSize;
 };
-export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode | SvgNode;
+export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode | SvgNode | QrcodeNode | BarcodeNode;
 export declare function definePage(config: Omit<PageDef, 'body'>, body: Node): PageDef;
 export declare function group(config: DistributiveOmit<GroupNode, 'type' | 'children'>, children: Node[]): GroupNode;
 export declare function text(config: Omit<TextNode, 'type' | 'lineHeight'> & {
@@ -1026,6 +1161,8 @@ export declare function separator(config?: Omit<SeparatorNode, 'type'>): Separat
 export declare function pageBreak(): PageBreakNode;
 export declare function image(config: Omit<ImageNode, 'type'>): ImageNode;
 export declare function svg(config: Omit<SvgNode, 'type'>): SvgNode;
+export declare function qrcode(config: Omit<QrcodeNode, 'type'>): QrcodeNode;
+export declare function barcode(config: Omit<BarcodeNode, 'type'>): BarcodeNode;
 export declare function container(config: Omit<ContainerNode, 'type' | 'child'>, child: Node): ContainerNode;
 export declare function chart(config: DistributiveOmit<ChartNode, 'type'>): ChartNode;
 /**
@@ -1039,4 +1176,3 @@ export declare function rowGroup(groupValues: string[], rows: Extract<TableRow, 
     kind?: 'cells';
 }>[]): TableRow[];
 export declare function table(config: Omit<TableNode, 'type'>): TableNode;
-export {};

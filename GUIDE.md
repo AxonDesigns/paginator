@@ -187,6 +187,8 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | `pageBreak` | `() => PageBreakNode` | Forces a page break; zero-size marker |
 | `image` | `(config: Omit<ImageNode,'type'>) => ImageNode` | **Throws** if neither `height` nor `aspectRatio` is given |
 | `svg` | `(config: Omit<SvgNode,'type'>) => SvgNode` | Raw SVG markup rendered as true vector content in the PDF (via `svg-to-pdfkit`), not rasterized. **Throws** if `markup` doesn't look like an SVG document, or if neither `height` nor `aspectRatio` is given |
+| `qrcode` | `(config: Omit<QrcodeNode,'type'>) => QrcodeNode` | QR code, hand-drawn from a `qrcode-generator`-computed module matrix (no rendering library). **Throws** on an empty `value`, or if none of `height`/`aspectRatio`/`width`/`moduleSize` is given |
+| `barcode` | `(config: Omit<BarcodeNode,'type'>) => BarcodeNode` | Linear barcode (`code128`/`ean13`/`code39`, all hand-rolled, zero dependencies). **Throws** if `value` is invalid for the chosen `symbology`, if neither `width` nor `barWidth` is given, or if neither `height` nor `aspectRatio` is given |
 | `container` | `(config: Omit<ContainerNode,'type'\|'child'>, child: Node) => ContainerNode` | Single-child decorative wrapper (Flutter's `Container`) — `background`/`border`/`borderRadius`/`padding`, plus `width`/`height`(minimum)/`flex` sizing. The one place `background`/`border`/`padding` exist for an otherwise-plain piece of content, since `group` deliberately has none of those |
 | `table` | `(config: Omit<TableNode,'type'>) => TableNode` | Fixed grid, not semantic HTML — see below. **Throws** on a row/column-count mismatch, `headerRows` exceeding the row count, every column marked `group`, a `totals()` callback returning the wrong cell count, partial adoption of `column.content` across the effective columns, or `column.content` combined with an explicit `headerRows` |
 | `chart` | `(config: Omit<ChartNode,'type'>) => ChartNode` | Seven kinds — `categorical` (merged bar/line/points), `radial` (merged pie/donut, plus multi-ring/sunburst), `scatter`, `gantt`, `radar`, `candlestick`, `treemap` — discriminated by `chartKind`, all built by hand with no charting library. **Throws** if neither `height` nor `aspectRatio` is given, plus a battery of kind-specific shape checks — see the full `ChartNode` reference below |
@@ -259,6 +261,7 @@ for their semantics.
 | `background` | `string \| ((ctx: { pageNumber, totalPages }) => string \| undefined \| null)?` | Solid page background color. Default white. Resolved once per page in `paginate()`, exactly like `header`/`footer`/`watermark` — same callback shape, so e.g. only the cover page can have a colored background; the callback may return `undefined`/`null` to opt a page out entirely. Threaded through `PaginatedPage.background`, drawn by both `mount()` and `generatePdf()` |
 | `border` | `ContainerBorder \| ((ctx: { pageNumber, totalPages }) => ContainerBorder \| undefined \| null)?` | Drawn around the page's own edge in both renderers. Same per-page resolution as `background`, including the opt-out return. No `borderRadius` (a page is never clipped/cropped). `ContainerBorder.style` (`LineStyle`, default `'solid'`) works here too |
 | `watermark` | `Watermark \| ((ctx: { pageNumber, totalPages }) => Watermark \| undefined \| null)?` | Decorative overlay drawn on every page. The callback may return `undefined`/`null` to skip the watermark on a given page (e.g. only page 1). See below |
+| `marginContent` | `MarginNote[] \| ((ctx: { pageNumber, totalPages }) => MarginNote[] \| undefined \| null)?` | Free-positioned content in the page margin whitespace (side annotations, running vertical titles, ...) — unlike `header`/`footer`, not tied to a fixed top/bottom strip. See "MarginNote" below |
 | `body` | `Node` | Usually a column `group` |
 
 ### `Watermark`
@@ -320,6 +323,72 @@ definePage(
 )
 ```
 
+### `MarginNote` (`PageDef.marginContent`)
+
+Also not a `Node` union member itself, but — unlike `Watermark` — each note WRAPS a real `Node`,
+laid out through the ordinary `layoutNodeFull` path (so it can be an interactive/hit-testable
+target — see "Interaction system" below — unlike the purely decorative watermark). Resolved once
+per page in `paginate()`, same `{ pageNumber, totalPages }` callback shape and `undefined`/`null`
+opt-out as `background`/`border`/`watermark`. Painted after `header`/`body`/`footer`, before the
+watermark (the watermark always stays the topmost layer).
+
+| Field | Type | Notes |
+|---|---|---|
+| `node` | `Node \| ((ctx: { pageNumber, totalPages }) => Node)` | Same shape as `header`/`footer` content |
+| `position` | `MarginPosition` | See below |
+
+No `width` field — a note is **always** shrink-wrapped to its own content's natural width, via the
+exact same `childCrossWidthInColumn()` helper (`src/nodes/group.ts`) a non-stretch column child's
+cross width already goes through, capped at the full page width. Works for any node type,
+including a `group` (e.g. a row of several labels placed side by side) — there is nothing to
+configure here; an inner `container`/fixed-`width` node still controls its own size exactly as it
+would as a column child.
+
+`MarginPosition` is one of two forms:
+
+```ts
+type MarginPosition =
+  | { x: number; y: number }
+  | { region: 'top' | 'bottom' | 'left' | 'right'; cross?: 'inner' | 'center' | 'outer'; along?: 'start' | 'center' | 'end'; offsetX?: number; offsetY?: number }
+```
+
+- **Absolute** `{ x, y }` — the box's own top-left corner, page-relative px. Free-positioned
+  anywhere (typically, but not enforced, within the margin whitespace).
+- **Anchor** (`region`/`cross`/`along`) — expressed relative to one of the page's 4 margin
+  **strips** (the whitespace band running the full page height on the left/right, or the full page
+  width on top/bottom) rather than the page's own corners, since "put this in the margin" is
+  naturally about that strip's own geometry:
+  - `cross` positions along the axis PERPENDICULAR to the strip (its own thickness): `'outer'` =
+    toward the physical page edge, `'inner'` = toward the body content box, `'center'` (default)
+    splits the difference. E.g. for `region: 'left'`, `'inner'` is the strip's right edge
+    (bordering the body), `'outer'` is its left edge (the physical page edge).
+  - `along` positions along the axis PARALLEL to the strip: `'start'`/`'end'` map to top/bottom for
+    `region: 'left'|'right'`, and to left/right for `region: 'top'|'bottom'`. Default `'center'`.
+  - `offsetX`/`offsetY` nudge the final resolved position by a fixed px amount, same meaning as the
+    absolute form.
+
+```ts
+definePage(
+  {
+    size: 'Letter',
+    margins: { top: 35, right: 35, bottom: 35, left: 35 },
+    marginContent: [
+      {
+        // A vertical running title, centered in the left margin strip.
+        node: text({ content: 'CONFIDENTIAL', fontFamily: 'Arial', fontSize: 10, orientation: 'vertical-inverted' }),
+        position: { region: 'left', cross: 'center', along: 'center' },
+      },
+      {
+        // A small per-page marker in the top-right corner.
+        node: ({ pageNumber }) => text({ content: `#${pageNumber}`, fontFamily: 'Arial', fontSize: 9 }),
+        position: { region: 'top', cross: 'outer', along: 'end', offsetX: -8, offsetY: 4 },
+      },
+    ],
+  },
+  myBody,
+)
+```
+
 ### `GroupNode` (`type: 'group'`)
 | Field | Type | Notes |
 |---|---|---|
@@ -344,6 +413,7 @@ definePage(
 | `letterSpacing`, `whiteSpace`, `wordBreak` | optional | Forwarded to pretext's `prepare()` |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child |
 | `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
+| `orientation` | `'vertical' \| 'vertical-inverted'?` | Rotates the whole laid-out block 90° for sideways labels (a running side-title in a margin, spine-style text). `'vertical'` reads top-to-bottom (rotated clockwise), `'vertical-inverted'` reads bottom-to-top (counter-clockwise). Unlike every other sizing in this engine, vertical text ignores whatever ambient width it's handed and always wraps against its own intrinsic natural width instead (`measureNaturalWidth()`, the same "widest forced/unwrapped line" pretext already computes) — the only thing its layout is ever concerned with is its own post-rotation size, the same way Image/Chart/Svg's dimensions are never derived from the ambient width either. This is deliberate: a row/column child's ambient width normally serves double duty as both "the slot reserved for positioning siblings" and "the width fed into `layout()`" — those are the same number by construction for every other type, but for a ROTATED box they can't be (the slot needs the POST-rotation thickness, wrapping needs the PRE-rotation width), so there is no single ambient width that could serve both correctly. `alignSelf`/`crossAlign: 'stretch'` therefore has no effect on vertical text (there's no ambient width left for it to stretch into). Atomic — never splits across a page boundary, same as Image/Chart/Svg. Restricted to quarter turns so the box's width/height swap is always exact (an arbitrary angle would need a larger enclosing box, breaking invariant #3) |
 
 ### `SeparatorNode` (`type: 'separator'`)
 | Field | Type | Notes |
@@ -407,6 +477,65 @@ are never auto-detected from the markup itself (would make `paginate()` asynchro
   parser only produces a `console.warn` (prefixed `[paginator] svg node: ...`), never a thrown
   error — a document that already renders fine on screen shouldn't fail PDF export over one broken
   decorative element.
+
+### `QrcodeNode` (`type: 'qrcode'`)
+Renders a QR code. No SVG/canvas rendering library — [`qrcode-generator`](https://github.com/kazuhikoarase/qrcode-generator)
+supplies only the raw module matrix (`isDark`/`getModuleCount`); every rect drawn in the DOM preview
+and PDF export is hand-built from that matrix (same "no rendering library" approach `chart` already
+uses — see `src/render/chart-render.ts`'s header comment).
+
+| Field | Type | Notes |
+|---|---|---|
+| `value` | `string` | Data to encode |
+| `width`, `height` | `number?` | At least one of `{width & height}`, `{width & aspectRatio}`, `{height & aspectRatio}`, or `{aspectRatio alone}` required — UNLESS `moduleSize` is given instead |
+| `aspectRatio` | `number?` | `width / height` |
+| `moduleSize` | `number?` | px per QR module — an alternative to width/height/aspectRatio: `qrcode()` encodes `value` once upfront to learn its module count and derives a square box from it |
+| `errorCorrectionLevel` | `'L'\|'M'\|'Q'\|'H'?` | Default `'M'` |
+| `moduleColor` | `string?` | Default `'#000000'` |
+| `backgroundColor` | `string?` | Default `'#ffffff'` — always painted, no transparent background |
+| `quietZone` | `number?` | Modules of blank border on all 4 sides. Default `4` (the ISO/IEC 18004 minimum) |
+| `opacity` | `number?` | `0-1` |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
+
+`qrcode()` always encodes `value` once at construction — both to validate it can actually be
+encoded (throwing immediately on failure, like `svg()`'s markup check) and, when `moduleSize` is
+used, to derive `width`/`height`. Not cached on the node — each renderer (DOM/PDF/DOCX) re-encodes
+at render time, same "cheap and deterministic, don't bother caching" contract `svg()` has for its
+own markup parsing. In `generateDocx()`, a qrcode node is rasterized to a PNG via `OffscreenCanvas`
+(needs a browser; degrades with a one-time warning under a non-browser environment like `bun test`).
+
+### `BarcodeNode` (`type: 'barcode'`)
+Renders a linear barcode. Every symbology is hand-rolled with zero dependencies — Code128, EAN-13,
+and Code39 encoding tables/checksums live in `src/render/barcode-encode.ts`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `value` | `string` | Data to encode |
+| `symbology` | `'code128'\|'ean13'\|'code39'?` | Default `'code128'` |
+| `width` | `number?` | Required UNLESS `barWidth` is given instead |
+| `height` | `number?` | Total box height including the text line (if `showText`). Required — barcode dimensions are never auto-detected (no natural "shape" the way a QR code is square) |
+| `aspectRatio` | `number?` | `width / height` — an alternative to `height` |
+| `barWidth` | `number?` | px per narrow-bar module — an alternative to `width`: `barcode()` encodes `value` once upfront to learn its module count and derives `width` from it |
+| `barHeight` | `number?` | px height of the bars themselves. Defaults to `height` minus a reserved text band (if `showText`) or the full `height` otherwise |
+| `barColor` | `string?` | Default `'#000000'` |
+| `backgroundColor` | `string?` | Default `'#ffffff'` |
+| `quietZone` | `number?` | px of blank border on both sides (a fixed px margin, not scaled with `width`). Default `10` |
+| `showText` | `boolean?` | Human-readable value printed under the bars. Default `true` |
+| `textSize` | `number?` | Default `10` |
+| `textColor` | `string?` | Default `barColor` |
+| `checkDigit` | `'auto'\|'validate'\|'omit'?` | EAN-13/Code39 only (ignored for `code128`, which always computes its own mandatory checksum). `'auto'`: computes and appends a check digit/character. `'validate'`: verifies a caller-supplied one (the last digit of `value` for ean13, last character for code39) and throws on mismatch. `'omit'`: takes `value` as-is. Default `'auto'` for ean13, `'omit'` for code39 |
+| `opacity` | `number?` | `0-1` |
+| `flex` | `FlexSize?` | Only meaningful as a ROW child. When unset and `width` is set, the row-slot size defaults to `width` — see "Row flex sizing" below |
+| `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
+
+Code128 covers full printable ASCII (0x20-0x7E), auto-switching to the more compact Code Set C
+(2 digits/symbol) only when the entire `value` is an even-length run of digits (length >= 4) — no
+mid-string code-set switching, and Code Set A (control characters) isn't supported. EAN-13 requires
+exactly 12 (check digit computed) or 13 (check digit provided/validated) digits. Code39 accepts
+`0-9`, `A-Z`, space, and `-.$/+%` (case-insensitive), auto-wrapped with `*` start/stop delimiters.
+Same construction-time validation and re-encode-per-render contract as `qrcode()` above; DOCX export
+rasterizes to a PNG via `OffscreenCanvas` the same way.
 
 ### `ContainerNode` (`type: 'container'`)
 A single-child decorative wrapper — Flutter's `Container` is the reference point — since `group`
@@ -954,6 +1083,13 @@ Single recursive function `paginateNode(node, width, ctx)` handles every case un
   `totalPages`), then header/footer content is cheaply re-rendered per page with the real
   `{pageNumber, totalPages}` (pass 2, no re-pagination). Constraint: header/footer height must
   never depend on `totalPages`, only the rendered *text* may reference it.
+- **`marginContent`**: resolved once per page exactly like `background`/`border`/`watermark` (plain
+  value or a `{pageNumber, totalPages}` callback, `undefined`/`null` opts a page out) — doesn't
+  consume content-box height, isn't part of the two-pass header/footer measurement above. Each
+  `MarginNote`'s width is shrink-wrapped via `childCrossWidthInColumn()` (`src/nodes/group.ts`),
+  then its `position` is resolved to a concrete page-relative `(x, y)` by
+  `resolveMarginNotePosition()` against the note's own just-resolved box size — see "MarginNote" in
+  the node type reference above for the `region`/`cross`/`along` anchor vocabulary.
 - **Page break** (`pageBreak()`): a leading/redundant break (nothing placed on the current page
   yet) is silently no-op'd rather than producing a blank page. `subtreeHasPageBreak()` recurses
   only into COLUMN-direction groups (a break nested inside a row has no effect and isn't searched
@@ -1494,15 +1630,21 @@ src/
                               behind both a ROW group's child widths (src/nodes/group.ts) and a
                               table's column widths (src/nodes/table/layout.ts)
     page-sizes.ts           — PAGE_SIZE_PRESETS, resolvePageSize()
-    paginate.ts              — paginateNode(), two-pass header/footer, paginate() — dispatches
-                               purely through behavior.ts's generic functions, never switches on
-                               node.type itself except the one bare-top-level-page-break special case
+    paginate.ts              — paginateNode(), two-pass header/footer, renderMarginNotesForPage()/
+                               resolveMarginNotePosition() (MarginNote resolution+anchor math),
+                               paginate() — dispatches purely through behavior.ts's generic
+                               functions, never switches on node.type itself except the one
+                               bare-top-level-page-break special case
     watermark-layout.ts       — resolveWatermarkInstances() (tiling math for Watermark, not a Node)
   nodes/                      — one node type per module/folder; importing src/nodes/index.ts (once,
                                  done for you by src/index.ts) registers all of them
     index.ts                   — side-effect barrel: one `import './<type>.ts'` line per type
     text.ts                     — pretext adapter (streamLines(), measureTextNaturalWidth), DOM
-                                   rendering, PDF drawing (drawTextNode, baseline math)
+                                   rendering, PDF drawing (drawTextNode, baseline math). Vertical
+                                   text (TextNode.orientation) is intrinsic-sized (ignores the
+                                   ambient width, always wraps at its own natural width — see
+                                   Common Pitfalls) with its box swapped post-layout; renderDom/
+                                   drawPdf paint it via a CSS/pdfkit rotate()+translate() pair
     rich-text.ts                  — @chenglou/pretext/rich-inline adapter, mirrors text.ts's shape
                                      for mixed-style runs; also the PDF `.link()` annotation for
                                      RichTextRun.href
@@ -1660,9 +1802,10 @@ Reading it top to bottom is a good way to see every API in realistic use.
 
 ## Extension seam — adding a new node type
 
-Every built-in node type — `text`/`richText`/`separator`/`page-break`/`image`/`svg`/`table`/`chart`/
-`container`/`group` — plugs into pagination, DOM rendering, and PDF drawing purely by calling
-`registerNode()` once (`src/core/behavior.ts`). `paginate.ts`, `shadow-dom.ts`, and `pdf-render.ts`
+Every built-in node type — `text`/`richText`/`separator`/`page-break`/`image`/`svg`/`qrcode`/
+`barcode`/`table`/`chart`/`container`/`group` — plugs into pagination, DOM rendering, and PDF
+drawing purely by calling `registerNode()` once (`src/core/behavior.ts`). `paginate.ts`,
+`shadow-dom.ts`, and `pdf-render.ts`
 never switch on `node.type` themselves; they only ever dispatch through behavior.ts's generic
 functions (`measureNodeHeight`/`layoutNodeFull`/`splitNode`/`isSplittable`/`naturalWidth`/
 `renderNodeDom`/`drawPdfNode`), which do a plain registry lookup. Nothing in any of those three files
@@ -1794,8 +1937,16 @@ type, splittable or not — this is the entire point of the registry pattern.
   `.link()` annotation in the PDF, both natively clickable without any custom hit-testing.
 - `ImageNode` has no filters/tint (grayscale, sepia, color overlay) — would need a canvas filter
   graph on the DOM side and per-pixel raster work in `rasterizeImageToPng` on the PDF side.
-- No rotation or transform support anywhere in the node model — e.g. a diagonal watermark isn't
-  buildable; `PageDef.background` covers a solid-color page background, nothing rotated on top of it.
+- No rotation or transform support anywhere in the node model, EXCEPT `TextNode.orientation`
+  (quarter-turn rotation for sideways labels — see the node type reference above) — e.g. a diagonal
+  watermark still isn't buildable; `PageDef.background` covers a solid-color page background,
+  nothing rotated on top of it. True CJK-style vertical writing mode (glyphs stacked top-to-bottom,
+  columns flowing right-to-left, as opposed to rotated horizontal text) was investigated and ruled
+  out: `@chenglou/pretext` measures text via the browser's `canvas.measureText()`, which has no
+  vertical-text-metrics mode at all — only real DOM + CSS `writing-mode: vertical-rl` does, which
+  would need `getBoundingClientRect()`-style measurement and break invariant #1 (`paginate()` must
+  stay synchronous, never DOM-measured). `TextNode.orientation` rotates ordinary horizontal text
+  instead, reusing pretext's existing measurement unchanged.
 - Word/Excel export (`src/export/`, see full section above): `generateXlsx()` is tables-only —
   headings/paragraphs/images/charts elsewhere in the document aren't represented in the workbook at
   all, and **throws** if the document has zero tables. `generateDocx()` doesn't support `svg` nodes
@@ -1895,3 +2046,28 @@ type, splittable or not — this is the entire point of the registry pattern.
   each line's own already-known `line.width` — the same manual-line approach `src/nodes/chart/pdf.ts`'s
   `drawChartLine` already uses. Don't reach for pdfkit's built-in options here again without
   re-verifying against this failure mode first.
+- **A row/column child's "ambient width" silently does double duty — a swapped-box type can't
+  satisfy both roles with one number**: `layoutRow`/`layoutColumn`/`childCrossWidthInColumn`
+  (`src/nodes/group.ts`) all compute one width number per child and use it for TWO different
+  things — the slot reserved for positioning siblings (`x += r.width + between`), AND the width
+  parameter fed into that same child's `measureNodeHeight`/`layoutNodeFull` call to produce its
+  actual box. For every node type up through `container`/`table`/`chart`/`svg`/horizontal `text`,
+  `layout(node, W).box.width === W` always (box.width is just the parameter echoed back), so one
+  number quietly serves both roles correctly. `TextNode.orientation` (vertical text) broke this the
+  first time a type legitimately swapped width/height in its own box: an early implementation had
+  vertical text wrap against whatever ambient width it was handed (mirroring horizontal text) and
+  registered a `naturalWidth()` that returned its POST-rotation (thin) footprint — self-consistent
+  in isolation, but the moment two vertical labels sat in one row, the row fed that same thin value
+  back in as `measureNodeHeight`'s width parameter, which vertical text's own `measureHeight`
+  interpreted as a WRAP width, collapsing the label's reported height down to the thin value too.
+  Patching `naturalWidth()` alone (re-deriving box.width via an extra `layout()` call) only moved
+  the inconsistency from the width axis to the height axis — it didn't remove it, because the two
+  roles (slot-for-positioning vs. wrap-constraint-for-layout) are fundamentally different questions
+  for a box that swaps axes, and no single ambient number can answer both. The actual fix: vertical
+  text ignores the ambient width entirely and always sizes itself from its own intrinsic natural
+  width (`measureNaturalWidth()`, pretext's widest-unwrapped-line width) — the same way
+  Image/Chart/Svg's dimensions were never derived from the ambient width to begin with. If a future
+  node type ever needs a box that swaps or otherwise decouples from its input width, don't try to
+  make `naturalWidth()` alone paper over it — make that type intrinsic (ignore the ambient width for
+  sizing purposes across the board), or the row/column layout code will need to start carrying two
+  separate numbers per child instead of one, a much larger change.

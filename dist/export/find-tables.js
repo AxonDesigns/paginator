@@ -14,6 +14,8 @@ export function findTables(node) {
         case 'page-break':
         case 'image':
         case 'svg':
+        case 'qrcode':
+        case 'barcode':
         case 'chart':
             return [];
     }

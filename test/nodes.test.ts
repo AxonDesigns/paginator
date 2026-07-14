@@ -5,11 +5,14 @@
 //
 // text/richText/svg are excluded here: they depend on browser-only APIs (canvas text measurement,
 // DOMParser) unavailable under `bun test` — see test/behavior.test.ts's header comment. Every node
-// type used below (image/separator/page-break/container/group/table/chart) is pure arithmetic, so
-// importing them is enough to self-register with no DOM required.
+// type used below (image/qrcode/barcode/separator/page-break/container/group/table/chart) is pure
+// arithmetic at layout time — qrcode/barcode's own encode step runs synchronously with no DOM
+// dependency either — so importing them is enough to self-register with no DOM required.
 
 import { describe, expect, test } from 'bun:test'
 import '../src/nodes/image.ts'
+import '../src/nodes/qrcode.ts'
+import '../src/nodes/barcode.ts'
 import '../src/nodes/separator.ts'
 import '../src/nodes/page-break.ts'
 import '../src/nodes/container.ts'
@@ -17,7 +20,7 @@ import '../src/nodes/group.ts'
 import '../src/nodes/table/index.ts'
 import '../src/nodes/chart/index.ts'
 import { isSplittable, layoutNodeFull, measureNodeHeight, splitNode } from '../src/core/behavior.ts'
-import { chart, container, group, image, pageBreak, separator, table, text } from '../src/core/nodes.ts'
+import { barcode, chart, container, group, image, pageBreak, qrcode, separator, table, text } from '../src/core/nodes.ts'
 import type { TableRow } from '../src/core/nodes.ts'
 import type { RenderedNode, RenderedTableRow } from '../src/core/geometry.ts'
 import { estimateChartTextWidth, estimateTextWidth, normalizeChartText, squarifyTreemap, wrapChartTextToWidth } from '../src/render/chart-geometry.ts'
@@ -38,6 +41,73 @@ describe('image', () => {
   })
 })
 
+describe('qrcode', () => {
+  test('measureHeight uses explicit height', () => {
+    const node = qrcode({ value: 'hello', width: 100, height: 50 })
+    expect(measureNodeHeight(node, 100)).toBe(50)
+  })
+
+  test('measureHeight derives height from aspectRatio at the given width', () => {
+    const node = qrcode({ value: 'hello', aspectRatio: 2 })
+    expect(measureNodeHeight(node, 200)).toBe(100)
+  })
+
+  test('moduleSize derives a square width/height from the encoded module count', () => {
+    const node = qrcode({ value: 'hello', moduleSize: 4, quietZone: 4 })
+    expect(node.width).toBeDefined()
+    expect(node.width).toBe(node.height)
+    // Every QR module count is 21 + 4n; width = (moduleCount + 2*quietZone) * moduleSize.
+    const moduleCount = node.width! / 4 - 4 * 2
+    expect((moduleCount - 21) % 4).toBe(0)
+  })
+
+  test('throws when given none of width/height/aspectRatio/moduleSize', () => {
+    expect(() => qrcode({ value: 'hello' })).toThrow(/"moduleSize"/)
+  })
+
+  test('throws on an empty value', () => {
+    expect(() => qrcode({ value: '', width: 100, height: 100 })).toThrow(/non-empty/)
+  })
+
+  test('is not splittable', () => {
+    expect(isSplittable(qrcode({ value: 'hello', width: 100, height: 100 }))).toBe(false)
+  })
+})
+
+describe('barcode', () => {
+  test('measureHeight uses explicit height', () => {
+    const node = barcode({ value: '12345678', width: 200, height: 60 })
+    expect(measureNodeHeight(node, 200)).toBe(60)
+  })
+
+  test('measureHeight derives height from aspectRatio at the given width', () => {
+    const node = barcode({ value: '12345678', width: 200, aspectRatio: 4 })
+    expect(measureNodeHeight(node, 200)).toBe(50)
+  })
+
+  test('barWidth derives width from the encoded module count', () => {
+    const node = barcode({ value: 'CODE39', symbology: 'code39', barWidth: 2, quietZone: 10, height: 60 })
+    // 8 chars * 15 modules + 7 gaps = 127 modules (see barcode-encode.test.ts) -> 2*127 + 2*10 = 274.
+    expect(node.width).toBe(2 * 127 + 2 * 10)
+  })
+
+  test('throws when given neither width nor barWidth', () => {
+    expect(() => barcode({ value: '12345678', height: 60 })).toThrow(/"width" or "barWidth"/)
+  })
+
+  test('throws when given neither height nor aspectRatio', () => {
+    expect(() => barcode({ value: '12345678', width: 200 })).toThrow(/"height" or "aspectRatio"/)
+  })
+
+  test('throws on a value invalid for the chosen symbology (ean13 needs 12-13 digits)', () => {
+    expect(() => barcode({ value: 'not-digits', symbology: 'ean13', width: 200, height: 60 })).toThrow()
+  })
+
+  test('is not splittable', () => {
+    expect(isSplittable(barcode({ value: '12345678', width: 200, height: 60 }))).toBe(false)
+  })
+})
+
 describe('separator', () => {
   test('measureHeight = thickness + 2*margin', () => {
     expect(measureNodeHeight(separator({ thickness: 3, margin: 5 }), 100)).toBe(13)
@@ -53,6 +123,17 @@ describe('separator', () => {
 
   test('style does not affect measureHeight (thickness/margin still drive main-axis size)', () => {
     expect(measureNodeHeight(separator({ thickness: 3, margin: 5, style: 'dotted' }), 100)).toBe(13)
+  })
+})
+
+describe('text', () => {
+  // Only the builder's own construction, never layout/measurement (which needs pretext's
+  // canvas-based text measurement — see this file's header comment) — `orientation` round-trips
+  // onto the node with no validation of its own (unlike image()'s required dimensions), since
+  // vertical text wraps against the exact same ambient width ordinary text does.
+  test('orientation round-trips onto the node unvalidated', () => {
+    const node = text({ content: 'hi', fontFamily: 'Arial', fontSize: 10, orientation: 'vertical-inverted' })
+    expect(node.orientation).toBe('vertical-inverted')
   })
 })
 

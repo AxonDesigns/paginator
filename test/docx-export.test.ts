@@ -8,7 +8,7 @@
 // .docx (a standard OOXML zip) and asserts on word/document.xml's raw markup via substring checks.
 import { describe, expect, test } from 'bun:test'
 import JSZip from 'jszip'
-import { chart, container, definePage, group, image, pageBreak, richText, rowGroup, separator, table, text } from '../src/core/nodes.ts'
+import { barcode, chart, container, definePage, group, image, pageBreak, qrcode, richText, rowGroup, separator, table, text } from '../src/core/nodes.ts'
 import type { TableColumn, TableRow } from '../src/core/nodes.ts'
 import { generateDocx } from '../src/export/docx-export.ts'
 
@@ -226,6 +226,36 @@ describe('generateDocx', () => {
       expect(xml).toContain('Before')
       expect(xml).toContain('After')
       expect(warnings.some(w => w.includes('chart rendering needs a browser'))).toBe(true)
+    } finally {
+      console.warn = warnSpy
+    }
+  })
+
+  // qrcode/barcode rasterization only needs OffscreenCanvas (no real DOM, unlike chart) — still
+  // unavailable under `bun test` though, so this should degrade the same way: skip with a warning,
+  // keep the rest of the document intact, never throw. Real rendering is verified separately in a
+  // real browser.
+  test('qrcode/barcode nodes gracefully skip outside a browser (no OffscreenCanvas), with a warning', async () => {
+    const warnSpy = Reflect.get(console, 'warn') as typeof console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      const doc = definePage(
+        PAGE,
+        group({ direction: 'column' }, [
+          text({ content: 'Before', fontFamily: 'Arial', fontSize: 12 }),
+          qrcode({ value: 'https://example.com', width: 100, height: 100 }),
+          barcode({ value: '12345678', width: 150, height: 60 }),
+          text({ content: 'After', fontFamily: 'Arial', fontSize: 12 }),
+        ]),
+      )
+      const xml = await documentXml(await generateDocx(doc))
+      expect(xml).toContain('Before')
+      expect(xml).toContain('After')
+      expect(warnings.some(w => w.includes('qrcode rendering needs a browser'))).toBe(true)
+      expect(warnings.some(w => w.includes('barcode rendering needs a browser'))).toBe(true)
     } finally {
       console.warn = warnSpy
     }

@@ -430,6 +430,9 @@ export async function generatePdf(result: PaginatedResult, fonts: FontRegistry, 
     if (pdfPage.header !== null) await drawPdfNode(pdfPage.header, headerOriginX, headerOriginY, ctx)
     for (const node of pdfPage.body) await drawPdfNode(node, bodyOriginX, bodyOriginY, ctx)
     if (pdfPage.footer !== null) await drawPdfNode(pdfPage.footer, footerOriginX, footerOriginY, ctx)
+    // Free-positioned margin content — x/y are already page-absolute (resolved in paginate.ts), so
+    // no region origin to add here, unlike header/footer/body above.
+    for (const note of pdfPage.marginNotes) await drawPdfNode(note.rendered, note.x, note.y, ctx)
     // Drawn last (before only the page border) — on top of everything, so an opaque table/container/
     // chart background elsewhere on the page can never hide it. See drawWatermark's own comment.
     if (pdfPage.watermark !== null) await drawWatermark(ctx, pdfPage.watermark, pageSize.width, pageSize.height)

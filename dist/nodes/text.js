@@ -60,21 +60,49 @@ function fullLines(node, width) {
     const { lines } = streamLines(prepared, startCursorFor(node), width, Infinity);
     return lines;
 }
-/** Shrink-to-fit width for cross/main-axis sizing in Group/Table layout — the widest forced line. */
+/**
+ * Shrink-to-fit width for cross/main-axis sizing in Group/Table layout — the widest forced line,
+ * ignoring any wrap constraint entirely (that's the whole point of a "natural"/unconstrained
+ * width). For vertical text (`node.orientation` set), this is the POST-rotation footprint
+ * (`vwrapWidth()`'s line count × lineHeight) — see that function's own doc comment for why
+ * vertical text ignores the ambient width everywhere, making this trivially self-consistent with
+ * `layout()`/`measureHeight()` below no matter what any caller passes in.
+ */
 export function measureTextNaturalWidth(node) {
+    if (node.orientation !== undefined)
+        return fullLines(node, vwrapWidth(node)).length * node.lineHeight;
+    return measureNaturalWidth(preparedFor(node));
+}
+// Vertical text is atomic (see isSplittable in registerNode() below) and, unlike every other node
+// type, never adapts to an ambient width at all — the only thing its layout is ever concerned with
+// is its own post-rotation size. Concretely: it always wraps against its OWN intrinsic natural
+// width (the widest forced/unwrapped line, exactly what horizontal text's `measureNaturalWidth`
+// already computes), never whatever width a parent row/column/margin-note happens to hand it. This
+// sidesteps a genuine impossibility otherwise: a row/column child's "ambient width" is used for TWO
+// different purposes by the surrounding layout code — the slot size reserved for positioning
+// siblings, and the value fed into `layout()`/`measureHeight()` to compute the actual box — and for
+// ordinary (non-swapping) types those are the same number by construction, but for a ROTATED node
+// they can't be: the slot size needs to be the POST-rotation thickness, while wrapping needs the
+// PRE-rotation width. Making vertical text intrinsic (ignoring the ambient width entirely, the same
+// way Image/Chart/Svg's own dimensions are never derived from it either) means both concerns
+// resolve to the one true size regardless of which number any particular caller passes through.
+// One consequence: `alignSelf`/`crossAlign: 'stretch'` has no effect on vertical text (there's no
+// ambient width left for it to stretch into) — same documented no-op class as row-child height
+// already being intrinsic elsewhere in this file.
+function vwrapWidth(node) {
     return measureNaturalWidth(preparedFor(node));
 }
 function measureHeight(node, width) {
+    if (node.orientation !== undefined)
+        return vwrapWidth(node);
     return fullLines(node, width).length * node.lineHeight;
 }
 function layout(node, width) {
-    const lines = fullLines(node, width);
-    return {
-        type: 'text',
-        box: { x: 0, y: 0, width, height: lines.length * node.lineHeight },
-        node,
-        lines: positionLines(lines, node, width),
-    };
+    const wrapWidth = node.orientation !== undefined ? vwrapWidth(node) : width;
+    const lines = fullLines(node, wrapWidth);
+    const contentHeight = lines.length * node.lineHeight;
+    const box = node.orientation !== undefined ? { x: 0, y: 0, width: contentHeight, height: wrapWidth } : { x: 0, y: 0, width: wrapWidth, height: contentHeight };
+    return { type: 'text', box, node, lines: positionLines(lines, node, wrapWidth) };
 }
 function split(node, width, availableHeight) {
     const maxLines = Math.floor(availableHeight / node.lineHeight);
@@ -94,20 +122,8 @@ function split(node, width, availableHeight) {
     const rest = exhausted ? null : { ...node, __prepared: prepared, __resumeCursor: endCursor };
     return { rendered, consumedHeight, rest };
 }
-function renderDom(rendered, x, y, ctx) {
+function appendLines(container, rendered, font) {
     const node = rendered.node;
-    const boxEl = styledDiv({
-        left: `${x}px`,
-        top: `${y}px`,
-        width: `${rendered.box.width}px`,
-        height: `${rendered.box.height}px`,
-        // `user-select` is inherited, so setting it once here covers every line div below — a drag
-        // gesture starting on (or bubbling up through) this text shouldn't also trigger native text
-        // selection.
-        ...(ctx.unselectable ? { userSelect: 'none' } : {}),
-        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
-    });
-    const font = fontString(node);
     for (const line of rendered.lines) {
         const lineEl = styledDiv({
             left: `${line.x}px`,
@@ -122,8 +138,61 @@ function renderDom(rendered, x, y, ctx) {
             ...(node.textDecoration !== undefined && node.textDecoration !== 'none' ? { textDecoration: node.textDecoration } : {}),
         });
         lineEl.textContent = line.text;
-        boxEl.appendChild(lineEl);
+        container.appendChild(lineEl);
     }
+}
+// Renders the ordinary (unrotated) line block sized `wrapWidth × contentHeight`, then rotates it
+// into place so its bounding box exactly fills the OUTER box (already swapped by layout() above)
+// positioned at (x, y) — the standard "rotate into a swapped bounding box" CSS technique:
+// `transform-origin: top left` pins the pivot to the inner block's own top-left corner, and the
+// paired `translate()` cancels out the offset that rotating around that pivot would otherwise
+// introduce, so the rotated result's bounding box starts flush at (0, 0) of the outer wrapper.
+// Empirically verified (headless-browser bounding-box check of this exact rotate()+translate()
+// pair): the outer wrapper's box and the rotated inner element's box land pixel-identical.
+// `'vertical'` (90° clockwise) reads top-to-bottom down the box's right edge; `'vertical-inverted'`
+// (-90°, counter-clockwise) reads bottom-to-top up its left edge (mirroring the common SVG/CSS
+// axis-title convention for each direction).
+function renderRotatedDom(rendered, x, y, ctx) {
+    const node = rendered.node;
+    const contentHeight = rendered.box.width; // pre-rotation content height == post-swap width
+    const wrapWidth = rendered.box.height; // pre-rotation wrap width == post-swap height
+    const outerEl = styledDiv({
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${rendered.box.width}px`,
+        height: `${rendered.box.height}px`,
+        ...(ctx.unselectable ? { userSelect: 'none' } : {}),
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
+    });
+    const innerEl = styledDiv({
+        left: '0px',
+        top: '0px',
+        width: `${wrapWidth}px`,
+        height: `${contentHeight}px`,
+        transformOrigin: 'top left',
+        transform: node.orientation === 'vertical' ? `rotate(90deg) translate(0px, -${contentHeight}px)` : `rotate(-90deg) translate(-${wrapWidth}px, 0px)`,
+    });
+    appendLines(innerEl, rendered, fontString(node));
+    outerEl.appendChild(innerEl);
+    ctx.container.appendChild(outerEl);
+}
+function renderDom(rendered, x, y, ctx) {
+    if (rendered.node.orientation !== undefined) {
+        renderRotatedDom(rendered, x, y, ctx);
+        return;
+    }
+    const boxEl = styledDiv({
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${rendered.box.width}px`,
+        height: `${rendered.box.height}px`,
+        // `user-select` is inherited, so setting it once here covers every line div below — a drag
+        // gesture starting on (or bubbling up through) this text shouldn't also trigger native text
+        // selection.
+        ...(ctx.unselectable ? { userSelect: 'none' } : {}),
+        ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
+    });
+    appendLines(boxEl, rendered, fontString(rendered.node));
     ctx.container.appendChild(boxEl);
 }
 // pretext's `line.y = i * lineHeight` (positionLines() above) is the TOP of each line's box, not a
@@ -162,6 +231,28 @@ function drawPdf(rendered, x, y, ctx) {
     const decorationThicknessPt = Math.max(0.5, fontSizePt * 0.05);
     const doc = ctx.pdf.doc;
     doc.font(fontName).fontSize(fontSizePt).fillColor(color);
+    if (node.orientation !== undefined) {
+        // Mirrors renderRotatedDom()'s `transform-origin: top left; transform: rotate(θ) translate(...)`
+        // exactly: pdfkit's rotate()/translate() compose the same way CSS transform functions do (each
+        // subsequent call applies in the already-transformed frame), and pdfkit's rotate() is
+        // clockwise-degrees, the same sign convention CSS uses — so this reproduces the DOM path's
+        // geometry call-for-call, just as a transform stack instead of a CSS string. Lines are then
+        // drawn at LOCAL (0,0)-relative coordinates, since (x, y) is already baked into the stack via
+        // the initial translate().
+        const angle = node.orientation === 'vertical' ? 90 : -90;
+        const contentHeightPt = pxToPt(rendered.box.width); // pre-rotation content height == post-swap width
+        const wrapWidthPt = pxToPt(rendered.box.height); // pre-rotation wrap width == post-swap height
+        doc.save();
+        doc.translate(pxToPt(x), pxToPt(y));
+        doc.rotate(angle);
+        doc.translate(angle === 90 ? 0 : -wrapWidthPt, angle === 90 ? -contentHeightPt : 0);
+        drawLines(doc, rendered, 0, 0, baselineFromTopPt, characterSpacing, decoration, decorationThicknessPt, fontSizePt, color);
+        doc.restore();
+        return;
+    }
+    drawLines(doc, rendered, x, y, baselineFromTopPt, characterSpacing, decoration, decorationThicknessPt, fontSizePt, color);
+}
+function drawLines(doc, rendered, x, y, baselineFromTopPt, characterSpacing, decoration, decorationThicknessPt, fontSizePt, color) {
     for (const line of rendered.lines) {
         const lineTopPt = pxToPt(y + line.y);
         const baselinePt = lineTopPt + baselineFromTopPt;
@@ -180,10 +271,14 @@ function drawPdf(rendered, x, y, ctx) {
 }
 registerNode('text', {
     measureHeight,
-    isSplittable: () => true,
+    // Vertical text is atomic, like Image/Chart/Svg — splitting a rotated block across a page
+    // boundary would mean the split cursor runs the page's vertical axis while lines stack along
+    // the page's horizontal axis post-rotation, a confusing case for what's fundamentally a short
+    // label use case (see TextNode.orientation's doc comment).
+    isSplittable: node => node.orientation === undefined,
     split,
     layout,
-    naturalWidth: node => measureTextNaturalWidth(node),
+    naturalWidth: measureTextNaturalWidth,
     renderDom,
     drawPdf,
 });

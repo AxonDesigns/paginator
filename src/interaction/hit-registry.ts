@@ -21,7 +21,9 @@ type RegistryEntry = {
 
 export type HitRegistry = { pages: Map<number, RegistryEntry[]> }
 
-function regionOrigins(result: PaginatedResult): Record<InteractionRegion, { x: number; y: number }> {
+// 'marginContent' has no region origin of its own — its notes are already page-absolute (resolved
+// in paginate.ts), unlike header/footer/body — so it's deliberately excluded here.
+function regionOrigins(result: PaginatedResult): Record<Exclude<InteractionRegion, 'marginContent'>, { x: number; y: number }> {
   const { pageSize, margins, headerHeight, headerGap, footerHeight } = result
   return {
     header: { x: margins.left, y: margins.top },
@@ -68,6 +70,11 @@ export function buildHitRegistry(result: PaginatedResult): HitRegistry {
     }
     if (page.footer !== null) {
       roots.push(flatten(translateRendered(page.footer, origins.footer.x, origins.footer.y), page.pageNumber, 'footer', []))
+    }
+    // x/y are already page-absolute (resolved in paginate.ts), unlike header/footer/body above, so
+    // no region origin to translate by here.
+    for (const note of page.marginNotes) {
+      roots.push(flatten(translateRendered(note.rendered, note.x, note.y), page.pageNumber, 'marginContent', []))
     }
     pages.set(page.pageNumber, roots)
   }

@@ -4,6 +4,15 @@
 // structural + styling correctness with no browser required.
 import { describe, expect, test } from 'bun:test'
 import ExcelJS from 'exceljs'
+// resolveColumnWidths()'s 'shrink' column path (exercised below) calls into core/behavior.ts's
+// entryFor(), which requires each node type actually used here to have run its own registerNode()
+// side effect first — see src/nodes/index.ts's header comment. text.ts/rich-text.ts are
+// deliberately NOT imported: they'd pull in pretext's canvas-based measurement, unavailable under
+// `bun test` (see this file's own header comment above).
+import '../src/nodes/image.ts'
+import '../src/nodes/container.ts'
+import '../src/nodes/group.ts'
+import '../src/nodes/table/index.ts'
 import { container, definePage, group, image, richText, rowGroup, table, text } from '../src/core/nodes.ts'
 import type { TableColumn, TableRow } from '../src/core/nodes.ts'
 import { generateXlsx } from '../src/export/xlsx-export.ts'

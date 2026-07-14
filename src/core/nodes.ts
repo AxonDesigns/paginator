@@ -1,6 +1,9 @@
 // Public document-tree node types and builder functions.
 
 import { DEFAULT_FONT_FAMILY } from '../render/font-registry.ts'
+import { encodeBarcodeValue } from '../render/barcode-encode.ts'
+import type { BarcodeSymbology } from '../render/barcode-encode.ts'
+import { buildQrMatrix } from '../render/qrcode-encode.ts'
 
 export type Margins = { top: number; right: number; bottom: number; left: number }
 
@@ -70,6 +73,56 @@ export type WatermarkContent = Watermark | ((ctx: HeaderFooterContext) => Waterm
 export type PageBackgroundContent = string | ((ctx: HeaderFooterContext) => string | undefined | null)
 export type PageBorderContent = ContainerBorder | ((ctx: HeaderFooterContext) => ContainerBorder | undefined | null)
 
+// Free-positioned content in the page margin whitespace — unlike header/footer (a fixed top/bottom
+// strip), a margin note can sit anywhere, e.g. a rotated running side-title in the left margin.
+// Unlike Watermark, a margin note wraps a real Node (laid out via the normal layoutNodeFull path,
+// not a decorative one-off canvas/image paint), so it's a legitimate hit-test/interaction target
+// when the author opts its content into `interactive: true` — see hit-registry.ts's 'marginContent'
+// region.
+//
+// The anchor form is expressed relative to one of the page's 4 margin STRIPS (the whitespace band
+// running the full page height on the left/right, or the full page width on top/bottom) rather than
+// the page's own corners, since "put this in the margin" is naturally about that strip's own
+// geometry, not the page's:
+//   - `cross` positions along the axis PERPENDICULAR to the strip (the strip's own thickness):
+//     'outer' = toward the physical page edge, 'inner' = toward the body content box, 'center'
+//     splits the difference. E.g. for `region: 'left'`, 'inner' is the strip's right edge
+//     (bordering the body), 'outer' is its left edge (the physical page edge).
+//   - `along` positions along the axis PARALLEL to the strip: 'start'/'end' map to top/bottom for
+//     `region: 'left'|'right'`, and to left/right for `region: 'top'|'bottom'`.
+// Both default to 'center' (centered in the strip's thickness, centered along its run) when
+// omitted. `offsetX`/`offsetY` nudge the final resolved position, same meaning as the absolute
+// `{x, y}` form.
+export type MarginRegion = 'top' | 'bottom' | 'left' | 'right'
+export type MarginCross = 'inner' | 'center' | 'outer'
+export type MarginAlong = 'start' | 'center' | 'end'
+
+export type MarginPosition =
+  // Absolute, page-relative px — the box's own top-left corner. Free-positioned anywhere, typically
+  // (not enforced) within the margin whitespace.
+  | { x: number; y: number }
+  // Relative to a margin strip's own geometry — see the block comment above.
+  | { region: MarginRegion; cross?: MarginCross; along?: MarginAlong; offsetX?: number; offsetY?: number }
+
+export type MarginNote = {
+  node: HeaderFooterContent
+  /**
+   * No explicit width — always shrink-wrapped to `node`'s own natural width, the same
+   * `childCrossWidthInColumn()` shrink-wrap sizing a non-stretch column child already goes through
+   * (`src/nodes/group.ts`), capped at the full page width. Works for any node type, including a
+   * `group` (e.g. a row of several labels side by side). An inner `container`/fixed-`width` node
+   * still controls its own size exactly as it would as a column child; there's nothing extra to
+   * configure here.
+   */
+  position: MarginPosition
+}
+
+// Same per-page-aware shape as WatermarkContent: an array of notes (possibly empty), resolved once
+// per page in paginate() with a `{pageNumber, totalPages}` callback when margin content needs to
+// vary by page (e.g. a side annotation only on page 1). The callback form may return undefined/null
+// to opt a page out entirely, same as Watermark/background/border.
+export type MarginContent = MarginNote[] | ((ctx: HeaderFooterContext) => MarginNote[] | undefined | null)
+
 export type PageDef = {
   size: PageSize
   margins: Margins
@@ -87,6 +140,10 @@ export type PageDef = {
   border?: PageBorderContent
   /** Decorative overlay drawn on top of every page's content (e.g. a "DRAFT" stamp or logo). */
   watermark?: WatermarkContent
+  /** Free-positioned content inside the page margin whitespace (side annotations, running vertical
+   *  titles, etc.) — see MarginNote. Painted after header/body/footer, before the watermark (which
+   *  always stays the topmost layer). */
+  marginContent?: MarginContent
   body: Node
 }
 
@@ -246,6 +303,26 @@ export type TextNode = Interactive & SelfAlignable & {
   wordBreak?: 'normal' | 'keep-all'
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
+  /**
+   * Rotates the whole laid-out text block 90° for sideways labels (e.g. a running side-title in a
+   * margin) — `'vertical'` reads top-to-bottom (rotated clockwise), `'vertical-inverted'` reads
+   * bottom-to-top (rotated counter-clockwise), unset is the ordinary horizontal default. Unlike
+   * every other sizing in this engine, vertical text ignores whatever ambient width it's handed
+   * (a parent column's width, a row's flex slot, a MarginNote's shrink-wrap width, ...) and always
+   * wraps against its OWN intrinsic natural width instead — the only thing its layout is ever
+   * concerned with is its own post-rotation size, the same way Image/Chart/Svg's dimensions are
+   * never derived from the ambient width either. This is deliberate, not a limitation to fix later:
+   * a row/column child's ambient width does double duty as both "the slot reserved for
+   * positioning siblings" and "the width fed into layout" for every other type because those are
+   * the same number by construction — for a ROTATED node they can't be (the slot needs the
+   * POST-rotation thickness, wrapping needs the PRE-rotation width), so there is no single ambient
+   * width that could serve both purposes correctly. One consequence: `alignSelf`/`crossAlign:
+   * 'stretch'` has no effect on vertical text (there's no ambient width left for it to stretch
+   * into). Restricted to quarter turns so the box's width/height swap is always exact (an arbitrary
+   * angle would need a larger enclosing box, breaking the "sibling boxes never overlap" layout
+   * invariant). Vertical text is atomic (never splits across a page boundary).
+   */
+  orientation?: 'vertical' | 'vertical-inverted'
   /** @internal memoized PreparedTextWithSegments, set lazily by the measure layer */
   __prepared?: unknown
   /** @internal set on synthetic continuation nodes produced by splitting across a page break */
@@ -360,6 +437,95 @@ export type SvgNode = Interactive & SelfAlignable & {
   height?: number
   /** width / height. Used to derive whichever of width/height is missing. */
   aspectRatio?: number
+  /** 0-1. */
+  opacity?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
+  flex?: FlexSize
+}
+
+export type QrErrorCorrectionLevel = 'L' | 'M' | 'Q' | 'H'
+
+export type QrcodeNode = Interactive & SelfAlignable & {
+  type: 'qrcode'
+  /** Data to encode. */
+  value: string
+  /**
+   * At least one of {width & height}, {width & aspectRatio}, {height & aspectRatio}, or
+   * {aspectRatio alone} is required — see qrcode(), same rule as ImageNode — UNLESS `moduleSize`
+   * is given instead, in which case qrcode() derives a square `width`/`height` directly from the
+   * encoded module count.
+   */
+  width?: number
+  height?: number
+  /** width / height. Used to derive whichever of width/height is missing. */
+  aspectRatio?: number
+  /** px per QR module — an alternative to width/height/aspectRatio: qrcode() encodes `value` once
+   *  upfront to learn its module count, and derives a square box from it. Ignored once
+   *  width/height/aspectRatio are given (explicitly or already resolved). */
+  moduleSize?: number
+  /** Default 'M'. */
+  errorCorrectionLevel?: QrErrorCorrectionLevel
+  /** Default '#000000'. */
+  moduleColor?: string
+  /** Default '#ffffff' — always painted; a transparent background isn't supported. */
+  backgroundColor?: string
+  /** Modules of blank border on all 4 sides. Default 4 (the ISO/IEC 18004 minimum recommendation). */
+  quietZone?: number
+  /** 0-1. */
+  opacity?: number
+  /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
+   *  and `width` is set, the row-slot size defaults to `width` (fixed) — set `flex` only to give a
+   *  different fixed size (`'Npx'`) or to opt into flex-grow weighting (a plain number). */
+  flex?: FlexSize
+}
+
+export type { BarcodeSymbology }
+
+export type BarcodeCheckDigitMode = 'auto' | 'validate' | 'omit'
+
+export type BarcodeNode = Interactive & SelfAlignable & {
+  type: 'barcode'
+  /** Data to encode. */
+  value: string
+  /** Default 'code128'. */
+  symbology?: BarcodeSymbology
+  /**
+   * `height` or `aspectRatio` is always required (barcode dimensions are never auto-detected —
+   * there's no natural "shape" for a linear barcode the way a QR code is naturally square).
+   * `width` is required too, UNLESS `barWidth` is given instead — see barcode().
+   */
+  width?: number
+  /** Total box height, including the human-readable text line underneath if `showText` is true. */
+  height?: number
+  /** width / height. Used to derive whichever of width/height is missing. */
+  aspectRatio?: number
+  /** px per narrow-bar module — an alternative to `width`: barcode() encodes `value` once upfront
+   *  to learn its module count, and derives `width` from it. Ignored once `width` is given. */
+  barWidth?: number
+  /** px height of the bars themselves. Defaults to `height` minus a reserved text band (if
+   *  `showText`) or the full `height` otherwise. */
+  barHeight?: number
+  /** Default '#000000'. */
+  barColor?: string
+  /** Default '#ffffff'. */
+  backgroundColor?: string
+  /** px of blank border on both sides. Default 10. */
+  quietZone?: number
+  /** Human-readable value printed under the bars. Default true. */
+  showText?: boolean
+  /** Default 10. */
+  textSize?: number
+  /** Default `barColor`. */
+  textColor?: string
+  /** EAN-13/Code39 only — ignored for `code128`, which always computes its own mandatory
+   *  checksum. 'auto' computes and appends a check digit/character; 'validate' verifies a
+   *  caller-supplied one (the last digit of `value` for ean13, or the last character for code39)
+   *  and throws on mismatch; 'omit' takes `value` as-is. Default 'auto' for ean13 (a 12-digit
+   *  `value` always needs a computed 13th digit regardless), 'omit' for code39 (Code 39 is
+   *  self-checking and conventionally printed without one). */
+  checkDigit?: BarcodeCheckDigitMode
   /** 0-1. */
   opacity?: number
   /** Only meaningful when this node is itself a ROW child; ignored for column children. When unset
@@ -1114,7 +1280,7 @@ export type TableNode = Interactive & {
   flex?: FlexSize
 }
 
-export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode | SvgNode
+export type Node = GroupNode | TextNode | RichTextNode | SeparatorNode | PageBreakNode | ImageNode | TableNode | ChartNode | ContainerNode | SvgNode | QrcodeNode | BarcodeNode
 // Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
 // new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 
@@ -1172,6 +1338,52 @@ export function svg(config: Omit<SvgNode, 'type'>): SvgNode {
     )
   }
   return { type: 'svg', ...config }
+}
+
+export function qrcode(config: Omit<QrcodeNode, 'type'>): QrcodeNode {
+  if (config.value.length === 0) {
+    throw new Error('[paginator] qrcode() needs a non-empty "value".')
+  }
+  const hasHeight = config.height !== undefined
+  const hasAspectRatio = config.aspectRatio !== undefined
+  const hasWidth = config.width !== undefined
+  // Always validate `value` can actually be encoded upfront, whether or not it's also needed to
+  // derive a size — same "fail fast at construction" contract svg()'s markup check has.
+  if (hasHeight || hasAspectRatio || hasWidth) {
+    buildQrMatrix(config.value, config.errorCorrectionLevel ?? 'M')
+    return { type: 'qrcode', ...config }
+  }
+  if (config.moduleSize === undefined) {
+    throw new Error('[paginator] qrcode() needs "width"/"height"/"aspectRatio", or "moduleSize", to determine its size.')
+  }
+  const matrix = buildQrMatrix(config.value, config.errorCorrectionLevel ?? 'M')
+  const quietZone = config.quietZone ?? 4
+  const side = (matrix.moduleCount + quietZone * 2) * config.moduleSize
+  return { type: 'qrcode', ...config, width: side, height: side }
+}
+
+export function barcode(config: Omit<BarcodeNode, 'type'>): BarcodeNode {
+  const symbology = config.symbology ?? 'code128'
+  // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
+  // and (when `barWidth` is used) supplies the module count needed to derive `width`.
+  const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit)
+
+  let width = config.width
+  if (width === undefined) {
+    if (config.barWidth === undefined) {
+      throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.')
+    }
+    const quietZone = config.quietZone ?? 10
+    width = quietZone * 2 + pattern.totalModules * config.barWidth
+  }
+
+  const hasHeight = config.height !== undefined
+  const hasAspectRatio = config.aspectRatio !== undefined
+  if (!hasHeight && !hasAspectRatio) {
+    throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.')
+  }
+
+  return { type: 'barcode', ...config, width }
 }
 
 export function container(config: Omit<ContainerNode, 'type' | 'child'>, child: Node): ContainerNode {
