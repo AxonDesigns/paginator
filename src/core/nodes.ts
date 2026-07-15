@@ -267,6 +267,30 @@ type GroupCommon = Interactive & SelfAlignable & {
   gap?: number
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
+  /**
+   * Fixed cross-axis width for this group as a non-stretch column child — same mechanism as
+   * `ImageNode.width`/`ContainerNode.width` (`childCrossWidthInColumn` in `src/nodes/group.ts`).
+   * Also claims a fixed row-slot size when this group is a ROW child and `flex` is left unset,
+   * same as those other types. Unlike every other node type, a GROUP child defaults to
+   * `crossAlign: 'stretch'` (filling the column) when neither `alignSelf` nor an explicit `width`
+   * is set — setting `width` switches this group's own default to `'start'` (content-sized,
+   * positioned via the column's `crossAlign`/this node's `alignSelf`), matching every other type's
+   * default. Overridden by an ancestor's `crossAlign: 'stretch'` or this node's own `alignSelf:
+   * 'stretch'`, same known limitation image/container already have.
+   */
+  width?: number
+  /**
+   * Clamps this group's resolved width to [minWidth, maxWidth] in every sizing context: a fixed
+   * `width`, a `flex: 'shrink'`/shrink-wrapped natural width, a `crossAlign`/`alignSelf: 'stretch'`
+   * column child, AND a `flex: N` flex-grow ROW child — the last case redistributes any space an
+   * over/under-allocated sibling gives up among the other flexible children, the same algorithm CSS
+   * flexbox uses for flex-grow vs min-width/max-width (see `resolveFlexWidths()` in
+   * `src/core/flex-widths.ts`). `minWidth` wins over a conflicting smaller `maxWidth` (matches CSS)
+   * and can push this group past the space actually on offer, causing overflow — same as CSS
+   * `min-width`.
+   */
+  minWidth?: number
+  maxWidth?: number
   children: Node[]
 }
 

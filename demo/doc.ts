@@ -1,4 +1,4 @@
-import { definePage, group, text } from '../src/index.ts'
+import { definePage, group, richText, separator, text } from '../src/index.ts'
 import type { PageDef } from '../src/index.ts'
 import { UI_FONT } from './fonts.ts'
 import { introSection } from './content/intro.ts'
@@ -70,5 +70,35 @@ export const doc: PageDef = definePage(
     ...chartsSection3,
     ...interactionEventsSection,
     salesTable,
+    group({ direction: 'row', gap: 16, crossAlign: 'stretch' }, [
+      group({ direction: 'column', gap: 6, flex: "shrink", interactive: true, minWidth: 200 },
+        [
+          ...Array.from({ length: 10 }).map((_, i) => (
+            group({ direction: 'row', gap: 16 }, [
+              text({ content: `Label ${i + 1}`, fontFamily: UI_FONT, fontSize: 11 }),
+              text({ content: `Content ${i + 1}`, fontFamily: UI_FONT, fontSize: 11, flex: 1, align: 'right' }),
+            ])
+          )),
+          separator({ thickness: 1, color: '#dddddd', }),
+          richText({
+            fontFamily: UI_FONT,
+            fontSize: 11,
+            alignSelf: 'stretch',
+            runs: [
+              { text: 'RichTextNode asdf asdf asdf asd fasd fasd fasd fasd fasd fasd saf', fontFamily: UI_FONT, fontSize: 11, color: '#666666' },
+              { text: ' - ', fontFamily: UI_FONT, fontSize: 11, color: '#666666', fontWeight: 700 },
+              { text: 'richText nodes can be interactive', fontFamily: UI_FONT, fontSize: 11, color: '#4f7cff', href: 'https://example.com' }
+            ]
+          })
+        ]
+      ),
+      group({ direction: 'column', gap: 6, interactive: true },
+        Array.from({ length: 7 }).map((_, i) => (
+          group({ direction: 'row', gap: 16 }, [
+            text({ content: `Label ${i + 1}`, fontFamily: UI_FONT, fontSize: 11, flex: 1 }),
+            text({ content: `Content ${i + 1}`, fontFamily: UI_FONT, fontSize: 11, flex: 1, align: 'right' }),
+          ])
+        )))
+    ])
   ]),
 )

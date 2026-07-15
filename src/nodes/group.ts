@@ -60,7 +60,11 @@ function resolveRowChildSizing(node: Node, availableWidth: number): RowChildSizi
   if (node.type === 'page-break') return { kind: 'fixed', size: 0 }
   const flex = node.flex
   if (flex === 'shrink') return { kind: 'fixed', size: shrinkWrapWidth(node, availableWidth) }
-  if (flex === undefined && 'width' in node && node.width !== undefined) return { kind: 'fixed', size: node.width }
+  if (flex === undefined && 'width' in node && node.width !== undefined) {
+    // A GROUP's explicit width is still clamped to its own minWidth/maxWidth (only GroupNode has
+    // those fields, so every other width-bearing type just keeps its width verbatim, as before).
+    return { kind: 'fixed', size: node.type === 'group' ? clampGroupWidth(node, node.width) : node.width }
+  }
   if (typeof flex === 'string') return { kind: 'fixed', size: Number.parseFloat(flex) }
   // Unset `flex`: a nested GROUP still defaults to flex-grow weight 1 — it's a layout container,
   // closer to a block-level flex box that fills its row unless told otherwise. A leaf content node
@@ -69,7 +73,10 @@ function resolveRowChildSizing(node: Node, availableWidth: number): RowChildSizi
   // can squeeze a child's content below what it needs and force it to wrap. See "Row flex sizing"
   // in GUIDE.md.
   if (flex === undefined && node.type !== 'group') return { kind: 'fixed', size: shrinkWrapWidth(node, availableWidth) }
-  return { kind: 'flex', weight: flex ?? 1 }
+  // A GROUP's minWidth/maxWidth (only GroupNode has these fields) rides along on the flex-grow
+  // path too — resolveFlexWidths() (src/core/flex-widths.ts) freezes this child at whichever bound
+  // its proportional share would otherwise violate, redistributing the rest among its siblings.
+  return { kind: 'flex', weight: flex ?? 1, ...(node.type === 'group' ? { min: node.minWidth, max: node.maxWidth } : {}) }
 }
 
 // Reads the per-child `alignSelf` override (see SelfAlignable in nodes.ts) — Node is a discriminated
@@ -110,23 +117,69 @@ function sumNaturalRowWidth(node: GroupNode, width: number): number {
 // --- Cross/main width contribution helpers (shrink-wrap sizing for NESTED subtrees only — the
 // direct children of an actual row's own layout are sized by the flex algorithm in layoutRow) ---
 
+// Clamps a group's resolved width to [minWidth, maxWidth] (see GroupCommon.minWidth in nodes.ts) —
+// the single choke point every group-width computation in this file funnels through (fixed `width`,
+// shrink-wrap natural width, and a `crossAlign`/`alignSelf: 'stretch'` column child in
+// layoutColumn() below; the flex-grow ROW case is clamped separately, inside resolveFlexWidths()
+// itself, since redistributing what a clamped sibling gives up needs the whole row's context).
+// `min` wins over a conflicting smaller `max` (matches CSS's own min-width-beats-max-width rule),
+// and can push the result past `w` (i.e. past whatever the caller offered) — that's intentional
+// overflow, same as CSS `min-width`.
+function clampGroupWidth(node: GroupNode, w: number): number {
+  const min = node.minWidth ?? 0
+  const max = Math.max(min, node.maxWidth ?? Infinity)
+  return Math.min(max, Math.max(min, w))
+}
+
+// The unclamped half of a group's shrink-wrap computation — see shrinkWrapWidth() below, which
+// wraps this with clampGroupWidth(). Split out purely so that wrapping can happen at a single
+// return point instead of at every one of this function's several early returns.
+function groupNaturalWidth(node: GroupNode, width: number): number {
+  // An explicit `width` wins outright, same as ImageNode/ContainerNode/etc. — no further
+  // row-sum/column-max computation needed, just clamp to what's actually on offer.
+  if (node.width !== undefined) return Math.min(node.width, width)
+  if (node.direction === 'row') {
+    return sumNaturalRowWidth(node, width)
+  }
+  // A nested column that itself stretches its own children also wants the full width offered to
+  // it — otherwise its `crossAlign: 'stretch'` would be silently inert whenever a shrink-wrapping
+  // ancestor hands it a content-sized box in the first place, the column counterpart to a nested
+  // row's flex children each contributing their own natural width above.
+  if (node.crossAlign === 'stretch') return width
+  // Deliberately shrinkWrapWidth(), not childCrossWidthInColumn() — a child's alignSelf: 'stretch'
+  // means "give me whatever width my container ends up being," which is circular right here: this
+  // reduce IS what decides that width. Honoring "stretch" mid-reduce would make the child report
+  // wanting the full ambient `width` (shared with row siblings when this column itself is a
+  // `flex: 'shrink'` row child, not actually available for the taking), inflating this shrink-wrap
+  // column to claim it all and starve any `flex: 1` sibling down to 0 — the exact bug a missing
+  // separator naturalWidth() used to cause (see separator.ts), just triggered by an explicit
+  // alignSelf: 'stretch' instead of a registration gap. childCrossWidthInColumn()'s stretch
+  // shortcut stays correct for its OTHER callers (paginate.ts's margin notes against the fixed
+  // page width, table cell content against an already-resolved column width) — those hand down a
+  // width that's genuinely dedicated to the subtree being measured, not contested by a sibling
+  // that hasn't been sized yet, so there's no circularity to break there.
+  //
+  // A stretch child is ALSO excluded from the reduce entirely (not just denied the ambient-width
+  // shortcut above) — it has no size preference of its own to vote with. Without this, a stretch
+  // leaf's own shrinkWrapWidth() still flows into `naturalWidth()`, which for text/richText is
+  // their full UNWRAPPED line width (ignoring the ambient width entirely — see text.ts/
+  // rich-text.ts), so it would still inflate this column to avoid ever wrapping. Skipping it lets
+  // the column size off its non-stretch content only; layoutColumn() then hands the stretch child
+  // that resolved (possibly much smaller) width directly, and text/richText's layout()/
+  // measureHeight() (unlike naturalWidth()) genuinely wrap against whatever width they're given —
+  // this is what makes `alignSelf: 'stretch'` the way to say "wrap this to whatever my siblings
+  // decide, don't let it dictate my own size" for column children (there's no column analogue of
+  // row `flex` weighting for this — see "Per-child alignSelf override" in GUIDE.md).
+  const max = node.children.reduce((acc, c) => (childAlignSelf(c) === 'stretch' ? acc : Math.max(acc, shrinkWrapWidth(c, width))), 0)
+  return Math.min(max, width)
+}
+
 // The actual shrink-wrap computation, shared by childCrossWidthInColumn() (a column's cross-axis
 // width for a nested child) and resolveRowChildSizing()'s 'shrink' case (a row's main-axis width for
 // a child opting out of flex-grow) — both questions reduce to "how wide does this subtree want to be,
 // unconstrained by a stretching ancestor?".
 function shrinkWrapWidth(node: Node, width: number): number {
-  if (node.type === 'group') {
-    if (node.direction === 'row') {
-      return sumNaturalRowWidth(node, width)
-    }
-    // A nested column that itself stretches its own children also wants the full width offered to
-    // it — otherwise its `crossAlign: 'stretch'` would be silently inert whenever a shrink-wrapping
-    // ancestor hands it a content-sized box in the first place, the column counterpart to a nested
-    // row's flex children each contributing their own natural width above.
-    if (node.crossAlign === 'stretch') return width
-    const max = node.children.reduce((acc, c) => Math.max(acc, childCrossWidthInColumn(c, width)), 0)
-    return Math.min(max, width)
-  }
+  if (node.type === 'group') return clampGroupWidth(node, groupNaturalWidth(node, width))
   // Every other type's shrink-wrap width (or "wants the full width", the default when a type
   // registers no `naturalWidth`) — see behavior.ts's naturalWidth() dispatcher.
   return naturalWidth(node, width)
@@ -185,9 +238,26 @@ export function layoutColumn(node: GroupNode, width: number, targetHeight?: numb
     // it's a layout container, closer to a block-level flex box that fills the width it's given —
     // while a leaf content node (text/image/etc.) defaults to 'start', hugging its own natural
     // width the way inline/replaced content does. See "Row flex sizing" in GUIDE.md for the
-    // parallel default on the main axis.
-    const effectiveCrossAlign = childAlignSelf(child) ?? node.crossAlign ?? (child.type === 'group' ? 'stretch' : 'start')
-    const resolvedWidth = effectiveCrossAlign === 'stretch' || child.type === 'separator' ? width : childCrossWidthInColumn(child, width)
+    // parallel default on the main axis. A GROUP with an explicit `width` is the one exception:
+    // it now has a real content-sized opinion (like image/container's own `width` field), so it
+    // defaults to 'start' too — otherwise 'stretch' would bypass childCrossWidthInColumn() below
+    // and silently ignore `width` altogether.
+    const defaultsToStretch = child.type === 'group' && child.width === undefined
+    const effectiveCrossAlign = childAlignSelf(child) ?? node.crossAlign ?? (defaultsToStretch ? 'stretch' : 'start')
+    // The non-stretch branch (childCrossWidthInColumn -> shrinkWrapWidth) already clamps a GROUP's
+    // minWidth/maxWidth internally. The stretch branch bypasses that entirely by design (it hands
+    // the child the ambient `width` directly, no shrink-wrap computation involved) — so a stretch
+    // GROUP child needs its own clamp here, or minWidth/maxWidth would be silently inert on it. Not
+    // keyed into `defaultsToStretch` above: a group with only maxWidth (no explicit `width`) should
+    // still stretch by default and simply get capped, not flip to shrink-wrap/'start' positioning.
+    const resolvedWidth =
+      child.type === 'separator'
+        ? width
+        : effectiveCrossAlign === 'stretch'
+          ? child.type === 'group'
+            ? clampGroupWidth(child, width)
+            : width
+          : childCrossWidthInColumn(child, width)
     const height = measureNodeHeight(child, resolvedWidth)
     return { node: child, width: resolvedWidth, height, crossAlign: effectiveCrossAlign }
   })

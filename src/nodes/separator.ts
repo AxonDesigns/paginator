@@ -100,6 +100,15 @@ function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderCtx): v
 
 registerNode('separator', {
   measureHeight: node => separatorMainSize(node),
+  // A separator always stretches to whatever width its column hands it (layoutColumn special-cases
+  // `child.type === 'separator'` to the full resolved width, bypassing childCrossWidthInColumn
+  // entirely — see that function's comment). So it has no width preference of its own to contribute
+  // when an ANCESTOR is shrink-wrapping and asking "how wide do my children want to be" (the
+  // `childCrossWidthInColumn`/`shrinkWrapWidth` max-reduce in group.ts): without this override, the
+  // generic naturalWidth() fallback ("wants the full width offered") would make a lone separator
+  // sibling force a `flex: 'shrink'` column to claim the entire available width instead of shrinking
+  // to its actual content.
+  naturalWidth: () => 0,
   isSplittable: () => false,
   layout,
   renderDom,

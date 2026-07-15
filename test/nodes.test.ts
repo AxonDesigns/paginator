@@ -732,6 +732,46 @@ describe('group (column)', () => {
     expect(rendered.children[0]!.box.width).toBe(40) // alignSelf: 'start' opts out of the stretch default
     expect(rendered.children[1]!.box.width).toBe(300) // sibling still gets the GROUP stretch default
   })
+
+  test('an explicit width on a GROUP column child overrides the stretch default and fixes its size', () => {
+    const node = group({ direction: 'column' }, [
+      group({ direction: 'row', width: 120 }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })]),
+      group({ direction: 'row' }, [image({ src: 'b.png', height: 10, aspectRatio: 4 })]),
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(120) // width switches the default from 'stretch' to 'start'
+    expect(rendered.children[1]!.box.width).toBe(300) // sibling with no width still gets the stretch default
+  })
+
+  test('a GROUP column child\'s explicit width is clamped to the width actually on offer', () => {
+    const node = group({ direction: 'column' }, [group({ direction: 'row', width: 500 }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })])])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(300)
+  })
+
+  test('a GROUP column child\'s alignSelf: "stretch" still overrides an explicit width', () => {
+    const node = group({ direction: 'column' }, [group({ direction: 'row', width: 120, alignSelf: 'stretch' }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })])])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(300)
+  })
+
+  test('a stretching GROUP column child with maxWidth is capped below the column width and stays left-aligned', () => {
+    // No explicit `width`, so this group still defaults to 'stretch' — but maxWidth caps the
+    // result well short of the full 300px column, and it should sit flush at x: 0 rather than
+    // centering or filling the leftover space (matches CSS's default for a capped stretch item).
+    const node = group({ direction: 'column' }, [group({ direction: 'row', maxWidth: 120 }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })])])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(120)
+    expect(rendered.children[0]!.box.x).toBe(0)
+  })
+
+  test('a shrink-wrapped (non-stretch) GROUP column child\'s natural width is floored by minWidth', () => {
+    const node = group({ direction: 'column' }, [
+      group({ direction: 'row', alignSelf: 'start', minWidth: 150 }, [image({ src: 'a.png', height: 10, aspectRatio: 4 })]), // natural width 40, floored to 150
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(150)
+  })
 })
 
 describe('group (row)', () => {
@@ -761,6 +801,37 @@ describe('group (row)', () => {
     const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
     expect(rendered.children[0]!.box.width).toBe(40)
     expect(rendered.children[1]!.box.width).toBe(160)
+  })
+
+  test('a GROUP row child\'s explicit width claims a fixed slot when flex is left unset, same as image/container', () => {
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', width: 50 }, [image({ src: 'a.png', width: 10, height: 10 })]),
+      image({ src: 'b.png', width: 10, height: 10, flex: 1 }),
+    ])
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(50)
+    expect(rendered.children[1]!.box.width).toBe(150)
+  })
+
+  test('a GROUP row child\'s explicit width below its own minWidth resolves to minWidth', () => {
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', width: 50, minWidth: 80 }, [image({ src: 'a.png', width: 10, height: 10 })]),
+      image({ src: 'b.png', width: 10, height: 10, flex: 1 }),
+    ])
+    const rendered = layoutNodeFull(node, 200) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(80)
+  })
+
+  test('a flex-grow GROUP row child\'s maxWidth caps it, redistributing the excess to its flex sibling', () => {
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', flex: 2, maxWidth: 60 }, [image({ src: 'a.png', width: 10, height: 10 })]),
+      group({ direction: 'column', flex: 1 }, [image({ src: 'b.png', width: 10, height: 10 })]),
+    ])
+    // Uncapped, a 2:1 split of 300px would be 200/100 -> the first child's maxWidth: 60 freezes it,
+    // and the other 240px all goes to its flex: 1 sibling instead of splitting further.
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(60)
+    expect(rendered.children[1]!.box.width).toBe(240)
   })
 
   test('flex: "shrink" children count as fixed-size, so mainAlign: "center" has free space to center them', () => {
@@ -815,6 +886,31 @@ describe('group (row)', () => {
     // row1 natural width: 20 + 30 + 5 = 55; row2: 20 + 60 + 5 = 85 -> column shrink-wraps to the wider row.
     expect(rendered.children[0]!.box.width).toBe(85)
     expect(rendered.children[1]!.box.width).toBe(215)
+  })
+
+  test('alignSelf: "stretch" on a column child no longer votes its own natural width into a flex: "shrink" ancestor\'s sizing', () => {
+    // Reproduces a real bug: a `stretch` child is about to receive whatever width its shrink-
+    // wrapping ancestor decides, so it shouldn't get a vote in that same decision — but
+    // shrinkWrapWidth()'s column branch used to ask every child (stretch or not) for its own
+    // natural width via naturalWidth(), which for a child with no explicit width/aspectRatio falls
+    // back to "wants the full ambient width" (see image.ts's imageNaturalWidth). That inflated the
+    // shrink column to the full ambient width and starved the sibling flex column down to 0 — the
+    // same failure mode text/richText hit (their naturalWidth() reports the widest UNWRAPPED line,
+    // ignoring width entirely), reproduced here with `image` since text/richText need browser-only
+    // APIs (see this file's header comment).
+    const node = group({ direction: 'row' }, [
+      group({ direction: 'column', flex: 'shrink' }, [
+        image({ src: 'fixed.png', width: 60, height: 10 }),
+        image({ src: 'stretch.png', height: 10, alignSelf: 'stretch' }), // no width/aspectRatio -> naturalWidth falls back to ambient
+      ]),
+      group({ direction: 'column' }, [image({ src: 'sibling.png', width: 10, height: 10 })]),
+    ])
+    const rendered = layoutNodeFull(node, 300) as Extract<RenderedNode, { type: 'group' }>
+    expect(rendered.children[0]!.box.width).toBe(60) // shrink column sizes off its non-stretch content only
+    expect(rendered.children[1]!.box.width).toBe(240) // sibling flex column gets the rest, not starved to 0
+
+    const shrinkColumn = rendered.children[0] as Extract<RenderedNode, { type: 'group' }>
+    expect(shrinkColumn.children[1]!.box.width).toBe(60) // the stretch child still fills the column's resolved width
   })
 
   test('unset flex on a leaf row child defaults to "shrink" (hugs content), not an equal flex-grow share', () => {

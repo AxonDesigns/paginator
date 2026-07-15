@@ -166,6 +166,14 @@ function separatorMainSize(node: SeparatorNode): number {
   return (node.thickness ?? 1) + 2 * (node.margin ?? 0)
 }
 
+// Local re-derivation of group.ts's clampGroupWidth() — only GroupNode carries minWidth/maxWidth,
+// so every other width-bearing type just passes its width through unclamped, same as group.ts.
+function clampGroupWidth(node: GroupNode, w: number): number {
+  const min = node.minWidth ?? 0
+  const max = Math.max(min, node.maxWidth ?? Infinity)
+  return Math.min(max, Math.max(min, w))
+}
+
 function rowChildSizing(node: Node): RowChildSizing {
   if (node.type === 'separator') return { kind: 'fixed', size: separatorMainSize(node) }
   if (node.type === 'page-break') return { kind: 'fixed', size: 0 }
@@ -174,9 +182,11 @@ function rowChildSizing(node: Node): RowChildSizing {
     warnShrinkUnsupportedOnce()
     return { kind: 'flex', weight: 1 }
   }
-  if (flex === undefined && 'width' in node && node.width !== undefined) return { kind: 'fixed', size: node.width }
+  if (flex === undefined && 'width' in node && node.width !== undefined) {
+    return { kind: 'fixed', size: node.type === 'group' ? clampGroupWidth(node, node.width) : node.width }
+  }
   if (typeof flex === 'string') return { kind: 'fixed', size: Number.parseFloat(flex) }
-  return { kind: 'flex', weight: flex ?? 1 }
+  return { kind: 'flex', weight: flex ?? 1, ...(node.type === 'group' ? { min: node.minWidth, max: node.maxWidth } : {}) }
 }
 
 function fontNameFrom(fontFamily: string): string {

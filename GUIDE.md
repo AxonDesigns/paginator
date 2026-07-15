@@ -397,6 +397,8 @@ definePage(
 | `crossAlign` | `'start'\|'center'\|'end'\|'stretch'` | Default `'start'` |
 | `gap` | `number?` | Default 0 |
 | `flex` | `FlexSize?` | Only meaningful as a ROW child — see "Row flex sizing" below |
+| `width` | `number?` | Fixed cross-axis width in a non-stretch column context — same mechanism as `ImageNode.width`/`ContainerNode.width`. Also claims a fixed row-slot size when this group is a ROW child and `flex` is left unset. Unlike every other type, a GROUP child defaults to `crossAlign: 'stretch'` when unset — setting `width` switches THIS group's own default to `'start'`, matching every other type. Overridden by an ancestor's `crossAlign: 'stretch'` or this node's own `alignSelf: 'stretch'`, same known limitation image/container already have |
+| `minWidth`, `maxWidth` | `number?` | Clamp this group's resolved width in EVERY sizing context: fixed `width`, `flex: 'shrink'`/shrink-wrapped natural width, a `crossAlign`/`alignSelf: 'stretch'` column child (stays left-aligned if capped below the column's width), and a `flex: N` flex-grow ROW child — the last case redistributes whatever a clamped sibling gives up among the other flexible children (a real min/max-aware resolution, not just a final clamp — see `resolveFlexWidths()` in `src/core/flex-widths.ts` and "Row flex sizing" below). `minWidth` wins over a conflicting smaller `maxWidth` (matches CSS) and can push this group past the space actually on offer, causing overflow — same as CSS `min-width`. Only `GroupNode` has these fields |
 | `alignSelf` | `CrossAlign?` | Overrides the parent's `crossAlign` for this node alone — see "Per-child alignSelf override" below |
 | `splitColumns` | `boolean?` | Only meaningful when `direction: 'row'` — independent per-column page splitting, off by default |
 | `children` | `Node[]` | |
@@ -977,10 +979,12 @@ A ROW group's direct children are sized by a two-pass model, same mechanics as C
      row has real free space to distribute (see rule 3 below) — e.g. two headline `text()` nodes in a
      row both need `flex: 'shrink'` for `mainAlign: 'center'` to visually center them as a unit
      (`demo/content/intro.ts`'s title row).
-   - `ImageNode`/`SvgNode`/`ChartNode`/`ContainerNode` also claim a fixed width here from their own
-     `width` field whenever `flex` is left unset — the same value that already governs their size in
-     a column/shrink-wrap context works unchanged as a row child too, so `flex: 'Npx'`/`'shrink'` is
-     only needed to override `width` or to opt into flex-grow weighting for these four types.
+   - `ImageNode`/`SvgNode`/`ChartNode`/`ContainerNode`/`GroupNode` also claim a fixed width here from
+     their own `width` field whenever `flex` is left unset — the same value that already governs
+     their size in a column/shrink-wrap context works unchanged as a row child too, so
+     `flex: 'Npx'`/`'shrink'` is only needed to override `width` or to opt into flex-grow weighting
+     for these five types. `GroupNode.width` is the one exception among them that also flips a
+     DIFFERENT default — see the column-children paragraph below.
    - **A leaf content node (`TextNode`/`RichTextNode`/`ImageNode`/`SvgNode`/`ContainerNode`/
      `ChartNode`) with `flex` left unset AND no explicit `width` is ALSO fixed-size by default** —
      it behaves exactly like `flex: 'shrink'`, hugging its own natural width instead of taking an
@@ -988,10 +992,25 @@ A ROW group's direct children are sized by a two-pass model, same mechanics as C
      an equal-share weight — an un-pinned label/value pair of `text()` nodes sizes to its own
      content and never wraps just because a sibling squeezed it below what it needs.
 2. Remaining width is divided among flexible children proportional to their weight. Only a nested
-   **`GroupNode`** (row or column) with `flex` left unset defaults to being flexible here (weight
-   `1`) — a nested group is a layout container, closer to a block-level flex box that fills its
-   share of the row unless told otherwise, so it keeps the old equal-share default. An explicit
-   `flex: N` makes ANY child (leaf or group) flexible with that weight, overriding its type's default.
+   **`GroupNode`** (row or column) with `flex` left unset AND no explicit `width` defaults to being
+   flexible here (weight `1`) — a nested group is a layout container, closer to a block-level flex
+   box that fills its share of the row unless told otherwise, so it keeps the old equal-share
+   default. An explicit `flex: N` makes ANY child (leaf or group) flexible with that weight,
+   overriding its type's default; an explicit `width` (and no `flex`) makes a group fixed-size
+   instead, per rule 1 above.
+3. A flexible **`GroupNode`** (rule 2) with `minWidth`/`maxWidth` set has its proportional share
+   clamped to that range — currently the only type this applies to, since `minWidth`/`maxWidth` are
+   `GroupNode`-only fields (see the field table above). This isn't just a final clamp: whatever
+   space a capped/floored child gives up (or takes) gets redistributed among its still-flexible
+   siblings, the same "resolving flexible lengths" fixed-point algorithm CSS flexbox uses for
+   `flex-grow` vs `min-width`/`max-width` — `resolveFlexWidths()` (`src/core/flex-widths.ts`) runs
+   this as a loop: compute every active child's proportional share, freeze any that violate their
+   own bound, subtract what got frozen from the remaining pool, and repeat with only the
+   still-unfrozen children until a pass freezes nothing new. When nothing anywhere sets
+   `minWidth`/`maxWidth` this degenerates to exactly one pass with the original proportional-split
+   math, so this is invisible to every existing row/`TableColumn` (which has no min/max concept)
+   unless you actually use it. `minWidth` wins over a conflicting smaller `maxWidth` and can push the
+   total past `availableWidth` — expected overflow, same as CSS `min-width`.
 
 `mainAlign` (`space-between` etc.) only has an effect when **no** child is flexible — flexible
 children already consume all remaining space by construction, exactly like CSS (`flex-grow` eats
@@ -1013,10 +1032,19 @@ an equal flex-grow weight in both cases, with a one-time console warning.
 Column children never use `flex` for width — their cross-axis width comes from `crossAlign`
 (`'stretch'` = full column width, otherwise shrink-to-fit via pretext's `measureNaturalWidth`). When
 neither a child's own `alignSelf` nor the column's own `crossAlign` is set, the default itself
-depends on the child's type, mirroring the row-axis default above: **a nested `GroupNode` defaults
-to `'stretch'`** (fills the column's full width, like a block-level flex box), while **every other
-node type defaults to `'start'`** (hugs its own natural width, like inline/replaced content) — see
-`layoutColumn()` in `src/nodes/group.ts`. A nested group's *own* `crossAlign: 'stretch'` is honored
+depends on the child's type, mirroring the row-axis default above: **a nested `GroupNode` with no
+explicit `width` defaults to `'stretch'`** (fills the column's full width, like a block-level flex
+box), while **every other node type — and a `GroupNode` that DOES set `width` — defaults to
+`'start'`** (hugs its own natural/authored width, like inline/replaced content) — see
+`layoutColumn()` in `src/nodes/group.ts`. A group's `width` field is otherwise identical to
+`ImageNode`/`ContainerNode`'s: an explicit fixed size that wins outright over any shrink-wrap
+computation (`shrinkWrapWidth()` in `src/nodes/group.ts` checks `node.width` before either its row-
+sum or column-max logic). `minWidth`/`maxWidth` clamp a group child in this context too, whichever
+way it's sized: a `'stretch'` group gets clamped to that range instead of the full column width
+(staying left-aligned — `x: 0` — in any leftover space, same as an ordinary capped-below-container
+stretch item in CSS), and a shrink-wrapped (`'start'`) group's own natural width is floored/capped
+the same way, via the single `clampGroupWidth()` choke point every group-width computation in
+`src/nodes/group.ts` funnels through. A nested group's *own* `crossAlign: 'stretch'` is honored
 by its shrink-wrapping ancestor too — a column whose `crossAlign` is `'stretch'` (see
 `childCrossWidthInColumn` in `src/nodes/group.ts`) is handed the full width being offered rather
 than shrink-wrapped to its content, so its own children can actually fill it. Without that, a
@@ -1048,6 +1076,18 @@ In a ROW parent, `alignSelf` only affects this child's own vertical position amo
 siblings (`'start'`/`'center'`/`'end'`) — `'stretch'` has no effect there (falls back to `'start'`),
 since a row child's height is always intrinsic; there's no reflow mechanism to actually grow a
 shorter child to the row's full height.
+
+`alignSelf: 'stretch'` is also the answer to "how do I make a paragraph inside a `flex: 'shrink'`
+column wrap to whatever width my OTHER siblings determine, instead of forcing the column wide enough
+to fit on one line?" — `flex` can't do this (it's row-axis-only and explicitly ignored for column
+children; there's no column equivalent of row `flex` weighting). A `stretch` child is excluded from
+its shrink-wrapping ancestor's own size computation entirely (`shrinkWrapWidth()`'s column branch,
+`src/nodes/group.ts`) — it has no size preference of its own to vote with, since it's about to be
+handed whatever the ancestor decides. Once the ancestor sizes itself off its non-stretch children,
+`layoutColumn()` hands the stretch child that resolved width directly, and `TextNode`/`RichTextNode`
+genuinely wrap against whatever width they're given (their `naturalWidth()` — used only for shrink-
+wrap sizing — instead reports the widest *unwrapped* line, which is why an un-stretched paragraph
+never wraps in a shrink-wrapping column: it's dictating the column's size, not fitting into it).
 
 ## Pagination algorithm (`src/core/paginate.ts`, `src/nodes/group.ts`)
 
@@ -2011,6 +2051,21 @@ type, splittable or not — this is the entire point of the registry pattern.
   `rowHasFlexChild`/`sumFixedRowWidth` pair). Symptom to watch for: a `flex: 'shrink'` column
   sibling getting width 0 as soon as its shrink-wrapped column contains any nested row of ordinary
   (width-less) content, even though the same column works fine with a single non-row child.
+- **A `stretch` child's OWN natural width still inflated its shrink-wrapping ancestor, even after the
+  two fixes above**: `shrinkWrapWidth()`'s column branch (`src/nodes/group.ts`) recurses into every
+  child via `shrinkWrapWidth(c, width)` (deliberately bypassing `childCrossWidthInColumn()`'s
+  "`alignSelf: 'stretch'` means return the ambient `width`" shortcut — see that function's own
+  comment for why honoring it here is circular). But for a non-`group` leaf, `shrinkWrapWidth()`
+  still falls through to `naturalWidth(node, width)` regardless of `alignSelf` — and `TextNode`/
+  `RichTextNode`'s `naturalWidth()` reports the widest *unwrapped* line, ignoring `width` entirely.
+  So a `stretch` paragraph still voted its full (potentially huge) natural width into the `max`,
+  forcing the column wide enough to never wrap it — defeating the entire point of marking it
+  `stretch` ("fit into whatever the column becomes," not "become whatever fits me"). Fixed by
+  excluding any child with `alignSelf === 'stretch'` from the reduce entirely, not just denying it
+  the ambient-width shortcut — see "Per-child `alignSelf` override" above for the resulting, now-
+  correct behavior. Symptom to watch for: a `flex: 'shrink'` column with a long `richText`/`text`
+  child that refuses to wrap and instead balloons the column (and starves a `flex: 1` sibling column,
+  same tell as the pitfall above) no matter what `alignSelf`/`flex` you set on it.
 - **The old `group-layout.ts` ↔ `table-layout.ts` cycle is gone — don't reintroduce a peer-file
   cycle "for convenience"**: an earlier version of this codebase had `group-layout.ts` and
   `table-layout.ts` import each other's exported measurer to lay out a group nested in a table cell
