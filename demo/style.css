@@ -11,8 +11,19 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Shrink-wrapped to its actual (shadow-rendered) page content and centered in the viewport, rather
+   than left at the block default of filling the full body width. Left at full width, the mounted
+   page ends up centered inside a box far wider than itself (the difference being pure gray dead
+   space either side) — fine at 100% zoom where that space is inert, but createZoomController()
+   scales `#app` itself, so that same dead space gets scaled up right along with the page, ballooning
+   into a large, growing gap on both sides as you zoom in instead of the page filling more of the
+   viewport. `width: fit-content` sizes #app to its shadow content's real width (the widest page +
+   mount()'s own small screen-wrapper padding); `margin-inline: auto` re-centers that now-tight box
+   in the viewport the same way the flex `align-items: center` inside the shadow root used to. */
 #app {
   display: block;
+  width: fit-content;
+  margin-inline: auto;
 }
 
 @media print {

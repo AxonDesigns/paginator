@@ -99,6 +99,34 @@ describe('barcode', () => {
     expect(() => barcode({ value: '12345678', width: 200 })).toThrow(/"height" or "aspectRatio"/)
   })
 
+  test('rotation: 90/-90 makes barWidth derive height instead of width', () => {
+    const node90 = barcode({ value: 'CODE39', symbology: 'code39', rotation: 90, barWidth: 2, quietZone: 10, width: 60 })
+    const nodeMinus90 = barcode({ value: 'CODE39', symbology: 'code39', rotation: -90, barWidth: 2, quietZone: 10, width: 60 })
+    expect(node90.height).toBe(2 * 127 + 2 * 10)
+    expect(nodeMinus90.height).toBe(2 * 127 + 2 * 10)
+    expect(node90.width).toBe(60)
+  })
+
+  test('rotation: 90/-90 throws when given neither height nor barWidth', () => {
+    expect(() => barcode({ value: '12345678', rotation: 90, width: 60 })).toThrow(/"height" or "barWidth"/)
+  })
+
+  test('rotation: 90/-90 throws when given neither width nor aspectRatio', () => {
+    expect(() => barcode({ value: '12345678', rotation: 90, barWidth: 2 })).toThrow(/"width" or "aspectRatio"/)
+  })
+
+  test('throws on an invalid rotation value', () => {
+    // @ts-expect-error exercising the runtime guard for a non-literal-typed caller
+    expect(() => barcode({ value: '12345678', rotation: 45, width: 60, height: 200 })).toThrow(/"rotation" must be 0, 90, or -90/)
+  })
+
+  test('measureHeight/naturalWidth reflect the FINAL (rotated) box regardless of rotation', () => {
+    const node = barcode({ value: '12345678', rotation: 90, barWidth: 2, quietZone: 10, width: 60 })
+    // The rotated box's width/height participate in layout exactly like an unrotated one — width
+    // stays the declared 60, height is whatever barWidth derived.
+    expect(measureNodeHeight(node, 60)).toBe(node.height)
+  })
+
   test('throws on a value invalid for the chosen symbology (ean13 needs 12-13 digits)', () => {
     expect(() => barcode({ value: 'not-digits', symbology: 'ean13', width: 200, height: 60 })).toThrow()
   })

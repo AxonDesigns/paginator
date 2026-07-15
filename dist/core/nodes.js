@@ -72,22 +72,42 @@ export function qrcode(config) {
 export function barcode(config) {
     const symbology = config.symbology ?? 'code128';
     // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
-    // and (when `barWidth` is used) supplies the module count needed to derive `width`.
+    // and (when `barWidth` is used) supplies the module count needed to derive the bar-length axis.
     const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit);
+    const rotation = config.rotation ?? 0;
+    if (rotation !== 0 && rotation !== 90 && rotation !== -90) {
+        throw new Error(`[paginator] barcode() "rotation" must be 0, 90, or -90, got ${rotation}.`);
+    }
+    const quietZone = config.quietZone ?? 10;
     let width = config.width;
-    if (width === undefined) {
-        if (config.barWidth === undefined) {
-            throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.');
+    let height = config.height;
+    // `barWidth` always sizes the bar-LENGTH axis — `width` when rotation is 0 (bars run left-to-
+    // right), `height` when 90/-90 (bars run vertically, see BarcodeNode.rotation) — while the OTHER
+    // axis (the fixed bar-thickness dimension) still needs height/aspectRatio (rotation 0) or
+    // width/aspectRatio (90/-90) exactly like it always has, just on whichever axis that is now.
+    if (rotation === 0) {
+        if (width === undefined) {
+            if (config.barWidth === undefined) {
+                throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.');
+            }
+            width = quietZone * 2 + pattern.totalModules * config.barWidth;
         }
-        const quietZone = config.quietZone ?? 10;
-        width = quietZone * 2 + pattern.totalModules * config.barWidth;
+        if (height === undefined && config.aspectRatio === undefined) {
+            throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.');
+        }
     }
-    const hasHeight = config.height !== undefined;
-    const hasAspectRatio = config.aspectRatio !== undefined;
-    if (!hasHeight && !hasAspectRatio) {
-        throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.');
+    else {
+        if (height === undefined) {
+            if (config.barWidth === undefined) {
+                throw new Error('[paginator] barcode() needs "height" or "barWidth" to determine its height ("rotation: 90|-90" sizes height from the bar length, not width).');
+            }
+            height = quietZone * 2 + pattern.totalModules * config.barWidth;
+        }
+        if (width === undefined && config.aspectRatio === undefined) {
+            throw new Error('[paginator] barcode() needs "width" or "aspectRatio" to determine its width ("rotation: 90|-90" needs the fixed bar-thickness dimension given directly).');
+        }
     }
-    return { type: 'barcode', ...config, width };
+    return { type: 'barcode', ...config, width, height };
 }
 export function container(config, child) {
     return { type: 'container', ...config, child };

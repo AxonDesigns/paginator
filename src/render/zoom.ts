@@ -4,7 +4,9 @@
 // mount()'s shadow-root wrapper already horizontally centers pages via flexbox, so scaling `host`
 // itself (an ancestor of that wrapper) from `top center` keeps that centering correct at any zoom
 // level, and any overlay elements a consumer appends inside the shadow root (highlight boxes, drop-
-// zone highlights) inherit the transform automatically.
+// zone highlights) inherit the transform automatically. This does mean `host` itself needs to be
+// sized to roughly its own content (e.g. `width: fit-content; margin-inline: auto`, not left to fill
+// its full containing block) — see the X-axis paragraph below for why.
 //
 // transform-origin's Y is pinned at the very top of `host` (see setZoom below for why it stays
 // pinned rather than moving around) — left alone, that means every zoom step pivots around the
@@ -12,6 +14,43 @@
 // drags content down past the viewport, zooming out drags it up. setZoom() compensates by scrolling
 // the nearest scrollable ancestor so whatever sits at the viewport's vertical center before the
 // scale change is still there after it — the standard "zoom around what you're looking at" behavior.
+//
+// The X axis stays at plain `center`, NOT pinned the same way as Y — pinning X at 0% plus a
+// scrollLeft compensation (mirroring Y) was tried and reverted (see git history): a document is
+// normally tall enough that its natural height alone already exceeds the viewport, so a top-pinned
+// zoom's downward-only bulge is already inside real, existing scrollable overflow, nothing new to
+// reach — but a `host` sized to its own content (not stretched to fill a wide viewport) routinely
+// fits *within* the viewport horizontally at low zoom, so there's no scrollable overflow yet for a
+// scroll-compensated pin to act on. `scrollLeft` silently clamps to 0 (nothing to scroll to) while
+// the pinned origin keeps bulging the box rightward regardless, and the page visibly drifts
+// off-center with no way to correct it. `center` avoids that: as long as `host` fits in the
+// viewport, scaling from its own center is already correct with zero scroll involved.
+//
+// `center` alone still has the *original* clipping bug once `host` genuinely outgrows the viewport,
+// though — a scaled box bulges symmetrically in both directions, but only the right half of that
+// bulge ever lands in reachable (positive) scroll space; the left half lands at a negative document
+// x, which no browser lets you scroll to, so it's silently clipped. `applyZoom` below compensates
+// with a plain rightward `translateX`, sized to exactly cancel out however far *past* document x=0
+// the left edge would otherwise land: `shift = max(0, (naturalWidth/2)*(zoom-1) - hostOffsetLeft)`,
+// where `hostOffsetLeft` is `host`'s own natural (auto-centered, unscaled) distance from the
+// scrollable origin — the slack available to absorb the left half of the bulge before any of it
+// goes negative. This is pure arithmetic on `zoom`, not a scroll adjustment, so it never suffers the
+// scrollLeft-pinning failure mode above: `shift` evaluates to exactly 0 for every zoom level where
+// `host` still fits its natural slack (the overwhelmingly common case), leaving `center`'s
+// already-correct, driftless behavior untouched, and only ever pushes right once the bulge would
+// otherwise clip.
+//
+// Shifting `host` right by `shift` pins its left edge to exactly x=0 rather than leaving it
+// negative — reachable, no longer clipped, but now flush against the scrollable origin instead of
+// looking centered. `applyZoom` corrects that by also setting `scrollParent.scrollLeft = shift`:
+// algebraically, `hostOffsetLeft`'s definition as the natural centering slack `(viewportWidth -
+// naturalWidth) / 2` makes `shift` and host's post-shift natural overflow (`naturalWidth*zoom -
+// viewportWidth`) grow at exactly the same rate past the clipping threshold, so `shift` is
+// *provably* always within `[0, scrollWidth - clientWidth]` — never clamped — and scrolling by
+// exactly that amount lands the viewport precisely on host's own midpoint at any zoom, restoring the
+// centered look with the same one-line, gesture-independent assignment (no start/delta bookkeeping
+// needed, unlike the vertical `scrollTop` line above: `shift` alone already IS the correct absolute
+// value for any given `zoom`).
 //
 // The scale and the compensating scroll are driven from ONE requestAnimationFrame loop rather than a
 // CSS `transition` on `transform` plus a separately-timed scroll animation: two animations with
@@ -161,11 +200,32 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
   host.style.height = `${naturalHeight * Math.min(1, zoom)}px`
   ensurePrintResetStyle(host)
 
-  function applyZoom(value: number, scrollParent: HTMLElement, startScrollTop: number, startZoom: number, localOffset: number): void {
+  type ZoomGesture = {
+    scrollParent: HTMLElement
+    startScrollTop: number
+    startZoom: number
+    localOffset: number
+    // host's own natural (unscaled) width and its natural, auto-centered distance from the
+    // scrollable origin — both layout properties, unaffected by `transform`, so safe to read once
+    // per gesture and reuse every frame (see the file header comment for the `shift` formula below).
+    naturalWidth: number
+    hostOffsetLeft: number
+  }
+
+  function applyZoom(value: number, gesture: ZoomGesture): void {
+    const { scrollParent, startScrollTop, startZoom, localOffset, naturalWidth, hostOffsetLeft } = gesture
     zoom = value
-    host.style.transform = `scale(${zoom})`
+    const shift = Math.max(0, (naturalWidth / 2) * (zoom - 1) - hostOffsetLeft)
+    host.style.transform = `translateX(${shift}px) scale(${zoom})`
     host.style.height = `${naturalHeight * Math.min(1, zoom)}px`
     scrollParent.scrollTop = startScrollTop + localOffset * (zoom - startZoom)
+    // Re-centers the viewport on host's own (shifted) midpoint whenever `shift` is active — provably
+    // always within [0, scrollWidth - clientWidth] (see the file header comment), so unlike the
+    // vertical scrollTop line above this can be a plain, gesture-independent assignment: `shift`
+    // alone already determines the exactly-centered scrollLeft at any given zoom, no start/delta
+    // bookkeeping needed. Zero whenever `shift` is zero, leaving the untouched-since-forever,
+    // already-correct no-scroll centering for every zoom level that doesn't need this at all.
+    scrollParent.scrollLeft = shift
   }
 
   function setZoom(value: number): number {
@@ -184,17 +244,24 @@ export function createZoomController(host: HTMLElement, options: ZoomOptions = {
     const hostTop = host.getBoundingClientRect().top
     const anchorClientY = window.innerHeight / 2
     const localOffset = (anchorClientY - hostTop) / startZoom
-    const startScrollTop = scrollParent.scrollTop
+    const gesture: ZoomGesture = {
+      scrollParent,
+      startScrollTop: scrollParent.scrollTop,
+      startZoom,
+      localOffset,
+      naturalWidth: host.offsetWidth,
+      hostOffsetLeft: host.offsetLeft,
+    }
 
     if (transitionMs <= 0) {
-      applyZoom(target, scrollParent, startScrollTop, startZoom, localOffset)
+      applyZoom(target, gesture)
       return target
     }
 
     const start = performance.now()
     const step = (now: number): void => {
       const t = Math.min(1, (now - start) / transitionMs)
-      applyZoom(startZoom + (target - startZoom) * easeInOutQuad(t), scrollParent, startScrollTop, startZoom, localOffset)
+      applyZoom(startZoom + (target - startZoom) * easeInOutQuad(t), gesture)
       animationFrame = t < 1 ? requestAnimationFrame(step) : null
     }
     animationFrame = requestAnimationFrame(step)

@@ -19,7 +19,7 @@ import { marginContent } from './content/margin-content.ts'
 export const doc: PageDef = definePage(
   {
     size: 'Letter',
-    margins: { top: 35, right: 50, bottom: 35, left: 50 },
+    margins: { top: 50, right: 50, bottom: 50, left: 50 },
     headerGap: 16,
     footerGap: 16,
     // Page-level background/border, both page-aware — resolved once per page exactly like header/

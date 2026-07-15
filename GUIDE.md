@@ -188,7 +188,7 @@ types that carry no per-instance state: node builders, `ready()`, and pretext's 
 | `image` | `(config: Omit<ImageNode,'type'>) => ImageNode` | **Throws** if neither `height` nor `aspectRatio` is given |
 | `svg` | `(config: Omit<SvgNode,'type'>) => SvgNode` | Raw SVG markup rendered as true vector content in the PDF (via `svg-to-pdfkit`), not rasterized. **Throws** if `markup` doesn't look like an SVG document, or if neither `height` nor `aspectRatio` is given |
 | `qrcode` | `(config: Omit<QrcodeNode,'type'>) => QrcodeNode` | QR code, hand-drawn from a `qrcode-generator`-computed module matrix (no rendering library). **Throws** on an empty `value`, or if none of `height`/`aspectRatio`/`width`/`moduleSize` is given |
-| `barcode` | `(config: Omit<BarcodeNode,'type'>) => BarcodeNode` | Linear barcode (`code128`/`ean13`/`code39`, all hand-rolled, zero dependencies). **Throws** if `value` is invalid for the chosen `symbology`, if neither `width` nor `barWidth` is given, or if neither `height` nor `aspectRatio` is given |
+| `barcode` | `(config: Omit<BarcodeNode,'type'>) => BarcodeNode` | Linear barcode (`code128`/`ean13`/`code39`, all hand-rolled, zero dependencies), optionally rotated 90°/-90° via `rotation` for a vertical barcode. **Throws** if `value` is invalid for the chosen `symbology`, if `rotation` isn't `0`/`90`/`-90`, or if the axes `rotation` implies (width/barWidth and height/aspectRatio when `rotation: 0`; height/barWidth and width/aspectRatio when `90`/`-90`) aren't sufficiently given |
 | `container` | `(config: Omit<ContainerNode,'type'\|'child'>, child: Node) => ContainerNode` | Single-child decorative wrapper (Flutter's `Container`) — `background`/`border`/`borderRadius`/`padding`, plus `width`/`height`(minimum)/`flex` sizing. The one place `background`/`border`/`padding` exist for an otherwise-plain piece of content, since `group` deliberately has none of those |
 | `table` | `(config: Omit<TableNode,'type'>) => TableNode` | Fixed grid, not semantic HTML — see below. **Throws** on a row/column-count mismatch, `headerRows` exceeding the row count, every column marked `group`, a `totals()` callback returning the wrong cell count, partial adoption of `column.content` across the effective columns, or `column.content` combined with an explicit `headerRows` |
 | `chart` | `(config: Omit<ChartNode,'type'>) => ChartNode` | Seven kinds — `categorical` (merged bar/line/points), `radial` (merged pie/donut, plus multi-ring/sunburst), `scatter`, `gantt`, `radar`, `candlestick`, `treemap` — discriminated by `chartKind`, all built by hand with no charting library. **Throws** if neither `height` nor `aspectRatio` is given, plus a battery of kind-specific shape checks — see the full `ChartNode` reference below |
@@ -513,14 +513,15 @@ and Code39 encoding tables/checksums live in `src/render/barcode-encode.ts`.
 |---|---|---|
 | `value` | `string` | Data to encode |
 | `symbology` | `'code128'\|'ean13'\|'code39'?` | Default `'code128'` |
-| `width` | `number?` | Required UNLESS `barWidth` is given instead |
-| `height` | `number?` | Total box height including the text line (if `showText`). Required — barcode dimensions are never auto-detected (no natural "shape" the way a QR code is square) |
-| `aspectRatio` | `number?` | `width / height` — an alternative to `height` |
-| `barWidth` | `number?` | px per narrow-bar module — an alternative to `width`: `barcode()` encodes `value` once upfront to learn its module count and derives `width` from it |
-| `barHeight` | `number?` | px height of the bars themselves. Defaults to `height` minus a reserved text band (if `showText`) or the full `height` otherwise |
+| `rotation` | `0\|90\|-90?` | Rotates the whole rendered barcode (bars AND the text line) clockwise within its box. Default `0` (bars left-to-right, box `width` is the bar-length axis). `90`: vertical, bars top-to-bottom, text along the left edge. `-90`: vertical, bars bottom-to-top, text along the right edge. Either way `height` becomes the bar-length axis and `barWidth`/`quietZone` apply to `height` instead of `width` — see the field notes below |
+| `width` | `number?` | The box's FINAL on-page width, always literally what it says regardless of `rotation`. Required UNLESS `rotation` is `90`/`-90` and `barWidth` is given instead (then `width` is the fixed bar-thickness dimension and must still be given directly, since `barWidth` sizes `height`) |
+| `height` | `number?` | The box's FINAL on-page height, including the text line (if `showText`), always literally what it says regardless of `rotation`. Required UNLESS `rotation` is `90`/`-90` and `barWidth` is given instead (then `barWidth` sizes `height` from the module count) — barcode dimensions are never auto-detected (no natural "shape" the way a QR code is square) |
+| `aspectRatio` | `number?` | `width / height` — an alternative to whichever of width/height isn't derived from `barWidth` |
+| `barWidth` | `number?` | px per narrow-bar module along the bar-LENGTH axis — `width` when `rotation` is `0`, `height` when `90`/`-90`. `barcode()` encodes `value` once upfront to learn its module count and derives that axis from it |
+| `barHeight` | `number?` | px thickness of the bars themselves, perpendicular to their length — `height` (minus a reserved text band, if `showText`) when `rotation` is `0`, or `width` when `90`/`-90`. Defaults to that whole perpendicular dimension |
 | `barColor` | `string?` | Default `'#000000'` |
 | `backgroundColor` | `string?` | Default `'#ffffff'` |
-| `quietZone` | `number?` | px of blank border on both sides (a fixed px margin, not scaled with `width`). Default `10` |
+| `quietZone` | `number?` | px of blank border at both ends of the bar-length axis (a fixed px margin, not scaled). Default `10` |
 | `showText` | `boolean?` | Human-readable value printed under the bars. Default `true` |
 | `textSize` | `number?` | Default `10` |
 | `textColor` | `string?` | Default `barColor` |

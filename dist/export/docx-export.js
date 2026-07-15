@@ -342,39 +342,67 @@ async function qrcodeNodeParagraph(node, availableWidthPx) {
 // scale to fill the rest, text line reserves a fixed band) — kept as its own small copy here
 // rather than imported, since importing from src/nodes/ would pull registerNode() wiring this
 // export-only module has no use for (see that file's own header comment for the rationale).
+// Same natural (left-to-right) drawing src/nodes/barcode.ts's own drawBarcodeContentPdf uses,
+// ported to a canvas 2D context — `scale` is CHART_RASTER_SCALE, applied by hand to every
+// coordinate (matching this file's existing raster convention) rather than via ctx.scale(), so it
+// composes cleanly with the ctx.translate()/ctx.rotate() rotation wrapper in rasterizeBarcode below
+// (itself already working in the SAME scaled canvas-pixel space).
+function drawBarcodeContentCanvas(ctx, node, pattern, contentWidth, contentHeight, scale) {
+    const quietZone = node.quietZone ?? 10;
+    const showText = node.showText ?? true;
+    const textSize = node.textSize ?? 10;
+    const textBand = showText ? textSize * 1.4 + 4 : 0;
+    const barHeight = node.barHeight ?? Math.max(0, contentHeight - textBand);
+    const usableWidth = Math.max(0, contentWidth - quietZone * 2);
+    const moduleWidth = pattern.totalModules > 0 ? usableWidth / pattern.totalModules : 0;
+    ctx.fillStyle = node.backgroundColor ?? '#ffffff';
+    ctx.fillRect(0, 0, contentWidth * scale, contentHeight * scale);
+    ctx.fillStyle = node.barColor ?? '#000000';
+    let cursor = quietZone;
+    pattern.runs.forEach((runLength, i) => {
+        const runWidth = runLength * moduleWidth;
+        if (i % 2 === 0)
+            ctx.fillRect(cursor * scale, 0, runWidth * scale, barHeight * scale);
+        cursor += runWidth;
+    });
+    if (showText) {
+        ctx.fillStyle = node.textColor ?? node.barColor ?? '#000000';
+        ctx.font = `${textSize * scale}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(pattern.text, (contentWidth / 2) * scale, (barHeight + textSize) * scale);
+    }
+}
 async function rasterizeBarcode(node, widthPx, heightPx) {
     if (typeof OffscreenCanvas === 'undefined') {
         warnBarcodeUnsupportedOnce();
         return null;
     }
     const pattern = encodeBarcodeValue(node.symbology ?? 'code128', node.value, node.checkDigit);
-    const quietZone = node.quietZone ?? 10;
-    const showText = node.showText ?? true;
-    const textSize = node.textSize ?? 10;
-    const textBand = showText ? textSize * 1.4 + 4 : 0;
-    const barHeight = node.barHeight ?? Math.max(0, heightPx - textBand);
-    const usableWidth = Math.max(0, widthPx - quietZone * 2);
-    const moduleWidth = pattern.totalModules > 0 ? usableWidth / pattern.totalModules : 0;
+    const rotation = node.rotation ?? 0;
     const scaledWidth = Math.max(1, Math.round(widthPx * CHART_RASTER_SCALE));
     const scaledHeight = Math.max(1, Math.round(heightPx * CHART_RASTER_SCALE));
     const canvas = new OffscreenCanvas(scaledWidth, scaledHeight);
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = node.backgroundColor ?? '#ffffff';
-    ctx.fillRect(0, 0, scaledWidth, scaledHeight);
-    ctx.fillStyle = node.barColor ?? '#000000';
-    let cursor = quietZone;
-    pattern.runs.forEach((runLength, i) => {
-        const runWidth = runLength * moduleWidth;
-        if (i % 2 === 0)
-            ctx.fillRect(cursor * CHART_RASTER_SCALE, 0, runWidth * CHART_RASTER_SCALE, barHeight * CHART_RASTER_SCALE);
-        cursor += runWidth;
-    });
-    if (showText) {
-        ctx.fillStyle = node.textColor ?? node.barColor ?? '#000000';
-        ctx.font = `${textSize * CHART_RASTER_SCALE}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillText(pattern.text, (widthPx / 2) * CHART_RASTER_SCALE, (barHeight + textSize) * CHART_RASTER_SCALE);
+    // Same translate+rotate derivation as src/nodes/barcode.ts's SVG/pdfkit paths (see that file's
+    // verticalTransform comment) — just expressed via canvas 2D's own translate()/rotate(), which use
+    // the SAME clockwise-for-positive-angle convention as SVG's rotate().
+    if (rotation === 0) {
+        drawBarcodeContentCanvas(ctx, node, pattern, widthPx, heightPx, CHART_RASTER_SCALE);
+    }
+    else if (rotation === 90) {
+        ctx.save();
+        ctx.translate(scaledWidth, 0);
+        ctx.rotate(Math.PI / 2);
+        drawBarcodeContentCanvas(ctx, node, pattern, heightPx, widthPx, CHART_RASTER_SCALE);
+        ctx.restore();
+    }
+    else {
+        ctx.save();
+        ctx.translate(0, scaledHeight);
+        ctx.rotate(-Math.PI / 2);
+        drawBarcodeContentCanvas(ctx, node, pattern, heightPx, widthPx, CHART_RASTER_SCALE);
+        ctx.restore();
     }
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     return { data: new Uint8Array(await blob.arrayBuffer()), widthPx, heightPx };

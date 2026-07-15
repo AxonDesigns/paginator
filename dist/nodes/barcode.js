@@ -4,7 +4,7 @@
 // qrcode.ts and chart nodes already follow.
 import { registerNode } from "../core/behavior.js";
 import { BASE_ELEMENT_STYLE } from "../render/reset.js";
-import { toPdfRect, resolvePdfColor, pxToPt } from "../render/pdf-render.js";
+import { resolvePdfColor, pxToPt, PX_TO_PT } from "../render/pdf-render.js";
 import { encodeBarcodeValue } from "../render/barcode-encode.js";
 // barcode()'s constructor already guarantees "height"/"aspectRatio" is present, so the fallback
 // branch here is unreachable in practice — kept as a defensive error, same as image.ts/svg.ts.
@@ -45,10 +45,61 @@ function barGeometry(node, pattern, boxWidth, boxHeight) {
     return { quietZone, showText, textSize, barHeight, moduleWidth };
 }
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// Draws background + bars + text into `parent` in a LOCAL (contentWidth x contentHeight) coordinate
+// space, bars always running left-to-right along contentWidth — the one "natural" drawing routine
+// both the unrotated (rotation: 0) and rotated (90/-90) cases below reuse unchanged, so rotation is
+// purely a coordinate-transform concern, never a separate "draw vertically" implementation (which
+// would have needed to re-derive text placement/rotation from scratch).
+function appendBarcodeContentSvg(parent, node, pattern, contentWidth, contentHeight) {
+    const { quietZone, showText, textSize, barHeight, moduleWidth } = barGeometry(node, pattern, contentWidth, contentHeight);
+    const background = document.createElementNS(SVG_NS, 'rect');
+    background.setAttribute('x', '0');
+    background.setAttribute('y', '0');
+    background.setAttribute('width', `${contentWidth}`);
+    background.setAttribute('height', `${contentHeight}`);
+    background.setAttribute('fill', node.backgroundColor ?? '#ffffff');
+    parent.appendChild(background);
+    const barColor = node.barColor ?? '#000000';
+    let cursor = quietZone;
+    pattern.runs.forEach((runLength, i) => {
+        const runWidth = runLength * moduleWidth;
+        if (i % 2 === 0) {
+            const rect = document.createElementNS(SVG_NS, 'rect');
+            rect.setAttribute('x', `${cursor}`);
+            rect.setAttribute('y', '0');
+            rect.setAttribute('width', `${runWidth}`);
+            rect.setAttribute('height', `${barHeight}`);
+            rect.setAttribute('fill', barColor);
+            parent.appendChild(rect);
+        }
+        cursor += runWidth;
+    });
+    if (showText) {
+        const text = document.createElementNS(SVG_NS, 'text');
+        text.setAttribute('x', `${contentWidth / 2}`);
+        text.setAttribute('y', `${barHeight + textSize}`);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', `${textSize}`);
+        text.setAttribute('font-family', 'ui-monospace, monospace, sans-serif');
+        text.setAttribute('fill', node.textColor ?? barColor);
+        text.textContent = pattern.text;
+        parent.appendChild(text);
+    }
+}
+// The SVG transform that maps `rotation`'s natural (contentWidth=box.height x
+// contentHeight=box.width) content into the final (box.width x box.height) box. Derived from the
+// standard "translate then rotate" composition (SVG applies the rightmost transform to the point
+// first): rotating 90° clockwise about the origin sends (x,y) -> (-y,x), so following it with
+// translate(boxWidth,0) lands the natural content's starting edge (x=0) at the box's TOP —
+// bars read top-to-bottom. -90 is the mirror image (translate(0,boxHeight) rotate(-90)) — bars
+// read bottom-to-top instead, with the text line ending up on the opposite edge.
+function verticalTransform(rotation, boxWidth, boxHeight) {
+    return rotation === 90 ? `translate(${boxWidth} 0) rotate(90)` : `translate(0 ${boxHeight}) rotate(-90)`;
+}
 function renderDom(rendered, x, y, ctx) {
     const node = rendered.node;
     const pattern = encodeNode(node);
-    const { quietZone, showText, textSize, barHeight, moduleWidth } = barGeometry(node, pattern, rendered.box.width, rendered.box.height);
+    const rotation = node.rotation ?? 0;
     const svg = document.createElementNS(SVG_NS, 'svg');
     Object.assign(svg.style, BASE_ELEMENT_STYLE, {
         left: `${x}px`,
@@ -63,72 +114,70 @@ function renderDom(rendered, x, y, ctx) {
     });
     svg.setAttribute('width', `${rendered.box.width}`);
     svg.setAttribute('height', `${rendered.box.height}`);
-    const background = document.createElementNS(SVG_NS, 'rect');
-    background.setAttribute('x', '0');
-    background.setAttribute('y', '0');
-    background.setAttribute('width', `${rendered.box.width}`);
-    background.setAttribute('height', `${rendered.box.height}`);
-    background.setAttribute('fill', node.backgroundColor ?? '#ffffff');
-    svg.appendChild(background);
-    const barColor = node.barColor ?? '#000000';
-    let cursor = quietZone;
-    pattern.runs.forEach((runLength, i) => {
-        const runWidth = runLength * moduleWidth;
-        if (i % 2 === 0) {
-            const rect = document.createElementNS(SVG_NS, 'rect');
-            rect.setAttribute('x', `${cursor}`);
-            rect.setAttribute('y', '0');
-            rect.setAttribute('width', `${runWidth}`);
-            rect.setAttribute('height', `${barHeight}`);
-            rect.setAttribute('fill', barColor);
-            svg.appendChild(rect);
-        }
-        cursor += runWidth;
-    });
-    if (showText) {
-        const text = document.createElementNS(SVG_NS, 'text');
-        text.setAttribute('x', `${rendered.box.width / 2}`);
-        text.setAttribute('y', `${barHeight + textSize}`);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-size', `${textSize}`);
-        text.setAttribute('font-family', 'ui-monospace, monospace, sans-serif');
-        text.setAttribute('fill', node.textColor ?? barColor);
-        text.textContent = pattern.text;
-        svg.appendChild(text);
+    if (rotation === 0) {
+        appendBarcodeContentSvg(svg, node, pattern, rendered.box.width, rendered.box.height);
+    }
+    else {
+        const g = document.createElementNS(SVG_NS, 'g');
+        g.setAttribute('transform', verticalTransform(rotation, rendered.box.width, rendered.box.height));
+        appendBarcodeContentSvg(g, node, pattern, rendered.box.height, rendered.box.width);
+        svg.appendChild(g);
     }
     ctx.container.appendChild(svg);
 }
-function drawPdf(rendered, x, y, ctx) {
-    const node = rendered.node;
-    const pattern = encodeNode(node);
-    const { quietZone, showText, textSize, barHeight, moduleWidth } = barGeometry(node, pattern, rendered.box.width, rendered.box.height);
-    const doc = ctx.pdf.doc;
-    const needsOpacity = node.opacity !== undefined;
-    if (needsOpacity)
-        doc.save().opacity(node.opacity);
-    const backgroundRect = toPdfRect(x, y, rendered.box.width, rendered.box.height);
-    doc.rect(backgroundRect.x, backgroundRect.y, backgroundRect.width, backgroundRect.height).fill(resolvePdfColor(node.backgroundColor ?? '#ffffff'));
+// Same natural (left-to-right) drawing as appendBarcodeContentSvg, but issuing raw pdfkit calls in
+// LOCAL, UNSCALED px coordinates — meant to run inside a doc.scale(PX_TO_PT) block (see drawPdf),
+// exactly like chart/pdf.ts's drawChartPath/drawChartAreaFill already do for their own vector
+// content. pdfkit's fontSize()/widthOfString() are pure glyph-metric arithmetic with no awareness
+// of the active CTM, so measuring/positioning text in these same raw local units is self-consistent
+// with everything else drawn here — the active scale/rotate/translate transform converts the whole
+// thing to the correct final page position and size at render time.
+function drawBarcodeContentPdf(doc, node, pattern, contentWidth, contentHeight) {
+    const { quietZone, showText, textSize, barHeight, moduleWidth } = barGeometry(node, pattern, contentWidth, contentHeight);
+    doc.rect(0, 0, contentWidth, contentHeight).fill(resolvePdfColor(node.backgroundColor ?? '#ffffff'));
     const barColor = resolvePdfColor(node.barColor ?? '#000000');
     let cursor = quietZone;
     pattern.runs.forEach((runLength, i) => {
         const runWidth = runLength * moduleWidth;
-        if (i % 2 === 0) {
-            const rect = toPdfRect(x + cursor, y, runWidth, barHeight);
-            doc.rect(rect.x, rect.y, rect.width, rect.height).fill(barColor);
-        }
+        if (i % 2 === 0)
+            doc.rect(cursor, 0, runWidth, barHeight).fill(barColor);
         cursor += runWidth;
     });
     // Same anchor-middle idiom chart/pdf.ts's drawChartText uses: measure via pdfkit's own real
     // doc.widthOfString, then shift x left by half that width.
     if (showText) {
-        doc.font('Helvetica').fontSize(pxToPt(textSize));
-        const widthPt = doc.widthOfString(pattern.text);
-        const baseX = pxToPt(x + rendered.box.width / 2) - widthPt / 2;
-        const baseY = pxToPt(y + barHeight + textSize);
-        doc.fillColor(resolvePdfColor(node.textColor ?? node.barColor ?? '#000000')).text(pattern.text, baseX, baseY, { lineBreak: false, baseline: 0 });
+        doc.font('Helvetica').fontSize(textSize);
+        const textWidth = doc.widthOfString(pattern.text);
+        doc.fillColor(resolvePdfColor(node.textColor ?? node.barColor ?? '#000000'))
+            .text(pattern.text, contentWidth / 2 - textWidth / 2, barHeight + textSize, { lineBreak: false, baseline: 0 });
     }
-    if (needsOpacity)
-        doc.restore();
+}
+function drawPdf(rendered, x, y, ctx) {
+    const node = rendered.node;
+    const pattern = encodeNode(node);
+    const rotation = node.rotation ?? 0;
+    const doc = ctx.pdf.doc;
+    doc.save();
+    if (node.opacity !== undefined)
+        doc.opacity(node.opacity);
+    if (rotation === 0) {
+        doc.translate(pxToPt(x), pxToPt(y));
+        doc.scale(PX_TO_PT);
+        drawBarcodeContentPdf(doc, node, pattern, rendered.box.width, rendered.box.height);
+    }
+    else if (rotation === 90) {
+        doc.translate(pxToPt(x + rendered.box.width), pxToPt(y));
+        doc.rotate(90);
+        doc.scale(PX_TO_PT);
+        drawBarcodeContentPdf(doc, node, pattern, rendered.box.height, rendered.box.width);
+    }
+    else {
+        doc.translate(pxToPt(x), pxToPt(y + rendered.box.height));
+        doc.rotate(-90);
+        doc.scale(PX_TO_PT);
+        drawBarcodeContentPdf(doc, node, pattern, rendered.box.height, rendered.box.width);
+    }
+    doc.restore();
 }
 registerNode('barcode', {
     measureHeight: (node, width) => resolveHeight(node, width),

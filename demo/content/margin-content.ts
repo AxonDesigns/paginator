@@ -1,4 +1,4 @@
-import { group, text } from '../../src/index.ts'
+import { barcode, group, text } from '../../src/index.ts'
 import type { MarginContent } from '../../src/index.ts'
 import { UI_FONT } from '../fonts.ts'
 
@@ -56,4 +56,16 @@ export const marginContent: MarginContent = [
       }),
     position: { region: 'top', cross: 'center', along: 'end', offsetX: -50 },
   },
+  {
+    node: barcode({
+      value: 'This is a test',
+      symbology: 'code128',
+      barWidth: 1,
+      width: 30,
+      rotation: 90,
+      showText: false,
+      barColor: '#6c6c6c',
+    }),
+    position: { region: 'right', cross: 'center', along: 'center' },
+  }
 ]

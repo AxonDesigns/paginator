@@ -491,27 +491,44 @@ export type BarcodeNode = Interactive & SelfAlignable & {
   value: string
   /** Default 'code128'. */
   symbology?: BarcodeSymbology
+  /** Rotates the whole rendered barcode (bars AND the text line) by this many degrees, clockwise,
+   *  within its box. Default `0` (bars run left-to-right, box width is the bar-length axis).
+   *  `90` makes it vertical with bars running top-to-bottom (text ends up along the left edge);
+   *  `-90` also makes it vertical but bars run bottom-to-top instead (text along the right edge) —
+   *  pick whichever reads correctly for how the page itself will be turned/mounted. Either way, box
+   *  HEIGHT becomes the bar-length axis instead of width, and `barWidth`/`quietZone`-driven sizing
+   *  applies to `height` instead of `width` — see barcode() and the `width`/`height`/`barWidth`
+   *  field docs below, which describe both orientations. */
+  rotation?: 0 | 90 | -90
   /**
-   * `height` or `aspectRatio` is always required (barcode dimensions are never auto-detected —
-   * there's no natural "shape" for a linear barcode the way a QR code is naturally square).
-   * `width` is required too, UNLESS `barWidth` is given instead — see barcode().
+   * The box's FINAL on-page width — always literally what it says regardless of `rotation`.
+   * Required, UNLESS `rotation` is `90`/`-90` and `barWidth` is given instead (in which case
+   * `width` becomes the fixed bar-thickness dimension and must still be given directly, since
+   * `barWidth` now sizes `height`) — see barcode().
    */
   width?: number
-  /** Total box height, including the human-readable text line underneath if `showText` is true. */
+  /** The box's FINAL on-page height, including the human-readable text line (if `showText`) —
+   *  always literally what it says regardless of `rotation`. Required, UNLESS `rotation` is
+   *  `90`/`-90` and `barWidth` is given instead (in which case `barWidth` sizes `height` from the
+   *  encoded module count) — see barcode(). */
   height?: number
   /** width / height. Used to derive whichever of width/height is missing. */
   aspectRatio?: number
-  /** px per narrow-bar module — an alternative to `width`: barcode() encodes `value` once upfront
-   *  to learn its module count, and derives `width` from it. Ignored once `width` is given. */
+  /** px per narrow-bar module along the bar-LENGTH axis — `width` when `rotation` is `0` (the
+   *  default), `height` when `90`/`-90`. barcode() encodes `value` once upfront to learn its
+   *  module count and derives that axis from it. Ignored once the axis it would derive is already
+   *  given directly. */
   barWidth?: number
-  /** px height of the bars themselves. Defaults to `height` minus a reserved text band (if
-   *  `showText`) or the full `height` otherwise. */
+  /** px thickness of the bars themselves, perpendicular to their length — `height` (minus a
+   *  reserved text band, if `showText`) when `rotation` is `0`, or `width` when `90`/`-90`.
+   *  Defaults to that whole perpendicular dimension. */
   barHeight?: number
   /** Default '#000000'. */
   barColor?: string
   /** Default '#ffffff'. */
   backgroundColor?: string
-  /** px of blank border on both sides. Default 10. */
+  /** px of blank border at both ends of the bar-length axis (left/right when `rotation` is `0`,
+   *  top/bottom when `90`/`-90`). Default 10. */
   quietZone?: number
   /** Human-readable value printed under the bars. Default true. */
   showText?: boolean
@@ -1365,25 +1382,44 @@ export function qrcode(config: Omit<QrcodeNode, 'type'>): QrcodeNode {
 export function barcode(config: Omit<BarcodeNode, 'type'>): BarcodeNode {
   const symbology = config.symbology ?? 'code128'
   // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
-  // and (when `barWidth` is used) supplies the module count needed to derive `width`.
+  // and (when `barWidth` is used) supplies the module count needed to derive the bar-length axis.
   const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit)
+  const rotation = config.rotation ?? 0
+  if (rotation !== 0 && rotation !== 90 && rotation !== -90) {
+    throw new Error(`[paginator] barcode() "rotation" must be 0, 90, or -90, got ${rotation}.`)
+  }
+  const quietZone = config.quietZone ?? 10
 
   let width = config.width
-  if (width === undefined) {
-    if (config.barWidth === undefined) {
-      throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.')
+  let height = config.height
+
+  // `barWidth` always sizes the bar-LENGTH axis — `width` when rotation is 0 (bars run left-to-
+  // right), `height` when 90/-90 (bars run vertically, see BarcodeNode.rotation) — while the OTHER
+  // axis (the fixed bar-thickness dimension) still needs height/aspectRatio (rotation 0) or
+  // width/aspectRatio (90/-90) exactly like it always has, just on whichever axis that is now.
+  if (rotation === 0) {
+    if (width === undefined) {
+      if (config.barWidth === undefined) {
+        throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.')
+      }
+      width = quietZone * 2 + pattern.totalModules * config.barWidth
     }
-    const quietZone = config.quietZone ?? 10
-    width = quietZone * 2 + pattern.totalModules * config.barWidth
+    if (height === undefined && config.aspectRatio === undefined) {
+      throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.')
+    }
+  } else {
+    if (height === undefined) {
+      if (config.barWidth === undefined) {
+        throw new Error('[paginator] barcode() needs "height" or "barWidth" to determine its height ("rotation: 90|-90" sizes height from the bar length, not width).')
+      }
+      height = quietZone * 2 + pattern.totalModules * config.barWidth
+    }
+    if (width === undefined && config.aspectRatio === undefined) {
+      throw new Error('[paginator] barcode() needs "width" or "aspectRatio" to determine its width ("rotation: 90|-90" needs the fixed bar-thickness dimension given directly).')
+    }
   }
 
-  const hasHeight = config.height !== undefined
-  const hasAspectRatio = config.aspectRatio !== undefined
-  if (!hasHeight && !hasAspectRatio) {
-    throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.')
-  }
-
-  return { type: 'barcode', ...config, width }
+  return { type: 'barcode', ...config, width, height }
 }
 
 export function container(config: Omit<ContainerNode, 'type' | 'child'>, child: Node): ContainerNode {
