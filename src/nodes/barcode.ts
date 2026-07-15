@@ -11,25 +11,33 @@ import { BASE_ELEMENT_STYLE } from '../render/reset.ts'
 import { resolvePdfColor, pxToPt, PX_TO_PT } from '../render/pdf-render.ts'
 import { encodeBarcodeValue } from '../render/barcode-encode.ts'
 import type { BarPattern } from '../render/barcode-encode.ts'
+import { applyPdfOrientationTransform, naturalContentSize, orientedBoxSize, svgOrientationTransform } from '../core/orientation.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'barcode' }>
 
-// barcode()'s constructor already guarantees "height"/"aspectRatio" is present, so the fallback
-// branch here is unreachable in practice — kept as a defensive error, same as image.ts/svg.ts.
-function resolveHeight(node: BarcodeNode, width: number): number {
-  if (node.height !== undefined) return node.height
-  if (node.aspectRatio !== undefined) return width / node.aspectRatio
-  throw new Error('[paginator] barcode node has neither "height" nor "aspectRatio" — use the barcode() builder, which validates this upfront.')
+// Resolves the NATURAL (pre-rotation) width/height pair from whichever of width/height/aspectRatio
+// was given — independent of `orientation` and of any ambient width, since barcode()'s builder
+// already guarantees one of these combinations holds (this defensive branch is unreachable in
+// practice, same as image.ts/svg.ts's own "shouldn't happen" fallback).
+function naturalDims(node: BarcodeNode): { width: number; height: number } {
+  if (node.width !== undefined && node.height !== undefined) return { width: node.width, height: node.height }
+  if (node.width !== undefined && node.aspectRatio !== undefined) return { width: node.width, height: node.width / node.aspectRatio }
+  if (node.height !== undefined && node.aspectRatio !== undefined) return { width: node.aspectRatio * node.height, height: node.height }
+  throw new Error('[paginator] barcode node needs "width"+"height", or one of them plus "aspectRatio" — use the barcode() builder, which validates this upfront.')
 }
 
-export function barcodeNaturalWidth(node: BarcodeNode, availableWidth: number): number {
-  if (node.width !== undefined) return node.width
-  if (node.height !== undefined && node.aspectRatio !== undefined) return node.height * node.aspectRatio
-  return availableWidth
+// Barcode's own width/height/aspectRatio fully determine its natural size without reference to any
+// ambient width a parent hands it — the same "ignore ambient width, self-size" pattern text.ts uses
+// for sideways text, just for a different underlying reason (there's no ambient-width conflict to
+// resolve here; the box is simply always fully explicit).
+export function barcodeNaturalWidth(node: BarcodeNode): number {
+  const natural = naturalDims(node)
+  return orientedBoxSize(node.orientation, natural.width, natural.height).width
 }
 
-function layout(node: BarcodeNode, width: number): Rendered {
-  return { type: 'barcode', box: { x: 0, y: 0, width, height: resolveHeight(node, width) }, node }
+function layout(node: BarcodeNode): Rendered {
+  const natural = naturalDims(node)
+  return { type: 'barcode', box: { x: 0, y: 0, ...orientedBoxSize(node.orientation, natural.width, natural.height) }, node }
 }
 
 // Re-encoded at every render call rather than cached on the node — cheap, pure, deterministic,
@@ -57,9 +65,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
 
 // Draws background + bars + text into `parent` in a LOCAL (contentWidth x contentHeight) coordinate
 // space, bars always running left-to-right along contentWidth — the one "natural" drawing routine
-// both the unrotated (rotation: 0) and rotated (90/-90) cases below reuse unchanged, so rotation is
-// purely a coordinate-transform concern, never a separate "draw vertically" implementation (which
-// would have needed to re-derive text placement/rotation from scratch).
+// every orientation below reuses unchanged, so orientation is purely a coordinate-transform concern,
+// never a separate "draw vertically"/"draw upside-down" implementation (which would have needed to
+// re-derive text placement/rotation from scratch).
 function appendBarcodeContentSvg(parent: SVGSVGElement | SVGGElement, node: BarcodeNode, pattern: BarPattern, contentWidth: number, contentHeight: number): void {
   const { quietZone, showText, textSize, barHeight, moduleWidth } = barGeometry(node, pattern, contentWidth, contentHeight)
 
@@ -100,21 +108,10 @@ function appendBarcodeContentSvg(parent: SVGSVGElement | SVGGElement, node: Barc
   }
 }
 
-// The SVG transform that maps `rotation`'s natural (contentWidth=box.height x
-// contentHeight=box.width) content into the final (box.width x box.height) box. Derived from the
-// standard "translate then rotate" composition (SVG applies the rightmost transform to the point
-// first): rotating 90° clockwise about the origin sends (x,y) -> (-y,x), so following it with
-// translate(boxWidth,0) lands the natural content's starting edge (x=0) at the box's TOP —
-// bars read top-to-bottom. -90 is the mirror image (translate(0,boxHeight) rotate(-90)) — bars
-// read bottom-to-top instead, with the text line ending up on the opposite edge.
-function verticalTransform(rotation: 90 | -90, boxWidth: number, boxHeight: number): string {
-  return rotation === 90 ? `translate(${boxWidth} 0) rotate(90)` : `translate(0 ${boxHeight}) rotate(-90)`
-}
-
 function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
   const node = rendered.node
   const pattern = encodeNode(node)
-  const rotation = node.rotation ?? 0
+  const natural = naturalContentSize(node.orientation, rendered.box.width, rendered.box.height)
 
   const svg = document.createElementNS(SVG_NS, 'svg')
   Object.assign(svg.style, BASE_ELEMENT_STYLE, {
@@ -131,12 +128,13 @@ function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx):
   svg.setAttribute('width', `${rendered.box.width}`)
   svg.setAttribute('height', `${rendered.box.height}`)
 
-  if (rotation === 0) {
-    appendBarcodeContentSvg(svg, node, pattern, rendered.box.width, rendered.box.height)
+  const transform = svgOrientationTransform(node.orientation, rendered.box.width, rendered.box.height)
+  if (transform === undefined) {
+    appendBarcodeContentSvg(svg, node, pattern, natural.width, natural.height)
   } else {
     const g = document.createElementNS(SVG_NS, 'g')
-    g.setAttribute('transform', verticalTransform(rotation, rendered.box.width, rendered.box.height))
-    appendBarcodeContentSvg(g, node, pattern, rendered.box.height, rendered.box.width)
+    g.setAttribute('transform', transform)
+    appendBarcodeContentSvg(g, node, pattern, natural.width, natural.height)
     svg.appendChild(g)
   }
 
@@ -176,33 +174,27 @@ function drawBarcodeContentPdf(doc: PDFKit.PDFDocument, node: BarcodeNode, patte
 function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderCtx): void {
   const node = rendered.node
   const pattern = encodeNode(node)
-  const rotation = node.rotation ?? 0
+  const natural = naturalContentSize(node.orientation, rendered.box.width, rendered.box.height)
   const doc = ctx.pdf.doc
 
   doc.save()
   if (node.opacity !== undefined) doc.opacity(node.opacity)
 
-  if (rotation === 0) {
-    doc.translate(pxToPt(x), pxToPt(y))
-    doc.scale(PX_TO_PT)
-    drawBarcodeContentPdf(doc, node, pattern, rendered.box.width, rendered.box.height)
-  } else if (rotation === 90) {
-    doc.translate(pxToPt(x + rendered.box.width), pxToPt(y))
-    doc.rotate(90)
-    doc.scale(PX_TO_PT)
-    drawBarcodeContentPdf(doc, node, pattern, rendered.box.height, rendered.box.width)
-  } else {
-    doc.translate(pxToPt(x), pxToPt(y + rendered.box.height))
-    doc.rotate(-90)
-    doc.scale(PX_TO_PT)
-    drawBarcodeContentPdf(doc, node, pattern, rendered.box.height, rendered.box.width)
-  }
+  applyPdfOrientationTransform(doc, node.orientation, pxToPt(x), pxToPt(y), pxToPt(rendered.box.width), pxToPt(rendered.box.height))
+  doc.scale(PX_TO_PT)
+  drawBarcodeContentPdf(doc, node, pattern, natural.width, natural.height)
 
   doc.restore()
 }
 
+function measureHeight(node: BarcodeNode): number {
+  return layout(node).box.height
+}
+
 registerNode('barcode', {
-  measureHeight: (node, width) => resolveHeight(node, width),
+  measureHeight,
+  // Barcode stays atomic in every orientation — only text/richText gained a splittable upside-down
+  // state; a barcode's bars are a single indivisible symbol regardless of rotation.
   isSplittable: () => false,
   layout,
   naturalWidth: barcodeNaturalWidth,

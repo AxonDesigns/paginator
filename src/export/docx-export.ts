@@ -60,6 +60,7 @@ import { renderChartSvg } from '../render/chart-render.ts'
 import { buildQrMatrix, qrcodeRunsForRow } from '../render/qrcode-encode.ts'
 import { encodeBarcodeValue } from '../render/barcode-encode.ts'
 import type { BarPattern } from '../render/barcode-encode.ts'
+import { applyCanvasOrientationTransform, orientedBoxSize } from '../core/orientation.ts'
 import { borderSides } from './table-grid.ts'
 import type { BorderSide, BorderSides } from './table-grid.ts'
 import { resolveExportColor } from './export-color.ts'
@@ -230,6 +231,10 @@ function textRun(text: string, style: RunStyle, allowPageNumberSentinels = false
   })
 }
 
+// `node.orientation` is intentionally ignored here — DOCX has no native way to rotate a paragraph's
+// text, and honoring it would mean rasterizing to a PNG the way barcode's DOCX export does, which
+// would lose this text's selectability/searchability in the exported document. Text is always
+// exported horizontal/upright regardless of orientation (same for richTextNodeParagraph below).
 function textNodeParagraph(node: TextNode, allowPageNumberSentinels = false): Paragraph {
   return new Paragraph({ alignment: textAlignment(node.align), children: [textRun(node.content, node, allowPageNumberSentinels)] })
 }
@@ -245,6 +250,7 @@ function richTextRunStyle(paragraph: RichTextNode, run: RichTextRun): RunStyle {
   }
 }
 
+// `node.orientation` is intentionally ignored here too — see textNodeParagraph's comment above.
 function richTextNodeParagraph(node: RichTextNode, allowPageNumberSentinels = false): Paragraph {
   const children: ParagraphChild[] = node.runs.map(run => {
     const run_ = textRun(run.text, richTextRunStyle(node, run), allowPageNumberSentinels)
@@ -465,45 +471,38 @@ function drawBarcodeContentCanvas(ctx: OffscreenCanvasRenderingContext2D, node: 
   }
 }
 
-async function rasterizeBarcode(node: BarcodeNode, widthPx: number, heightPx: number): Promise<{ data: Uint8Array; widthPx: number; heightPx: number } | null> {
+// `naturalWidthPx`/`naturalHeightPx` are the bar-length/bar-thickness axes (see BarcodeNode's field
+// docs) — always pre-rotation, regardless of `node.orientation`; orientedBoxSize() below derives the
+// actual (post-rotation) canvas size to rasterize at.
+async function rasterizeBarcode(node: BarcodeNode, naturalWidthPx: number, naturalHeightPx: number): Promise<{ data: Uint8Array; widthPx: number; heightPx: number } | null> {
   if (typeof OffscreenCanvas === 'undefined') {
     warnBarcodeUnsupportedOnce()
     return null
   }
   const pattern = encodeBarcodeValue(node.symbology ?? 'code128', node.value, node.checkDigit)
-  const rotation = node.rotation ?? 0
+  const { width: finalWidthPx, height: finalHeightPx } = orientedBoxSize(node.orientation, naturalWidthPx, naturalHeightPx)
 
-  const scaledWidth = Math.max(1, Math.round(widthPx * CHART_RASTER_SCALE))
-  const scaledHeight = Math.max(1, Math.round(heightPx * CHART_RASTER_SCALE))
-  const canvas = new OffscreenCanvas(scaledWidth, scaledHeight)
+  const scaledFinalWidth = Math.max(1, Math.round(finalWidthPx * CHART_RASTER_SCALE))
+  const scaledFinalHeight = Math.max(1, Math.round(finalHeightPx * CHART_RASTER_SCALE))
+  const canvas = new OffscreenCanvas(scaledFinalWidth, scaledFinalHeight)
   const ctx = canvas.getContext('2d')!
 
-  // Same translate+rotate derivation as src/nodes/barcode.ts's SVG/pdfkit paths (see that file's
-  // verticalTransform comment) — just expressed via canvas 2D's own translate()/rotate(), which use
-  // the SAME clockwise-for-positive-angle convention as SVG's rotate().
-  if (rotation === 0) {
-    drawBarcodeContentCanvas(ctx, node, pattern, widthPx, heightPx, CHART_RASTER_SCALE)
-  } else if (rotation === 90) {
-    ctx.save()
-    ctx.translate(scaledWidth, 0)
-    ctx.rotate(Math.PI / 2)
-    drawBarcodeContentCanvas(ctx, node, pattern, heightPx, widthPx, CHART_RASTER_SCALE)
-    ctx.restore()
-  } else {
-    ctx.save()
-    ctx.translate(0, scaledHeight)
-    ctx.rotate(-Math.PI / 2)
-    drawBarcodeContentCanvas(ctx, node, pattern, heightPx, widthPx, CHART_RASTER_SCALE)
-    ctx.restore()
-  }
+  // Same translate+rotate derivation as src/nodes/barcode.ts's SVG/pdfkit paths, via the shared
+  // applyCanvasOrientationTransform() helper — canvas 2D's translate()/rotate() use the SAME
+  // clockwise-for-positive-angle convention as SVG's rotate().
+  applyCanvasOrientationTransform(ctx, node.orientation, scaledFinalWidth, scaledFinalHeight)
+  drawBarcodeContentCanvas(ctx, node, pattern, naturalWidthPx, naturalHeightPx, CHART_RASTER_SCALE)
 
   const blob = await canvas.convertToBlob({ type: 'image/png' })
-  return { data: new Uint8Array(await blob.arrayBuffer()), widthPx, heightPx }
+  return { data: new Uint8Array(await blob.arrayBuffer()), widthPx: finalWidthPx, heightPx: finalHeightPx }
 }
 
 async function barcodeNodeParagraph(node: BarcodeNode, availableWidthPx: number): Promise<Paragraph> {
-  const { width, height } = resolveBoxSize(node.width, node.height, node.aspectRatio, availableWidthPx)
-  const rasterized = await rasterizeBarcode(node, Math.round(width), Math.round(height))
+  // barcode()'s builder always resolves both width/height (in NATURAL, pre-rotation terms) before
+  // construction, so resolveBoxSize()'s availableWidthPx fallback is unreachable here in practice —
+  // kept for consistency with the image()/qrcode() call sites, which do rely on it.
+  const natural = resolveBoxSize(node.width, node.height, node.aspectRatio, availableWidthPx)
+  const rasterized = await rasterizeBarcode(node, Math.round(natural.width), Math.round(natural.height))
   if (rasterized === null) return new Paragraph({})
   return new Paragraph({
     children: [new ImageRun({ type: 'png', data: rasterized.data, transformation: { width: rasterized.widthPx, height: rasterized.heightPx }, outline: NO_IMAGE_OUTLINE })],

@@ -16,6 +16,7 @@ import { styledDiv } from '../render/shadow-dom.ts'
 import { pxToPt, resolvePdfColor } from '../render/pdf-render.ts'
 import { measureFontMetricsPx, resolveTextFont, textNodeFontString } from '../render/pdf-fonts.ts'
 import { resolveActiveFontFamily } from '../render/font-registry.ts'
+import { applyPdfOrientationTransform, cssOrientationTransform, isSideways, isSplittableOrientation, orientationAngle } from '../core/orientation.ts'
 
 type Rendered = Extract<RenderedNode, { type: 'text' }>
 
@@ -80,46 +81,49 @@ function fullLines(node: TextNode, width: number): LayoutLine[] {
 /**
  * Shrink-to-fit width for cross/main-axis sizing in Group/Table layout — the widest forced line,
  * ignoring any wrap constraint entirely (that's the whole point of a "natural"/unconstrained
- * width). For vertical text (`node.orientation` set), this is the POST-rotation footprint
- * (`vwrapWidth()`'s line count × lineHeight) — see that function's own doc comment for why
- * vertical text ignores the ambient width everywhere, making this trivially self-consistent with
- * `layout()`/`measureHeight()` below no matter what any caller passes in.
+ * width). For sideways text (`node.orientation` is `'vertical'`/`'vertical-reversed'`), this is the
+ * POST-rotation footprint (`vwrapWidth()`'s line count × lineHeight) — see that function's own doc
+ * comment for why sideways text ignores the ambient width everywhere, making this trivially
+ * self-consistent with `layout()`/`measureHeight()` below no matter what any caller passes in.
  */
 export function measureTextNaturalWidth(node: TextNode): number {
-  if (node.orientation !== undefined) return fullLines(node, vwrapWidth(node)).length * node.lineHeight
+  if (isSideways(node.orientation)) return fullLines(node, vwrapWidth(node)).length * node.lineHeight
   return measureNaturalWidth(preparedFor(node))
 }
 
-// Vertical text is atomic (see isSplittable in registerNode() below) and, unlike every other node
-// type, never adapts to an ambient width at all — the only thing its layout is ever concerned with
-// is its own post-rotation size. Concretely: it always wraps against its OWN intrinsic natural
-// width (the widest forced/unwrapped line, exactly what horizontal text's `measureNaturalWidth`
-// already computes), never whatever width a parent row/column/margin-note happens to hand it. This
-// sidesteps a genuine impossibility otherwise: a row/column child's "ambient width" is used for TWO
-// different purposes by the surrounding layout code — the slot size reserved for positioning
-// siblings, and the value fed into `layout()`/`measureHeight()` to compute the actual box — and for
-// ordinary (non-swapping) types those are the same number by construction, but for a ROTATED node
-// they can't be: the slot size needs to be the POST-rotation thickness, while wrapping needs the
-// PRE-rotation width. Making vertical text intrinsic (ignoring the ambient width entirely, the same
-// way Image/Chart/Svg's own dimensions are never derived from it either) means both concerns
-// resolve to the one true size regardless of which number any particular caller passes through.
-// One consequence: `alignSelf`/`crossAlign: 'stretch'` has no effect on vertical text (there's no
-// ambient width left for it to stretch into) — same documented no-op class as row-child height
-// already being intrinsic elsewhere in this file.
+// Sideways text (`'vertical'`/`'vertical-reversed'`) is atomic (see isSplittable in registerNode()
+// below) and, unlike every other node type, never adapts to an ambient width at all — the only
+// thing its layout is ever concerned with is its own post-rotation size. Concretely: it always
+// wraps against its OWN intrinsic natural width (the widest forced/unwrapped line, exactly what
+// horizontal text's `measureNaturalWidth` already computes), never whatever width a parent
+// row/column/margin-note happens to hand it. This sidesteps a genuine impossibility otherwise: a
+// row/column child's "ambient width" is used for TWO different purposes by the surrounding layout
+// code — the slot size reserved for positioning siblings, and the value fed into
+// `layout()`/`measureHeight()` to compute the actual box — and for ordinary (non-swapping) types
+// those are the same number by construction, but for a SIDEWAYS node they can't be: the slot size
+// needs to be the POST-rotation thickness, while wrapping needs the PRE-rotation width. Making
+// sideways text intrinsic (ignoring the ambient width entirely, the same way Image/Chart/Svg's own
+// dimensions are never derived from it either) means both concerns resolve to the one true size
+// regardless of which number any particular caller passes through. `'horizontal-reversed'` has none
+// of this — it wraps against the ambient width exactly like the default. One consequence:
+// `alignSelf`/`crossAlign: 'stretch'` has no effect on sideways text (there's no ambient width left
+// for it to stretch into) — same documented no-op class as row-child height already being intrinsic
+// elsewhere in this file.
 function vwrapWidth(node: TextNode): number {
   return measureNaturalWidth(preparedFor(node))
 }
 
 function measureHeight(node: TextNode, width: number): number {
-  if (node.orientation !== undefined) return vwrapWidth(node)
+  if (isSideways(node.orientation)) return vwrapWidth(node)
   return fullLines(node, width).length * node.lineHeight
 }
 
 function layout(node: TextNode, width: number): Rendered {
-  const wrapWidth = node.orientation !== undefined ? vwrapWidth(node) : width
+  const sideways = isSideways(node.orientation)
+  const wrapWidth = sideways ? vwrapWidth(node) : width
   const lines = fullLines(node, wrapWidth)
   const contentHeight = lines.length * node.lineHeight
-  const box = node.orientation !== undefined ? { x: 0, y: 0, width: contentHeight, height: wrapWidth } : { x: 0, y: 0, width: wrapWidth, height: contentHeight }
+  const box = sideways ? { x: 0, y: 0, width: contentHeight, height: wrapWidth } : { x: 0, y: 0, width: wrapWidth, height: contentHeight }
   return { type: 'text', box, node, lines: positionLines(lines, node, wrapWidth) }
 }
 
@@ -162,21 +166,24 @@ function appendLines(container: HTMLElement, rendered: Rendered, font: string): 
   }
 }
 
-// Renders the ordinary (unrotated) line block sized `wrapWidth × contentHeight`, then rotates it
-// into place so its bounding box exactly fills the OUTER box (already swapped by layout() above)
-// positioned at (x, y) — the standard "rotate into a swapped bounding box" CSS technique:
-// `transform-origin: top left` pins the pivot to the inner block's own top-left corner, and the
-// paired `translate()` cancels out the offset that rotating around that pivot would otherwise
-// introduce, so the rotated result's bounding box starts flush at (0, 0) of the outer wrapper.
-// Empirically verified (headless-browser bounding-box check of this exact rotate()+translate()
-// pair): the outer wrapper's box and the rotated inner element's box land pixel-identical.
-// `'vertical'` (90° clockwise) reads top-to-bottom down the box's right edge; `'vertical-inverted'`
-// (-90°, counter-clockwise) reads bottom-to-top up its left edge (mirroring the common SVG/CSS
-// axis-title convention for each direction).
-function renderRotatedDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
+// Renders the ordinary (unrotated) line block sized `naturalWidth × naturalHeight`, then rotates/
+// flips it into place via cssOrientationTransform() so its bounding box exactly fills the OUTER box
+// (already swapped by layout() above, for the sideways cases) positioned at (x, y) — the standard
+// "rotate into a swapped bounding box" CSS technique: `transform-origin: top left` pins the pivot to
+// the inner block's own top-left corner, and the paired `translate()` cancels out the offset that
+// rotating around that pivot would otherwise introduce, so the rotated result's bounding box starts
+// flush at (0, 0) of the outer wrapper. Empirically verified for the sideways cases
+// (headless-browser bounding-box check of this exact rotate()+translate() pair): the outer
+// wrapper's box and the rotated inner element's box land pixel-identical. `'vertical'` (90°
+// clockwise) reads top-to-bottom down the box's right edge; `'vertical-reversed'` (-90°,
+// counter-clockwise) reads bottom-to-top up its left edge (mirroring the common SVG/CSS axis-title
+// convention for each direction); `'horizontal-reversed'` (180°) flips the block upside-down in
+// place — outer and inner boxes are the same size here, unlike the sideways cases.
+function renderOrientedDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
   const node = rendered.node
-  const contentHeight = rendered.box.width // pre-rotation content height == post-swap width
-  const wrapWidth = rendered.box.height // pre-rotation wrap width == post-swap height
+  const sideways = isSideways(node.orientation)
+  const naturalWidth = sideways ? rendered.box.height : rendered.box.width
+  const naturalHeight = sideways ? rendered.box.width : rendered.box.height
   const outerEl = styledDiv({
     left: `${x}px`,
     top: `${y}px`,
@@ -185,13 +192,14 @@ function renderRotatedDom(rendered: Rendered, x: number, y: number, ctx: DomRend
     ...(ctx.unselectable ? { userSelect: 'none' as const } : {}),
     ...(ctx.cursor !== undefined ? { cursor: ctx.cursor } : {}),
   })
+  const { transform, transformOrigin } = cssOrientationTransform(node.orientation, naturalWidth, naturalHeight)!
   const innerEl = styledDiv({
     left: '0px',
     top: '0px',
-    width: `${wrapWidth}px`,
-    height: `${contentHeight}px`,
-    transformOrigin: 'top left',
-    transform: node.orientation === 'vertical' ? `rotate(90deg) translate(0px, -${contentHeight}px)` : `rotate(-90deg) translate(-${wrapWidth}px, 0px)`,
+    width: `${naturalWidth}px`,
+    height: `${naturalHeight}px`,
+    transformOrigin,
+    transform,
   })
   appendLines(innerEl, rendered, fontString(node))
   outerEl.appendChild(innerEl)
@@ -199,8 +207,8 @@ function renderRotatedDom(rendered: Rendered, x: number, y: number, ctx: DomRend
 }
 
 function renderDom(rendered: Rendered, x: number, y: number, ctx: DomRenderCtx): void {
-  if (rendered.node.orientation !== undefined) {
-    renderRotatedDom(rendered, x, y, ctx)
+  if (orientationAngle(rendered.node.orientation) !== 0) {
+    renderOrientedDom(rendered, x, y, ctx)
     return
   }
   const boxEl = styledDiv({
@@ -257,21 +265,16 @@ function drawPdf(rendered: Rendered, x: number, y: number, ctx: PdfRenderCtx): v
   const doc = ctx.pdf.doc
   doc.font(fontName).fontSize(fontSizePt).fillColor(color)
 
-  if (node.orientation !== undefined) {
-    // Mirrors renderRotatedDom()'s `transform-origin: top left; transform: rotate(θ) translate(...)`
-    // exactly: pdfkit's rotate()/translate() compose the same way CSS transform functions do (each
-    // subsequent call applies in the already-transformed frame), and pdfkit's rotate() is
-    // clockwise-degrees, the same sign convention CSS uses — so this reproduces the DOM path's
-    // geometry call-for-call, just as a transform stack instead of a CSS string. Lines are then
-    // drawn at LOCAL (0,0)-relative coordinates, since (x, y) is already baked into the stack via
-    // the initial translate().
-    const angle = node.orientation === 'vertical' ? 90 : -90
-    const contentHeightPt = pxToPt(rendered.box.width) // pre-rotation content height == post-swap width
-    const wrapWidthPt = pxToPt(rendered.box.height) // pre-rotation wrap width == post-swap height
+  if (orientationAngle(node.orientation) !== 0) {
+    // Mirrors renderOrientedDom()'s `transform-origin: top left; transform: rotate(θ)
+    // translate(...)` via the shared applyPdfOrientationTransform() helper: pdfkit's
+    // rotate()/translate() compose the same way CSS transform functions do (each subsequent call
+    // applies in the already-transformed frame), and pdfkit's rotate() is clockwise-degrees, the
+    // same sign convention CSS uses — so this reproduces the DOM path's geometry exactly. Lines are
+    // then drawn at LOCAL (0,0)-relative coordinates, since (x, y) is already baked into the stack
+    // via the transform's own translate().
     doc.save()
-    doc.translate(pxToPt(x), pxToPt(y))
-    doc.rotate(angle)
-    doc.translate(angle === 90 ? 0 : -wrapWidthPt, angle === 90 ? -contentHeightPt : 0)
+    applyPdfOrientationTransform(doc, node.orientation, pxToPt(x), pxToPt(y), pxToPt(rendered.box.width), pxToPt(rendered.box.height))
     drawLines(doc, rendered, 0, 0, baselineFromTopPt, characterSpacing, decoration, decorationThicknessPt, fontSizePt, color)
     doc.restore()
     return
@@ -311,11 +314,14 @@ function drawLines(
 
 registerNode('text', {
   measureHeight,
-  // Vertical text is atomic, like Image/Chart/Svg — splitting a rotated block across a page
-  // boundary would mean the split cursor runs the page's vertical axis while lines stack along
-  // the page's horizontal axis post-rotation, a confusing case for what's fundamentally a short
-  // label use case (see TextNode.orientation's doc comment).
-  isSplittable: node => node.orientation === undefined,
+  // Sideways text ('vertical'/'vertical-reversed') is atomic, like Image/Chart/Svg — splitting a
+  // rotated block across a page boundary would mean the split cursor runs the page's vertical axis
+  // while lines stack along the page's horizontal axis post-rotation, a confusing case for what's
+  // fundamentally a short label use case (see TextNode.orientation's doc comment). Upside-down
+  // ('horizontal-reversed') text has none of that problem — it still wraps/stacks top-to-bottom
+  // like ordinary text, just flipped per already-paginated fragment at render time — so it splits
+  // exactly like the default orientation.
+  isSplittable: node => isSplittableOrientation(node.orientation),
   split,
   layout,
   naturalWidth: measureTextNaturalWidth,

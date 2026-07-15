@@ -99,40 +99,45 @@ describe('barcode', () => {
     expect(() => barcode({ value: '12345678', width: 200 })).toThrow(/"height" or "aspectRatio"/)
   })
 
-  test('rotation: 90/-90 makes barWidth derive height instead of width', () => {
-    const node90 = barcode({ value: 'CODE39', symbology: 'code39', rotation: 90, barWidth: 2, quietZone: 10, width: 60 })
-    const nodeMinus90 = barcode({ value: 'CODE39', symbology: 'code39', rotation: -90, barWidth: 2, quietZone: 10, width: 60 })
-    expect(node90.height).toBe(2 * 127 + 2 * 10)
-    expect(nodeMinus90.height).toBe(2 * 127 + 2 * 10)
-    expect(node90.width).toBe(60)
+  test('barWidth always derives the NATURAL width (bar-length axis), regardless of orientation', () => {
+    const node90 = barcode({ value: 'CODE39', symbology: 'code39', orientation: 'vertical', barWidth: 2, quietZone: 10, height: 60 })
+    const nodeRev = barcode({ value: 'CODE39', symbology: 'code39', orientation: 'vertical-reversed', barWidth: 2, quietZone: 10, height: 60 })
+    expect(node90.width).toBe(2 * 127 + 2 * 10)
+    expect(nodeRev.width).toBe(2 * 127 + 2 * 10)
+    // height stays the authored NATURAL thickness axis on the node itself...
+    expect(node90.height).toBe(60)
   })
 
-  test('rotation: 90/-90 throws when given neither height nor barWidth', () => {
-    expect(() => barcode({ value: '12345678', rotation: 90, width: 60 })).toThrow(/"height" or "barWidth"/)
+  test('orientation vertical/vertical-reversed swaps width/height into the FINAL on-page box', () => {
+    const node90 = barcode({ value: 'CODE39', symbology: 'code39', orientation: 'vertical', barWidth: 2, quietZone: 10, height: 60 })
+    const nodeRev = barcode({ value: 'CODE39', symbology: 'code39', orientation: 'vertical-reversed', barWidth: 2, quietZone: 10, height: 60 })
+    expect(measureNodeHeight(node90, 0)).toBe(node90.width)
+    expect(measureNodeHeight(nodeRev, 0)).toBe(nodeRev.width)
   })
 
-  test('rotation: 90/-90 throws when given neither width nor aspectRatio', () => {
-    expect(() => barcode({ value: '12345678', rotation: 90, barWidth: 2 })).toThrow(/"width" or "aspectRatio"/)
+  test('orientation: horizontal-reversed keeps the same box as the default (no swap)', () => {
+    const node = barcode({ value: '12345678', orientation: 'horizontal-reversed', width: 200, height: 60 })
+    expect(measureNodeHeight(node, 0)).toBe(60)
   })
 
-  test('throws on an invalid rotation value', () => {
+  test('validation (width/barWidth, height/aspectRatio) is orientation-independent', () => {
+    expect(() => barcode({ value: '12345678', orientation: 'vertical', height: 60 })).toThrow(/"width" or "barWidth"/)
+    expect(() => barcode({ value: '12345678', orientation: 'vertical', width: 60 })).toThrow(/"height" or "aspectRatio"/)
+  })
+
+  test('throws on an invalid orientation value', () => {
     // @ts-expect-error exercising the runtime guard for a non-literal-typed caller
-    expect(() => barcode({ value: '12345678', rotation: 45, width: 60, height: 200 })).toThrow(/"rotation" must be 0, 90, or -90/)
-  })
-
-  test('measureHeight/naturalWidth reflect the FINAL (rotated) box regardless of rotation', () => {
-    const node = barcode({ value: '12345678', rotation: 90, barWidth: 2, quietZone: 10, width: 60 })
-    // The rotated box's width/height participate in layout exactly like an unrotated one — width
-    // stays the declared 60, height is whatever barWidth derived.
-    expect(measureNodeHeight(node, 60)).toBe(node.height)
+    expect(() => barcode({ value: '12345678', orientation: 'diagonal', width: 60, height: 200 })).toThrow(/"orientation" must be one of/)
   })
 
   test('throws on a value invalid for the chosen symbology (ean13 needs 12-13 digits)', () => {
     expect(() => barcode({ value: 'not-digits', symbology: 'ean13', width: 200, height: 60 })).toThrow()
   })
 
-  test('is not splittable', () => {
+  test('is not splittable in any orientation', () => {
     expect(isSplittable(barcode({ value: '12345678', width: 200, height: 60 }))).toBe(false)
+    expect(isSplittable(barcode({ value: '12345678', orientation: 'vertical', barWidth: 2, height: 60 }))).toBe(false)
+    expect(isSplittable(barcode({ value: '12345678', orientation: 'horizontal-reversed', width: 200, height: 60 }))).toBe(false)
   })
 })
 
@@ -157,11 +162,20 @@ describe('separator', () => {
 describe('text', () => {
   // Only the builder's own construction, never layout/measurement (which needs pretext's
   // canvas-based text measurement — see this file's header comment) — `orientation` round-trips
-  // onto the node with no validation of its own (unlike image()'s required dimensions), since
-  // vertical text wraps against the exact same ambient width ordinary text does.
-  test('orientation round-trips onto the node unvalidated', () => {
-    const node = text({ content: 'hi', fontFamily: 'Arial', fontSize: 10, orientation: 'vertical-inverted' })
-    expect(node.orientation).toBe('vertical-inverted')
+  // onto the node once validated.
+  test('orientation round-trips onto the node', () => {
+    const node = text({ content: 'hi', fontFamily: 'Arial', fontSize: 10, orientation: 'vertical-reversed' })
+    expect(node.orientation).toBe('vertical-reversed')
+  })
+
+  test('accepts horizontal-reversed (upside-down, no sideways rotation)', () => {
+    const node = text({ content: 'hi', fontFamily: 'Arial', fontSize: 10, orientation: 'horizontal-reversed' })
+    expect(node.orientation).toBe('horizontal-reversed')
+  })
+
+  test('throws on an invalid orientation value', () => {
+    // @ts-expect-error exercising the runtime guard for a non-literal-typed caller
+    expect(() => text({ content: 'hi', fontFamily: 'Arial', fontSize: 10, orientation: 'diagonal' })).toThrow(/"orientation" must be one of/)
   })
 })
 

@@ -4,6 +4,8 @@ import { DEFAULT_FONT_FAMILY } from '../render/font-registry.ts'
 import { encodeBarcodeValue } from '../render/barcode-encode.ts'
 import type { BarcodeSymbology } from '../render/barcode-encode.ts'
 import { buildQrMatrix } from '../render/qrcode-encode.ts'
+import { validateOrientation } from './orientation.ts'
+import type { Orientation } from './orientation.ts'
 
 export type Margins = { top: number; right: number; bottom: number; left: number }
 
@@ -304,25 +306,29 @@ export type TextNode = Interactive & SelfAlignable & {
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
   /**
-   * Rotates the whole laid-out text block 90° for sideways labels (e.g. a running side-title in a
-   * margin) — `'vertical'` reads top-to-bottom (rotated clockwise), `'vertical-inverted'` reads
-   * bottom-to-top (rotated counter-clockwise), unset is the ordinary horizontal default. Unlike
-   * every other sizing in this engine, vertical text ignores whatever ambient width it's handed
-   * (a parent column's width, a row's flex slot, a MarginNote's shrink-wrap width, ...) and always
-   * wraps against its OWN intrinsic natural width instead — the only thing its layout is ever
-   * concerned with is its own post-rotation size, the same way Image/Chart/Svg's dimensions are
-   * never derived from the ambient width either. This is deliberate, not a limitation to fix later:
-   * a row/column child's ambient width does double duty as both "the slot reserved for
-   * positioning siblings" and "the width fed into layout" for every other type because those are
-   * the same number by construction — for a ROTATED node they can't be (the slot needs the
-   * POST-rotation thickness, wrapping needs the PRE-rotation width), so there is no single ambient
-   * width that could serve both purposes correctly. One consequence: `alignSelf`/`crossAlign:
-   * 'stretch'` has no effect on vertical text (there's no ambient width left for it to stretch
-   * into). Restricted to quarter turns so the box's width/height swap is always exact (an arbitrary
-   * angle would need a larger enclosing box, breaking the "sibling boxes never overlap" layout
-   * invariant). Vertical text is atomic (never splits across a page boundary).
+   * Rotates the whole laid-out text block — `'vertical'` reads top-to-bottom (rotated clockwise),
+   * `'vertical-reversed'` reads bottom-to-top (rotated counter-clockwise), `'horizontal-reversed'`
+   * flips it upside-down in place without turning it sideways, unset/`'horizontal'` is the ordinary
+   * default. Unlike every other sizing in this engine, SIDEWAYS text (`'vertical'`/
+   * `'vertical-reversed'`) ignores whatever ambient width it's handed (a parent column's width, a
+   * row's flex slot, a MarginNote's shrink-wrap width, ...) and always wraps against its OWN
+   * intrinsic natural width instead — the only thing its layout is ever concerned with is its own
+   * post-rotation size, the same way Image/Chart/Svg's dimensions are never derived from the
+   * ambient width either. This is deliberate, not a limitation to fix later: a row/column child's
+   * ambient width does double duty as both "the slot reserved for positioning siblings" and "the
+   * width fed into layout" for every other type because those are the same number by construction —
+   * for a SIDEWAYS node they can't be (the slot needs the POST-rotation thickness, wrapping needs
+   * the PRE-rotation width), so there is no single ambient width that could serve both purposes
+   * correctly. One consequence: `alignSelf`/`crossAlign: 'stretch'` has no effect on sideways text
+   * (there's no ambient width left for it to stretch into). `'horizontal-reversed'` has none of
+   * this — it wraps against the ambient width exactly like the default, only the rendered content
+   * is flipped. Sideways orientations are restricted to quarter turns so the box's width/height swap
+   * is always exact (an arbitrary angle would need a larger enclosing box, breaking the "sibling
+   * boxes never overlap" layout invariant) and are atomic (never split across a page boundary) —
+   * unlike `'horizontal-reversed'`, which splits exactly like ordinary horizontal text since each
+   * paginated fragment is flipped independently in place.
    */
-  orientation?: 'vertical' | 'vertical-inverted'
+  orientation?: Orientation
   /** @internal memoized PreparedTextWithSegments, set lazily by the measure layer */
   __prepared?: unknown
   /** @internal set on synthetic continuation nodes produced by splitting across a page break */
@@ -369,6 +375,8 @@ export type RichTextNode = Interactive & SelfAlignable & {
   letterSpacing?: number
   /** Only meaningful when this node is itself a ROW child; ignored for column children. */
   flex?: FlexSize
+  /** Same rotation/splittability rules as TextNode.orientation — see that field's doc comment. */
+  orientation?: Orientation
   /** @internal memoized PreparedRichInline, set lazily by the measure layer */
   __prepared?: unknown
   /** @internal set on synthetic continuation nodes produced by splitting across a page break */
@@ -482,6 +490,7 @@ export type QrcodeNode = Interactive & SelfAlignable & {
 }
 
 export type { BarcodeSymbology }
+export type { Orientation }
 
 export type BarcodeCheckDigitMode = 'auto' | 'validate' | 'omit'
 
@@ -491,44 +500,52 @@ export type BarcodeNode = Interactive & SelfAlignable & {
   value: string
   /** Default 'code128'. */
   symbology?: BarcodeSymbology
-  /** Rotates the whole rendered barcode (bars AND the text line) by this many degrees, clockwise,
-   *  within its box. Default `0` (bars run left-to-right, box width is the bar-length axis).
-   *  `90` makes it vertical with bars running top-to-bottom (text ends up along the left edge);
-   *  `-90` also makes it vertical but bars run bottom-to-top instead (text along the right edge) —
-   *  pick whichever reads correctly for how the page itself will be turned/mounted. Either way, box
-   *  HEIGHT becomes the bar-length axis instead of width, and `barWidth`/`quietZone`-driven sizing
-   *  applies to `height` instead of `width` — see barcode() and the `width`/`height`/`barWidth`
-   *  field docs below, which describe both orientations. */
-  rotation?: 0 | 90 | -90
   /**
-   * The box's FINAL on-page width — always literally what it says regardless of `rotation`.
-   * Required, UNLESS `rotation` is `90`/`-90` and `barWidth` is given instead (in which case
-   * `width` becomes the fixed bar-thickness dimension and must still be given directly, since
-   * `barWidth` now sizes `height`) — see barcode().
+   * Rotates the whole rendered barcode (bars AND the text line) within its box — `'vertical'` reads
+   * top-to-bottom (bars run vertically, text along the left edge), `'vertical-reversed'` reads
+   * bottom-to-top instead (text along the right edge), `'horizontal-reversed'` flips it upside-down
+   * in place without turning it sideways, unset/`'horizontal'` is the ordinary default (bars run
+   * left-to-right). Pick whichever sideways direction reads correctly for how the page itself will
+   * be turned/mounted. `width`/`height`/`barWidth`/`barHeight`/`aspectRatio`/`quietZone` below are
+   * always defined in NATURAL (pre-rotation) terms, regardless of `orientation` — `width` is always
+   * the bar-length axis and `height` is always the bar-thickness+text axis. The FINAL on-page box
+   * only swaps width/height when `orientation` is `'vertical'`/`'vertical-reversed'`; the barcode
+   * stays atomic (never splits across a page boundary) in every orientation.
+   */
+  orientation?: Orientation
+  /**
+   * The barcode's NATURAL width — the bar-length axis, always, regardless of `orientation`. The
+   * FINAL on-page box width only equals this directly when `orientation` is unset/`'horizontal'`/
+   * `'horizontal-reversed'`; for `'vertical'`/`'vertical-reversed'` the final box swaps this into
+   * its on-page HEIGHT instead. Required, UNLESS `barWidth` is given instead (in which case this is
+   * derived from the encoded module count) — see barcode().
    */
   width?: number
-  /** The box's FINAL on-page height, including the human-readable text line (if `showText`) —
-   *  always literally what it says regardless of `rotation`. Required, UNLESS `rotation` is
-   *  `90`/`-90` and `barWidth` is given instead (in which case `barWidth` sizes `height` from the
-   *  encoded module count) — see barcode(). */
+  /**
+   * The barcode's NATURAL height — the bar-thickness+text axis, always, regardless of
+   * `orientation`, including the human-readable text line (if `showText`). The FINAL on-page box
+   * height only equals this directly when `orientation` is unset/`'horizontal'`/
+   * `'horizontal-reversed'`; for `'vertical'`/`'vertical-reversed'` the final box swaps this into
+   * its on-page WIDTH instead. Required, UNLESS `aspectRatio` is given instead — see barcode().
+   */
   height?: number
-  /** width / height. Used to derive whichever of width/height is missing. */
+  /** NATURAL width / NATURAL height (always, regardless of `orientation`). Used to derive whichever
+   *  of width/height is missing. */
   aspectRatio?: number
-  /** px per narrow-bar module along the bar-LENGTH axis — `width` when `rotation` is `0` (the
-   *  default), `height` when `90`/`-90`. barcode() encodes `value` once upfront to learn its
-   *  module count and derives that axis from it. Ignored once the axis it would derive is already
-   *  given directly. */
+  /** px per narrow-bar module along the NATURAL width (the bar-length axis), always, regardless of
+   *  `orientation`. barcode() encodes `value` once upfront to learn its module count and derives
+   *  `width` from it. Ignored once `width` is already given directly. */
   barWidth?: number
-  /** px thickness of the bars themselves, perpendicular to their length — `height` (minus a
-   *  reserved text band, if `showText`) when `rotation` is `0`, or `width` when `90`/`-90`.
+  /** px thickness of the bars themselves, perpendicular to their length — always relates to the
+   *  NATURAL height (minus a reserved text band, if `showText`), regardless of `orientation`.
    *  Defaults to that whole perpendicular dimension. */
   barHeight?: number
   /** Default '#000000'. */
   barColor?: string
   /** Default '#ffffff'. */
   backgroundColor?: string
-  /** px of blank border at both ends of the bar-length axis (left/right when `rotation` is `0`,
-   *  top/bottom when `90`/`-90`). Default 10. */
+  /** px of blank border at both ends of the NATURAL width (bar-length axis), always, regardless of
+   *  `orientation`. Default 10. */
   quietZone?: number
   /** Human-readable value printed under the bars. Default true. */
   showText?: boolean
@@ -1310,11 +1327,13 @@ export function group(config: DistributiveOmit<GroupNode, 'type' | 'children'>, 
 }
 
 export function text(config: Omit<TextNode, 'type' | 'lineHeight'> & { lineHeight?: number }): TextNode {
+  validateOrientation(config.orientation, 'text')
   const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2)
   return { type: 'text', ...config, lineHeight }
 }
 
 export function richText(config: Omit<RichTextNode, 'type' | 'lineHeight'> & { lineHeight?: number }): RichTextNode {
+  validateOrientation(config.orientation, 'richText')
   const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2)
   return { type: 'richText', ...config, lineHeight }
 }
@@ -1380,43 +1399,29 @@ export function qrcode(config: Omit<QrcodeNode, 'type'>): QrcodeNode {
 }
 
 export function barcode(config: Omit<BarcodeNode, 'type'>): BarcodeNode {
+  validateOrientation(config.orientation, 'barcode')
   const symbology = config.symbology ?? 'code128'
   // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
   // and (when `barWidth` is used) supplies the module count needed to derive the bar-length axis.
   const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit)
-  const rotation = config.rotation ?? 0
-  if (rotation !== 0 && rotation !== 90 && rotation !== -90) {
-    throw new Error(`[paginator] barcode() "rotation" must be 0, 90, or -90, got ${rotation}.`)
-  }
   const quietZone = config.quietZone ?? 10
 
+  // width/height are always NATURAL (pre-rotation) axes — width the bar-length axis, height the
+  // bar-thickness+text axis — so this validation never depends on `orientation` (unlike the old
+  // `rotation`-branching version): barWidth always derives the natural width, aspectRatio always
+  // relates natural width to natural height. See BarcodeNode's field docs for how orientation later
+  // swaps these into the final on-page box.
   let width = config.width
   let height = config.height
 
-  // `barWidth` always sizes the bar-LENGTH axis — `width` when rotation is 0 (bars run left-to-
-  // right), `height` when 90/-90 (bars run vertically, see BarcodeNode.rotation) — while the OTHER
-  // axis (the fixed bar-thickness dimension) still needs height/aspectRatio (rotation 0) or
-  // width/aspectRatio (90/-90) exactly like it always has, just on whichever axis that is now.
-  if (rotation === 0) {
-    if (width === undefined) {
-      if (config.barWidth === undefined) {
-        throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.')
-      }
-      width = quietZone * 2 + pattern.totalModules * config.barWidth
+  if (width === undefined) {
+    if (config.barWidth === undefined) {
+      throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its bar-length axis.')
     }
-    if (height === undefined && config.aspectRatio === undefined) {
-      throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.')
-    }
-  } else {
-    if (height === undefined) {
-      if (config.barWidth === undefined) {
-        throw new Error('[paginator] barcode() needs "height" or "barWidth" to determine its height ("rotation: 90|-90" sizes height from the bar length, not width).')
-      }
-      height = quietZone * 2 + pattern.totalModules * config.barWidth
-    }
-    if (width === undefined && config.aspectRatio === undefined) {
-      throw new Error('[paginator] barcode() needs "width" or "aspectRatio" to determine its width ("rotation: 90|-90" needs the fixed bar-thickness dimension given directly).')
-    }
+    width = quietZone * 2 + pattern.totalModules * config.barWidth
+  }
+  if (height === undefined && config.aspectRatio === undefined) {
+    throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its bar-thickness axis — barcode dimensions are never auto-detected.')
   }
 
   return { type: 'barcode', ...config, width, height }

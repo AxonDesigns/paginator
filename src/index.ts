@@ -35,6 +35,7 @@ export type {
   BarcodeNode,
   BarcodeSymbology,
   BarcodeCheckDigitMode,
+  Orientation,
   ContainerNode,
   ContainerBorder,
   TableNode,

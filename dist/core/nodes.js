@@ -2,6 +2,7 @@
 import { DEFAULT_FONT_FAMILY } from "../render/font-registry.js";
 import { encodeBarcodeValue } from "../render/barcode-encode.js";
 import { buildQrMatrix } from "../render/qrcode-encode.js";
+import { validateOrientation } from "./orientation.js";
 // Phase 2 (not built here): a generic CustomNode escape hatch — added as a new union member plus a
 // new registry entry in behavior.ts, with no change required to paginate.ts or group-layout.ts.
 export function definePage(config, body) {
@@ -11,10 +12,12 @@ export function group(config, children) {
     return { type: 'group', ...config, children };
 }
 export function text(config) {
+    validateOrientation(config.orientation, 'text');
     const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2);
     return { type: 'text', ...config, lineHeight };
 }
 export function richText(config) {
+    validateOrientation(config.orientation, 'richText');
     const lineHeight = config.lineHeight ?? Math.round(config.fontSize * 1.2);
     return { type: 'richText', ...config, lineHeight };
 }
@@ -70,42 +73,27 @@ export function qrcode(config) {
     return { type: 'qrcode', ...config, width: side, height: side };
 }
 export function barcode(config) {
+    validateOrientation(config.orientation, 'barcode');
     const symbology = config.symbology ?? 'code128';
     // Always encoded upfront — validates `value` against `symbology`'s character set/length rules
     // and (when `barWidth` is used) supplies the module count needed to derive the bar-length axis.
     const pattern = encodeBarcodeValue(symbology, config.value, config.checkDigit);
-    const rotation = config.rotation ?? 0;
-    if (rotation !== 0 && rotation !== 90 && rotation !== -90) {
-        throw new Error(`[paginator] barcode() "rotation" must be 0, 90, or -90, got ${rotation}.`);
-    }
     const quietZone = config.quietZone ?? 10;
+    // width/height are always NATURAL (pre-rotation) axes — width the bar-length axis, height the
+    // bar-thickness+text axis — so this validation never depends on `orientation` (unlike the old
+    // `rotation`-branching version): barWidth always derives the natural width, aspectRatio always
+    // relates natural width to natural height. See BarcodeNode's field docs for how orientation later
+    // swaps these into the final on-page box.
     let width = config.width;
     let height = config.height;
-    // `barWidth` always sizes the bar-LENGTH axis — `width` when rotation is 0 (bars run left-to-
-    // right), `height` when 90/-90 (bars run vertically, see BarcodeNode.rotation) — while the OTHER
-    // axis (the fixed bar-thickness dimension) still needs height/aspectRatio (rotation 0) or
-    // width/aspectRatio (90/-90) exactly like it always has, just on whichever axis that is now.
-    if (rotation === 0) {
-        if (width === undefined) {
-            if (config.barWidth === undefined) {
-                throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its width.');
-            }
-            width = quietZone * 2 + pattern.totalModules * config.barWidth;
+    if (width === undefined) {
+        if (config.barWidth === undefined) {
+            throw new Error('[paginator] barcode() needs "width" or "barWidth" to determine its bar-length axis.');
         }
-        if (height === undefined && config.aspectRatio === undefined) {
-            throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its height — barcode dimensions are never auto-detected.');
-        }
+        width = quietZone * 2 + pattern.totalModules * config.barWidth;
     }
-    else {
-        if (height === undefined) {
-            if (config.barWidth === undefined) {
-                throw new Error('[paginator] barcode() needs "height" or "barWidth" to determine its height ("rotation: 90|-90" sizes height from the bar length, not width).');
-            }
-            height = quietZone * 2 + pattern.totalModules * config.barWidth;
-        }
-        if (width === undefined && config.aspectRatio === undefined) {
-            throw new Error('[paginator] barcode() needs "width" or "aspectRatio" to determine its width ("rotation: 90|-90" needs the fixed bar-thickness dimension given directly).');
-        }
+    if (height === undefined && config.aspectRatio === undefined) {
+        throw new Error('[paginator] barcode() needs "height" or "aspectRatio" to determine its bar-thickness axis — barcode dimensions are never auto-detected.');
     }
     return { type: 'barcode', ...config, width, height };
 }

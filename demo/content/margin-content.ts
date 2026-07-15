@@ -8,7 +8,7 @@ import { UI_FONT } from '../fonts.ts'
 // notes, exercising both MarginPosition forms and TextNode.orientation together:
 //
 // 1. Two vertical running titles side by side down the left margin, each `orientation:
-//    'vertical-inverted'` (reads bottom-to-top), wrapped in an ordinary ROW group — proof that
+//    'vertical-reversed'` (reads bottom-to-top), wrapped in an ordinary ROW group — proof that
 //    vertical text composes with normal group layout: the row sizes each label to its own
 //    POST-rotation thickness (not its pre-rotation wrap width), so the two sit snugly `gap: 4`
 //    apart rather than leaving a large stale gap sized off the unrotated text. Anchored via the
@@ -31,7 +31,7 @@ export const marginContent: MarginContent = [
         fontWeight: 700,
         color: '#4f7cff',
         letterSpacing: 1.5,
-        orientation: 'vertical-inverted',
+        orientation: 'vertical-reversed',
       }),
       text({
         content: 'SECOND LINE',
@@ -40,7 +40,7 @@ export const marginContent: MarginContent = [
         fontWeight: 700,
         color: '#4f7cff',
         letterSpacing: 1.5,
-        orientation: 'vertical-inverted',
+        orientation: 'vertical-reversed',
       }),
     ]),
     position: { region: 'left', cross: 'center', along: 'center' },
@@ -61,8 +61,8 @@ export const marginContent: MarginContent = [
       value: 'This is a test',
       symbology: 'code128',
       barWidth: 1,
-      width: 30,
-      rotation: 90,
+      height: 30,
+      orientation: 'vertical',
       showText: false,
       barColor: '#6c6c6c',
     }),

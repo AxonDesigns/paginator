@@ -7,6 +7,7 @@ import { mediaSection } from './content/media.ts'
 import { barcodeQrcodeSection } from './content/barcode-qrcode.ts'
 import { containersSection } from './content/containers.ts'
 import { richTextSection } from './content/rich-text.ts'
+import { orientationSection } from './content/orientation.ts'
 import { chartsSection1 } from './content/charts-1.ts'
 import { chartsSection2 } from './content/charts-2.ts'
 import { chartsSection3 } from './content/charts-3.ts'
@@ -63,6 +64,7 @@ export const doc: PageDef = definePage(
     ...barcodeQrcodeSection,
     ...containersSection,
     ...richTextSection,
+    ...orientationSection,
     ...chartsSection1,
     ...chartsSection2,
     ...chartsSection3,
